@@ -13,6 +13,7 @@ import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.stereotype.Controller;
@@ -30,6 +31,8 @@ class OpenApiRouteCoverageTests extends PostgresIntegrationTestSupport {
 		"get", "put", "post", "delete", "options", "head", "patch", "trace");
 
 	@Autowired
+	@Qualifier("requestMappingHandlerMapping")
+	// 必须选择业务 MVC HandlerMapping，避免 Actuator 的 controllerEndpointHandlerMapping 干扰。
 	private RequestMappingHandlerMapping handlerMapping;
 
 	@Test
