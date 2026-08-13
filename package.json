@@ -11,6 +11,7 @@
   "scripts": {
     "api:lint": "redocly lint openapi/ziji-v1.yaml",
     "api:check": "pnpm api:lint && node scripts/check-openapi.mjs",
+    "api:breaking": "node scripts/check-openapi-breaking.mjs",
     "api:generate": "pnpm --filter @ziji/api-types run generate",
     "api:types:check": "pnpm --filter @ziji/api-types run check",
     "check:workspace": "pnpm --recursive --if-present run check",

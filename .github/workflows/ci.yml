@@ -19,7 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # 使用 Node 24 runtime 的稳定 Action 主版本，避免 Runner 强制兼容运行。
+      # 破坏性变更检查需要读取 PR base commit，保留完整 Git 历史。
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v6
         with:
           version: 10.4.1
@@ -28,6 +31,12 @@ jobs:
           node-version: 22.22.3
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # push 到 main 没有 PR base 上下文，只在 pull_request 比较 base SHA 与当前契约。
+      - name: Check OpenAPI breaking changes against PR base
+        if: github.event_name == 'pull_request'
+        env:
+          OPENAPI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: pnpm api:breaking -- --base-ref "$OPENAPI_BASE_SHA"
       # 生成后要求工作树无差异，防止契约与提交的共享类型漂移。
       - run: pnpm run api:check
       - run: pnpm run api:generate

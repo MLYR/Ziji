@@ -40,3 +40,10 @@ SOFTWARE.
 OGL is the WebGL runtime dependency used by the adapted Aurora component. Its
 full license remains available in the installed package metadata and must be
 included by the release license inventory generated under `ENG-CI-002`.
+
+## oasdiff
+
+- Tool/image: `oasdiff v1.28.0` from `tufin/oasdiff:v1.28.0@sha256:86830f988eaafcf589acb2794ee5ab78e3300ded071d6517bf085469300cbf36`
+- Source: https://github.com/tufin/oasdiff
+- License: Apache License 2.0 (https://github.com/tufin/oasdiff/blob/v1.28.0/LICENSE)
+- Use: local and CI OpenAPI breaking-change checks invoked by `scripts/check-openapi-breaking.mjs`; the image is pulled by its immutable digest and is not copied into the repository.

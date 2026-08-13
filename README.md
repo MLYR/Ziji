@@ -82,6 +82,12 @@ pnpm --filter mobile start
 # OpenAPI 3.1 lint、示例与 operationId 校验
 pnpm api:check
 
+# 与指定基线文件比较，发现不兼容变化时返回非零退出码
+pnpm api:breaking -- --base-file /absolute/path/to/base-openapi.yaml
+
+# 与 Git 提交比较；CI 使用 pull_request.base.sha，避免比较当前分支自身
+pnpm api:breaking -- --base-ref "$(git rev-parse HEAD^)"
+
 # 生成 Web/Mobile 共用类型
 pnpm api:generate
 
