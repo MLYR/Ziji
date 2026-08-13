@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="资迹 Ziji 个人财务管理产品的 Web 与 Mobile 高保真可点击原型。">
+  <title>资迹 Ziji · 高保真产品原型</title>
+  <link rel="stylesheet" href="assets/ziji.css">
+  <style>
+    /* 启动器打磨：局部覆盖共享样式，不改变任何产品屏幕。 */
+    .launcher {
+      width: min(100%, 1320px);
+      min-height: 100dvh;
+      margin-inline: auto;
+      padding: clamp(24px, 4vw, 56px);
+    }
+    .launcher-head {
+      max-width: none;
+      margin: 0 0 24px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: 32px;
+      padding-bottom: 28px;
+      border-bottom: 1px solid var(--border);
+    }
+    .launcher-brand-block { min-width: 0; }
+    .launcher-eyebrow {
+      margin-top: 22px;
+      color: var(--muted-strong);
+      font-size: 11px;
+      font-weight: 550;
+      letter-spacing: .02em;
+    }
+    .launcher h1 {
+      max-width: 760px;
+      margin: 7px 0 0;
+      font: 600 clamp(32px, 4.2vw, 56px)/1.34 var(--font-display);
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+    .launcher-lead {
+      max-width: 64ch;
+      margin: 12px 0 0;
+      color: var(--muted-strong);
+      font-size: 15px;
+      line-height: 1.75;
+    }
+    .launcher-head .head-actions {
+      justify-content: flex-end;
+      flex-wrap: nowrap;
+    }
+    .launcher-head .btn { min-height: 44px; }
+    .launcher-head .icon-btn { width: 44px; min-height: 44px; }
+
+    /* 当前交付使用单个连续数据面板，避免与普通页面目录同权。 */
+    .launcher-focus {
+      display: grid;
+      grid-template-columns: minmax(290px, .72fr) minmax(0, 1.28fr);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      background: var(--surface);
+      overflow: hidden;
+    }
+    .launcher-focus-copy {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 258px;
+      padding: clamp(22px, 3vw, 34px);
+      border-right: 1px solid var(--border);
+    }
+    .launcher-focus-kicker {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted-strong);
+      font-size: 11px;
+      letter-spacing: .02em;
+    }
+    .launcher-focus-kicker::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 2px;
+      background: var(--muted-strong);
+    }
+    .launcher-focus h2 {
+      max-width: 12ch;
+      margin: 13px 0 0;
+      font: 600 clamp(24px, 2.6vw, 34px)/1.4 var(--font-display);
+      letter-spacing: 0;
+    }
+    .launcher-focus-copy p {
+      max-width: 48ch;
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+    .launcher-proof {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      margin-top: 24px;
+      border-top: 1px solid var(--border-soft);
+    }
+    .launcher-proof div {
+      min-width: 0;
+      padding: 14px 10px 0 0;
+    }
+    .launcher-proof strong {
+      display: block;
+      font: 600 16px/1.2 var(--font-mono);
+    }
+    .launcher-proof span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .launcher-focus-routes {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      background: var(--border-soft);
+      gap: 1px;
+    }
+    .focus-route {
+      min-width: 0;
+      min-height: 128px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 20px;
+      align-content: space-between;
+      gap: 16px;
+      padding: 21px;
+      background: var(--surface);
+      color: var(--fg);
+      transition: background 150ms var(--ease), box-shadow 150ms var(--ease);
+    }
+    .focus-route:hover {
+      background: var(--surface-hover);
+      color: var(--fg);
+    }
+    .focus-route:active { background: color-mix(in oklch, var(--surface-hover), var(--fg) 4%); }
+    .focus-route:focus-visible { position: relative; z-index: 2; outline-offset: -3px; }
+    .focus-route-copy { min-width: 0; }
+    .focus-route-label {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: .02em;
+    }
+    .focus-route strong {
+      display: block;
+      margin-top: 7px;
+      font: 600 15px/1.45 var(--font-display);
+      color: var(--fg);
+    }
+    .focus-route p {
+      max-width: 34ch;
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.6;
+    }
+    .focus-route svg {
+      width: 17px;
+      height: 17px;
+      color: var(--muted-strong);
+      transition: transform 150ms var(--ease), color 150ms var(--ease);
+    }
+    .focus-route:hover svg { color: var(--fg); transform: translate(2px, -2px); }
+    .focus-route-meta {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+      font: 10px/1.4 var(--font-mono);
+    }
+
+    .launcher-catalog {
+      display: grid;
+      grid-template-columns: 1.08fr .92fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .launcher-section { min-width: 0; }
+    .launcher-section > header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 20px;
+    }
+    .launcher-section h2 {
+      font: 600 18px/1.4 var(--font-display);
+      letter-spacing: 0;
+    }
+    .launcher-section header p { line-height: 1.6; }
+    .section-count {
+      color: var(--muted);
+      font: 10px/1.5 var(--font-mono);
+      white-space: nowrap;
+    }
+    .screen-links { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .screen-link {
+      min-width: 0;
+      min-height: 76px;
+      padding: 12px 18px;
+      color: var(--fg);
+      transition: background 150ms var(--ease), box-shadow 150ms var(--ease);
+    }
+    .screen-link:hover { background: var(--surface-hover); color: var(--fg); }
+    .screen-link:active { background: color-mix(in oklch, var(--surface-hover), var(--fg) 4%); }
+    .screen-link:focus-visible { position: relative; z-index: 2; outline-offset: -3px; }
+    .screen-link > span { min-width: 0; }
+    .screen-link > span > strong {
+      color: var(--fg);
+      font: 550 13px/1.45 var(--font-display);
+      letter-spacing: 0;
+    }
+    .screen-link > span > span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+    .screen-link svg {
+      flex: 0 0 auto;
+      color: var(--muted-strong);
+      transition: transform 150ms var(--ease), color 150ms var(--ease);
+    }
+    .screen-link:hover svg { color: var(--fg); transform: translate(2px, -2px); }
+
+    /* 状态带把加载、空、错误与恢复路径显式暴露给评审。 */
+    .launcher-state-strip {
+      display: grid;
+      grid-template-columns: 1.2fr repeat(5, minmax(0, 1fr));
+      gap: 1px;
+      margin-top: 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      background: var(--border-soft);
+      overflow: hidden;
+    }
+    .launcher-state-intro {
+      padding: 18px 20px;
+      background: var(--surface);
+    }
+    .launcher-state-intro h2 {
+      margin: 0;
+      font: 600 16px/1.4 var(--font-display);
+      letter-spacing: 0;
+    }
+    .launcher-state-intro p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.6;
+    }
+    .state-route {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      min-height: 72px;
+      padding: 14px;
+      background: var(--surface);
+      color: var(--fg);
+      transition: background 150ms var(--ease);
+    }
+    .state-route:hover { background: var(--surface-hover); color: var(--fg); }
+    .state-route:focus-visible { outline-offset: -3px; }
+    .state-route svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--muted-strong); }
+    .state-route strong { display: block; font-size: 11px; font-weight: 550; }
+    .state-route span { display: block; margin-top: 2px; color: var(--muted); font-size: 9px; }
+    .launcher-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding-top: 18px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .launcher-foot code { font: inherit; font-family: var(--font-mono); }
+
+    @media (max-width: 1040px) {
+      .launcher-head { grid-template-columns: 1fr; align-items: start; }
+      .launcher-head .head-actions { justify-content: flex-start; }
+      .launcher-focus { grid-template-columns: 1fr; }
+      .launcher-focus-copy { min-height: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+      .launcher-focus h2 { max-width: none; }
+      .launcher-catalog { grid-template-columns: 1fr; }
+      .launcher-state-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .launcher-state-intro { grid-column: 1 / -1; }
+    }
+    @media (max-width: 600px) {
+      .launcher { padding: 20px 14px 28px; }
+      .launcher-head { gap: 22px; margin-bottom: 14px; padding-bottom: 22px; }
+      .launcher-head .head-actions { width: 100%; display: grid; grid-template-columns: 1fr auto auto; }
+      .launcher-head .btn { min-width: 0; padding-inline: 12px; }
+      .launcher-head .btn-secondary-label { display: none; }
+      .launcher-eyebrow { margin-top: 18px; }
+      .launcher h1 { font-size: clamp(30px, 10vw, 40px); }
+      .launcher-lead { font-size: 14px; }
+      .launcher-focus-routes, .screen-links, .launcher-state-strip { grid-template-columns: 1fr; }
+      .focus-route { min-height: 116px; }
+      .launcher-proof { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .launcher-section > header { padding: 16px; }
+      .screen-link { min-height: 72px; border-right: 0; }
+      .launcher-state-intro { grid-column: auto; }
+      .state-route { min-height: 64px; }
+      .launcher-foot { align-items: flex-start; flex-direction: column; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .focus-route svg, .screen-link svg { transition: none; }
+      .focus-route:hover svg, .screen-link:hover svg { transform: none; }
+    }
+  </style>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
+</head>
+<body data-page="launcher">
+  <!-- 多屏原型启动器：当前交付优先，其余页面按平台与状态分组。 -->
+  <a class="skip-link" href="#launcher-content">跳到原型入口</a>
+  <main class="launcher" id="launcher-content" data-od-id="prototype-launcher">
+    <header class="launcher-head" data-od-id="launcher-header">
+      <div class="launcher-brand-block">
+        <a class="brand" href="index.html" style="padding:0" data-od-id="launcher-brand">
+          <span class="brand-mark">Z</span>
+          <span class="brand-name">资迹 <small>ZIJI PRODUCT PROTOTYPE</small></span>
+        </a>
+        <div class="launcher-eyebrow">个人与家庭财务管理 · 2026 年 7 月人民币演示数据</div>
+        <h1 data-od-id="launcher-title">看清每一天，资产为何变化。</h1>
+        <p class="launcher-lead">覆盖 Web 1440px 与 Mobile 390px 的高保真可点击原型。日历、日期归因、数据质量和恢复路径均可独立进入评审。</p>
+      </div>
+      <div class="head-actions" aria-label="启动器操作">
+        <a class="btn btn-primary" href="web-investment-return-calendar.html" data-od-id="open-primary-prototype"><i data-lucide="calendar-days"></i>打开投资收益日历</a>
+        <a class="btn" href="brand-spec.md" aria-label="查看品牌规范" data-od-id="open-brand-spec"><i data-lucide="book-open-text"></i><span class="btn-secondary-label">品牌规范</span></a>
+        <button class="icon-btn" type="button" data-action="theme" data-tooltip="切换深浅主题" aria-label="切换深浅主题" data-od-id="launcher-theme-toggle"><i data-theme-icon data-lucide="sun"></i></button>
+      </div>
+    </header>
+
+    <section class="launcher-focus" aria-labelledby="focus-title" data-od-id="featured-delivery">
+      <div class="launcher-focus-copy">
+        <div>
+          <div class="launcher-focus-kicker">当前主交付</div>
+          <h2 id="focus-title">总资产变化日历</h2>
+          <p>以自然月查看每日总资产或净资产变化，日期下钻解释收入、支出、借款、还款、投资价格、汇率与统计范围变化。</p>
+        </div>
+        <div class="launcher-proof" aria-label="交付规模">
+          <div><strong>31</strong><span>个自然日</span></div>
+          <div><strong>2×2</strong><span>平台与主题</span></div>
+          <div><strong>8</strong><span>质量与系统状态</span></div>
+        </div>
+      </div>
+      <nav class="launcher-focus-routes" aria-label="总资产日历原型版本">
+        <a class="focus-route" href="web-asset-calendar.html" data-od-id="featured-web-dark">
+          <div class="focus-route-copy"><span class="focus-route-label">Web · 深色主题</span><strong>总资产 · 变化金额</strong><p>选中资产增加日，右侧展开完整变化归因。</p></div><i data-lucide="arrow-up-right"></i>
+          <span class="focus-route-meta"><span>1440 px</span><span>主评审画面</span></span>
+        </a>
+        <a class="focus-route" href="web-asset-calendar-light.html" data-od-id="featured-web-light">
+          <div class="focus-route-copy"><span class="focus-route-label">Web · 浅色主题</span><strong>净资产 · 变化率</strong><p>选中借款到账日，区分资产与负债同步变化。</p></div><i data-lucide="arrow-up-right"></i>
+          <span class="focus-route-meta"><span>1440 px</span><span>口径验证</span></span>
+        </a>
+        <a class="focus-route" href="mobile-asset-calendar.html" data-od-id="featured-mobile-dark">
+          <div class="focus-route-copy"><span class="focus-route-label">Mobile · 深色主题</span><strong>固定七列月历</strong><p>390px 无横向滚动，日期明细使用 Bottom Sheet。</p></div><i data-lucide="arrow-up-right"></i>
+          <span class="focus-route-meta"><span>390 px</span><span>触控下钻</span></span>
+        </a>
+        <a class="focus-route" href="mobile-asset-calendar-light.html" data-od-id="featured-mobile-light">
+          <div class="focus-route-copy"><span class="focus-route-label">Mobile · 浅色主题</span><strong>内部转账 · 零贡献</strong><p>明确展示统计范围内转账不改变总资产。</p></div><i data-lucide="arrow-up-right"></i>
+          <span class="focus-route-meta"><span>390 px</span><span>语义验证</span></span>
+        </a>
+      </nav>
+    </section>
+
+    <section class="launcher-focus" aria-labelledby="return-focus-title" data-od-id="investment-return-delivery" style="margin-top:18px">
+      <div class="launcher-focus-copy">
+        <div>
+          <div class="launcher-focus-kicker">投资专项交付</div>
+          <h2 id="return-focus-title">投资收益日历</h2>
+          <p>按自然月切换全部投资或单一股票、基金和 ETF，区分本金现金流、真实收益、非交易日、无持仓和估值质量。</p>
+        </div>
+        <div class="launcher-proof" aria-label="投资日历覆盖规模">
+          <div><strong>2</strong><span>统计范围</span></div>
+          <div><strong>2×2</strong><span>平台与主题</span></div>
+          <div><strong>6</strong><span>日期状态</span></div>
+        </div>
+      </div>
+      <nav class="launcher-focus-routes" aria-label="投资收益日历原型版本">
+        <a class="focus-route" href="web-investment-return-calendar.html"><div class="focus-route-copy"><span class="focus-route-label">Web · 深色主题</span><strong>全部投资 · 收益金额</strong><p>右侧 Sheet 展示标的与券商现金收益贡献。</p></div><i data-lucide="arrow-up-right"></i><span class="focus-route-meta"><span>1440 px</span><span>主评审画面</span></span></a>
+        <a class="focus-route" href="web-investment-return-calendar-light.html"><div class="focus-route-copy"><span class="focus-route-label">Web · 浅色主题</span><strong>单一标的 · 收益率</strong><p>展示 Modified Dietz 口径与完整影响拆分。</p></div><i data-lucide="arrow-up-right"></i><span class="focus-route-meta"><span>1440 px</span><span>口径验证</span></span></a>
+        <a class="focus-route" href="mobile-investment-return-calendar.html"><div class="focus-route-copy"><span class="focus-route-label">Mobile · 深色主题</span><strong>固定七列月历</strong><p>390px 无横向滚动，日期贡献使用 Bottom Sheet。</p></div><i data-lucide="arrow-up-right"></i><span class="focus-route-meta"><span>390 px</span><span>触控下钻</span></span></a>
+        <a class="focus-route" href="mobile-investment-return-calendar-light.html"><div class="focus-route-copy"><span class="focus-route-label">Mobile · 浅色主题</span><strong>单一标的 · 估值状态</strong><p>非交易日、无持仓和缺估值不显示成零收益。</p></div><i data-lucide="arrow-up-right"></i><span class="focus-route-meta"><span>390 px</span><span>状态验证</span></span></a>
+      </nav>
+    </section>
+
+    <div class="launcher-catalog" data-od-id="product-screen-catalog">
+      <section class="launcher-section" aria-labelledby="web-title" data-od-id="web-screen-section">
+        <header><div><h2 id="web-title">Web 产品模块</h2><p>固定侧栏、数据表、Dialog、Drawer 与导入流程</p></div><span class="section-count">7 个页面</span></header>
+        <nav class="screen-links" aria-label="Web 产品页面">
+          <a class="screen-link" href="web-dashboard.html" data-od-id="screen-web-dashboard"><span><strong>Dashboard 总览</strong><span>趋势、结构、归因、质量</span></span><i data-lucide="arrow-up-right"></i></a>
+          <a class="screen-link" href="web-accounts.html" data-od-id="screen-web-accounts"><span><strong>账户</strong><span>现金、投资、负债、共享</span></span><i data-lucide="arrow-up-right"></i></a>
+          <a class="screen-link" href="web-transactions.html" data-od-id="screen-web-transactions"><span><strong>流水</strong><span>筛选、详情、审计、冲正</span></span><i data-lucide="arrow-up-right"></i></a>
+          <a class="screen-link" href="web-import.html" data-od-id="screen-web-import"><span><strong>账单导入</strong><span>上传、映射、校验、确认</span></span><i data-lucide="arrow-up-right"></i></a>
+          <a class="screen-link" href="web-investments.html" data-od-id="screen-web-investments"><span><strong>投资持仓</strong><span>行情、净值与过期状态</span></span><i data-lucide="arrow-up-right"></i></a>
+          <a class="screen-link" href="web-sharing.html" data-od-id="screen-web-sharing"><span><strong>共享与设置</strong><span>成员、权限、安全与设备</span></span><i data-lucide="arrow-up-right"></i></a>
+          <a class="screen-link" href="web-auth.html" data-od-id="screen-web-auth"><span><strong>注册与登录</strong><span>验证码、失败与过期</span></span><i data-lucide="arrow-up-right"></i></a>
+        </nav>
+      </section>
+
+      <section class="launcher-section" aria-labelledby="mobile-title" data-od-id="mobile-screen-section">
+        <header><div><h2 id="mobile-title">Mobile 产品模块</h2><p>390px 单手操作、底部导航与完整下钻</p></div><span class="section-count">6 个页面</span></header>
+        <nav class="screen-links" aria-label="Mobile 产品页面">
+          <a class="screen-link" href="mobile-home.html" data-od-id="screen-mobile-home"><span><strong>首页总览</strong><span>总资产卡片进入日历</span></span><i data-lucide="arrow-up-right"></i></a>
+          <a class="screen-link" href="mobile-accounts.html" data-od-id="screen-mobile-accounts"><span><strong>账户</strong><span>列表、余额与账户详情</span></span><i data-lucide="arrow-up-right"></i></a>
+          <a class="screen-link" href="mobile-transactions.html" data-od-id="screen-mobile-transactions"><span><strong>流水</strong><span>列表、筛选与交易详情</span></span><i data-lucide="arrow-up-right"></i></a>
+          <a class="screen-link" href="mobile-investments.html" data-od-id="screen-mobile-investments"><span><strong>投资持仓</strong><span>行情与净值过期状态</span></span><i data-lucide="arrow-up-right"></i></a>
+          <a class="screen-link" href="mobile-settings.html" data-od-id="screen-mobile-settings"><span><strong>个人设置</strong><span>成员、主题与同步</span></span><i data-lucide="arrow-up-right"></i></a>
+          <a class="screen-link" href="mobile-auth.html" data-od-id="screen-mobile-auth"><span><strong>登录与注册</strong><span>邮箱方式与错误反馈</span></span><i data-lucide="arrow-up-right"></i></a>
+        </nav>
+      </section>
+    </div>
+
+    <section class="launcher-state-strip" aria-labelledby="state-title" data-od-id="state-coverage-section">
+      <div class="launcher-state-intro"><h2 id="state-title">状态与恢复路径</h2><p>加载、空、错误和同步异常均有可见说明、明确操作与可访问文本。</p></div>
+      <!-- 状态集合使用网格语义，避免与 Dashboard 主题双栏对照共用图标。 -->
+      <a class="state-route" href="asset-calendar-states.html" data-od-id="state-calendar-gallery"><i data-lucide="layout-grid"></i><span><strong>日历状态画廊</strong><span>空、待数据、部分、错误</span></span></a>
+      <a class="state-route" href="mobile-offline.html" data-od-id="state-mobile-offline"><i data-lucide="wifi-off"></i><span><strong>离线状态</strong><span>本地继续记账</span></span></a>
+      <a class="state-route" href="mobile-syncing.html" data-od-id="state-mobile-syncing"><i data-lucide="refresh-cw"></i><span><strong>同步中</strong><span>进度与后台继续</span></span></a>
+      <a class="state-route" href="mobile-conflict.html" data-od-id="state-mobile-conflict"><i data-lucide="git-compare-arrows"></i><span><strong>同步冲突</strong><span>双版本处理</span></span></a>
+      <a class="state-route" href="mobile-rejected.html" data-od-id="state-mobile-rejected"><i data-lucide="shield-x"></i><span><strong>权限拒绝</strong><span>解释原因与恢复入口</span></span></a>
+    </section>
+
+    <footer class="launcher-foot" data-od-id="launcher-footer">
+      <span>所有金额与账户均为演示数据，不连接真实金融账户。</span>
+      <span><code>Web 1440px</code> · <code>Mobile 390px</code> · 深浅双主题</span>
+    </footer>
+  </main>
+  <div class="toast-region" aria-live="polite"></div>
+  <script src="assets/ziji.js"></script>
+</body>
+</html>

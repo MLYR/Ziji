@@ -1,0 +1,39 @@
+/* 投资收益日历仅补充业务特有布局；基础网格、主题和可访问性交互复用总资产日历样式。 */
+.return-scope-row { display: flex; align-items: end; gap: 14px; min-width: 0; }
+.return-instrument-select { min-width: 250px; }
+.return-instrument-select label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 10px; }
+.return-instrument-select .select { width: 100%; }
+.return-help { max-width: 300px; margin: 0 0 0 auto; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.return-summary .calendar-summary-item.emphasis { border-top-color: var(--magenta-text); }
+.return-status-key { display: inline-flex; align-items: center; gap: 4px; }
+.return-status-key svg { width: 11px; height: 11px; }
+.return-detail-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.return-detail-cell { min-width: 0; padding: 11px 12px; border-right: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); }
+.return-detail-cell:nth-child(4n) { border-right: 0; }
+.return-detail-cell:nth-last-child(-n+4) { border-bottom: 0; }
+.return-detail-cell span { display: block; color: var(--muted); font-size: 9px; }
+.return-detail-cell strong { display: block; margin-top: 5px; font: 600 11px var(--font-mono); }
+.return-cashflow-note { margin-top: 10px; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.return-calendar-page .asset-day-status { min-height: 26px; }
+.return-calendar-page .asset-day-state { display: block; }
+.return-mobile-scope { display: grid; gap: 8px; margin-bottom: 10px; }
+.return-mobile-scope .select { width: 100%; min-height: 40px; }
+.return-mobile-summary { grid-template-columns: repeat(3, 1fr); }
+.return-mobile-summary > div { min-width: 0; }
+.return-mobile-summary strong { white-space: nowrap; }
+.return-mobile-detail .return-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.return-mobile-detail .return-detail-cell:nth-child(4n) { border-right: 1px solid var(--border-soft); }
+.return-mobile-detail .return-detail-cell:nth-child(2n) { border-right: 0; }
+.return-mobile-detail .return-detail-cell:nth-last-child(-n+4) { border-bottom: 1px solid var(--border-soft); }
+.return-mobile-detail .return-detail-cell:nth-last-child(-n+2) { border-bottom: 0; }
+
+@media (max-width: 980px) {
+  .return-scope-row { align-items: stretch; flex-direction: column; }
+  .return-instrument-select { min-width: 0; }
+  .return-help { max-width: none; margin-left: 0; }
+  .return-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .return-detail-cell:nth-child(4n) { border-right: 1px solid var(--border-soft); }
+  .return-detail-cell:nth-child(2n) { border-right: 0; }
+  .return-detail-cell:nth-last-child(-n+4) { border-bottom: 1px solid var(--border-soft); }
+  .return-detail-cell:nth-last-child(-n+2) { border-bottom: 0; }
+}

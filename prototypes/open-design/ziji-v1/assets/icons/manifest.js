@@ -1,0 +1,467 @@
+/* 图标目录运行时清单：与 manifest.json 同源，支持本地文件直接预览。 */
+window.ZIJI_ICON_MANIFEST = {
+  "name": "资迹 Ziji 项目图标",
+  "library": "Lucide",
+  "version": "0.468.0",
+  "viewBox": "0 0 24 24",
+  "strokeWidth": 1.7,
+  "count": 76,
+  "icons": [
+    {
+      "name": "archive",
+      "component": "Archive",
+      "category": "金融与账户",
+      "file": "assets/icons/archive.svg"
+    },
+    {
+      "name": "arrow-down-left",
+      "component": "ArrowDownLeft",
+      "category": "导航与操作",
+      "file": "assets/icons/arrow-down-left.svg"
+    },
+    {
+      "name": "arrow-left-right",
+      "component": "ArrowLeftRight",
+      "category": "导航与操作",
+      "file": "assets/icons/arrow-left-right.svg"
+    },
+    {
+      "name": "arrow-up-right",
+      "component": "ArrowUpRight",
+      "category": "导航与操作",
+      "file": "assets/icons/arrow-up-right.svg"
+    },
+    {
+      "name": "badge-dollar-sign",
+      "component": "BadgeDollarSign",
+      "category": "金融与账户",
+      "file": "assets/icons/badge-dollar-sign.svg"
+    },
+    {
+      "name": "battery-full",
+      "component": "BatteryFull",
+      "category": "人员与设备",
+      "file": "assets/icons/battery-full.svg"
+    },
+    {
+      "name": "bell",
+      "component": "Bell",
+      "category": "人员与设备",
+      "file": "assets/icons/bell.svg"
+    },
+    {
+      "name": "book-open-text",
+      "component": "BookOpenText",
+      "category": "文件与数据",
+      "file": "assets/icons/book-open-text.svg"
+    },
+    {
+      "name": "calendar-check",
+      "component": "CalendarCheck",
+      "category": "状态与反馈",
+      "file": "assets/icons/calendar-check.svg"
+    },
+    {
+      "name": "calendar-clock",
+      "component": "CalendarClock",
+      "category": "状态与反馈",
+      "file": "assets/icons/calendar-clock.svg"
+    },
+    {
+      "name": "calendar-days",
+      "component": "CalendarDays",
+      "category": "通用",
+      "file": "assets/icons/calendar-days.svg"
+    },
+    {
+      "name": "calendar-x",
+      "component": "CalendarX",
+      "category": "状态与反馈",
+      "file": "assets/icons/calendar-x.svg"
+    },
+    {
+      "name": "chart-candlestick",
+      "component": "ChartCandlestick",
+      "category": "金融与账户",
+      "file": "assets/icons/chart-candlestick.svg"
+    },
+    {
+      "name": "chart-no-axes-combined",
+      "component": "ChartNoAxesCombined",
+      "category": "金融与账户",
+      "file": "assets/icons/chart-no-axes-combined.svg"
+    },
+    {
+      "name": "chart-pie",
+      "component": "ChartPie",
+      "category": "金融与账户",
+      "file": "assets/icons/chart-pie.svg"
+    },
+    {
+      "name": "chevron-down",
+      "component": "ChevronDown",
+      "category": "导航与操作",
+      "file": "assets/icons/chevron-down.svg"
+    },
+    {
+      "name": "chevron-left",
+      "component": "ChevronLeft",
+      "category": "导航与操作",
+      "file": "assets/icons/chevron-left.svg"
+    },
+    {
+      "name": "chevron-right",
+      "component": "ChevronRight",
+      "category": "导航与操作",
+      "file": "assets/icons/chevron-right.svg"
+    },
+    {
+      "name": "circle-alert",
+      "component": "CircleAlert",
+      "category": "状态与反馈",
+      "file": "assets/icons/circle-alert.svg"
+    },
+    {
+      "name": "circle-check",
+      "component": "CircleCheck",
+      "category": "状态与反馈",
+      "file": "assets/icons/circle-check.svg"
+    },
+    {
+      "name": "circle-dollar-sign",
+      "component": "CircleDollarSign",
+      "category": "金融与账户",
+      "file": "assets/icons/circle-dollar-sign.svg"
+    },
+    {
+      "name": "circle-slash-2",
+      "component": "CircleSlash2",
+      "category": "状态与反馈",
+      "file": "assets/icons/circle-slash-2.svg"
+    },
+    {
+      "name": "clock",
+      "component": "Clock",
+      "category": "状态与反馈",
+      "file": "assets/icons/clock.svg"
+    },
+    {
+      "name": "clock-3",
+      "component": "Clock3",
+      "category": "状态与反馈",
+      "file": "assets/icons/clock-3.svg"
+    },
+    {
+      "name": "cloud",
+      "component": "Cloud",
+      "category": "状态与反馈",
+      "file": "assets/icons/cloud.svg"
+    },
+    {
+      "name": "cloud-off",
+      "component": "CloudOff",
+      "category": "状态与反馈",
+      "file": "assets/icons/cloud-off.svg"
+    },
+    {
+      "name": "columns-2",
+      "component": "Columns2",
+      "category": "导航与操作",
+      "file": "assets/icons/columns-2.svg"
+    },
+    {
+      "name": "copy-x",
+      "component": "CopyX",
+      "category": "文件与数据",
+      "file": "assets/icons/copy-x.svg"
+    },
+    {
+      "name": "credit-card",
+      "component": "CreditCard",
+      "category": "金融与账户",
+      "file": "assets/icons/credit-card.svg"
+    },
+    {
+      "name": "database",
+      "component": "Database",
+      "category": "文件与数据",
+      "file": "assets/icons/database.svg"
+    },
+    {
+      "name": "download",
+      "component": "Download",
+      "category": "文件与数据",
+      "file": "assets/icons/download.svg"
+    },
+    {
+      "name": "file-check-2",
+      "component": "FileCheck2",
+      "category": "状态与反馈",
+      "file": "assets/icons/file-check-2.svg"
+    },
+    {
+      "name": "file-plus-2",
+      "component": "FilePlus2",
+      "category": "文件与数据",
+      "file": "assets/icons/file-plus-2.svg"
+    },
+    {
+      "name": "file-spreadsheet",
+      "component": "FileSpreadsheet",
+      "category": "文件与数据",
+      "file": "assets/icons/file-spreadsheet.svg"
+    },
+    {
+      "name": "file-up",
+      "component": "FileUp",
+      "category": "文件与数据",
+      "file": "assets/icons/file-up.svg"
+    },
+    {
+      "name": "flask-conical",
+      "component": "FlaskConical",
+      "category": "文件与数据",
+      "file": "assets/icons/flask-conical.svg"
+    },
+    {
+      "name": "git-compare-arrows",
+      "component": "GitCompareArrows",
+      "category": "通用",
+      "file": "assets/icons/git-compare-arrows.svg"
+    },
+    {
+      "name": "history",
+      "component": "History",
+      "category": "文件与数据",
+      "file": "assets/icons/history.svg"
+    },
+    {
+      "name": "info",
+      "component": "Info",
+      "category": "通用",
+      "file": "assets/icons/info.svg"
+    },
+    {
+      "name": "key-round",
+      "component": "KeyRound",
+      "category": "人员与设备",
+      "file": "assets/icons/key-round.svg"
+    },
+    {
+      "name": "landmark",
+      "component": "Landmark",
+      "category": "金融与账户",
+      "file": "assets/icons/landmark.svg"
+    },
+    {
+      "name": "laptop",
+      "component": "Laptop",
+      "category": "人员与设备",
+      "file": "assets/icons/laptop.svg"
+    },
+    {
+      "name": "layout-dashboard",
+      "component": "LayoutDashboard",
+      "category": "导航与操作",
+      "file": "assets/icons/layout-dashboard.svg"
+    },
+    {
+      "name": "layout-grid",
+      "component": "LayoutGrid",
+      "category": "导航与操作",
+      "file": "assets/icons/layout-grid.svg"
+    },
+    {
+      "name": "list-filter",
+      "component": "ListFilter",
+      "category": "导航与操作",
+      "file": "assets/icons/list-filter.svg"
+    },
+    {
+      "name": "loader-circle",
+      "component": "LoaderCircle",
+      "category": "状态与反馈",
+      "file": "assets/icons/loader-circle.svg"
+    },
+    {
+      "name": "log-out",
+      "component": "LogOut",
+      "category": "导航与操作",
+      "file": "assets/icons/log-out.svg"
+    },
+    {
+      "name": "message-circle",
+      "component": "MessageCircle",
+      "category": "人员与设备",
+      "file": "assets/icons/message-circle.svg"
+    },
+    {
+      "name": "moon",
+      "component": "Moon",
+      "category": "人员与设备",
+      "file": "assets/icons/moon.svg"
+    },
+    {
+      "name": "plus",
+      "component": "Plus",
+      "category": "导航与操作",
+      "file": "assets/icons/plus.svg"
+    },
+    {
+      "name": "receipt-text",
+      "component": "ReceiptText",
+      "category": "金融与账户",
+      "file": "assets/icons/receipt-text.svg"
+    },
+    {
+      "name": "refresh-cw",
+      "component": "RefreshCw",
+      "category": "状态与反馈",
+      "file": "assets/icons/refresh-cw.svg"
+    },
+    {
+      "name": "rotate-ccw",
+      "component": "RotateCcw",
+      "category": "导航与操作",
+      "file": "assets/icons/rotate-ccw.svg"
+    },
+    {
+      "name": "search",
+      "component": "Search",
+      "category": "导航与操作",
+      "file": "assets/icons/search.svg"
+    },
+    {
+      "name": "settings",
+      "component": "Settings",
+      "category": "人员与设备",
+      "file": "assets/icons/settings.svg"
+    },
+    {
+      "name": "shield-alert",
+      "component": "ShieldAlert",
+      "category": "状态与反馈",
+      "file": "assets/icons/shield-alert.svg"
+    },
+    {
+      "name": "shield-check",
+      "component": "ShieldCheck",
+      "category": "状态与反馈",
+      "file": "assets/icons/shield-check.svg"
+    },
+    {
+      "name": "shield-x",
+      "component": "ShieldX",
+      "category": "状态与反馈",
+      "file": "assets/icons/shield-x.svg"
+    },
+    {
+      "name": "shopping-basket",
+      "component": "ShoppingBasket",
+      "category": "金融与账户",
+      "file": "assets/icons/shopping-basket.svg"
+    },
+    {
+      "name": "signal",
+      "component": "Signal",
+      "category": "人员与设备",
+      "file": "assets/icons/signal.svg"
+    },
+    {
+      "name": "smartphone",
+      "component": "Smartphone",
+      "category": "人员与设备",
+      "file": "assets/icons/smartphone.svg"
+    },
+    {
+      "name": "sun",
+      "component": "Sun",
+      "category": "人员与设备",
+      "file": "assets/icons/sun.svg"
+    },
+    {
+      "name": "sun-moon",
+      "component": "SunMoon",
+      "category": "人员与设备",
+      "file": "assets/icons/sun-moon.svg"
+    },
+    {
+      "name": "train-front",
+      "component": "TrainFront",
+      "category": "金融与账户",
+      "file": "assets/icons/train-front.svg"
+    },
+    {
+      "name": "triangle-alert",
+      "component": "TriangleAlert",
+      "category": "状态与反馈",
+      "file": "assets/icons/triangle-alert.svg"
+    },
+    {
+      "name": "undo-2",
+      "component": "Undo2",
+      "category": "导航与操作",
+      "file": "assets/icons/undo-2.svg"
+    },
+    {
+      "name": "user",
+      "component": "User",
+      "category": "人员与设备",
+      "file": "assets/icons/user.svg"
+    },
+    {
+      "name": "user-plus",
+      "component": "UserPlus",
+      "category": "人员与设备",
+      "file": "assets/icons/user-plus.svg"
+    },
+    {
+      "name": "user-round",
+      "component": "UserRound",
+      "category": "人员与设备",
+      "file": "assets/icons/user-round.svg"
+    },
+    {
+      "name": "users",
+      "component": "Users",
+      "category": "人员与设备",
+      "file": "assets/icons/users.svg"
+    },
+    {
+      "name": "utensils",
+      "component": "Utensils",
+      "category": "金融与账户",
+      "file": "assets/icons/utensils.svg"
+    },
+    {
+      "name": "wallet",
+      "component": "Wallet",
+      "category": "金融与账户",
+      "file": "assets/icons/wallet.svg"
+    },
+    {
+      "name": "wallet-cards",
+      "component": "WalletCards",
+      "category": "金融与账户",
+      "file": "assets/icons/wallet-cards.svg"
+    },
+    {
+      "name": "wifi",
+      "component": "Wifi",
+      "category": "状态与反馈",
+      "file": "assets/icons/wifi.svg"
+    },
+    {
+      "name": "wifi-off",
+      "component": "WifiOff",
+      "category": "状态与反馈",
+      "file": "assets/icons/wifi-off.svg"
+    },
+    {
+      "name": "x",
+      "component": "X",
+      "category": "导航与操作",
+      "file": "assets/icons/x.svg"
+    }
+  ]
+};

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "mobile-home.html",
+  "entry": "mobile-home.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-12T15:27:31.744Z",
+  "updatedAt": "2026-08-12T15:27:31.744Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "web-investments.html",
+  "entry": "web-investments.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-12T15:27:31.608Z",
+  "updatedAt": "2026-08-12T15:27:31.608Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

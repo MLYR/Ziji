@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "mobile-offline.html",
+  "entry": "mobile-offline.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-12T15:27:32.059Z",
+  "updatedAt": "2026-08-12T15:27:32.059Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

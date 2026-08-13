@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "mobile-asset-calendar.html",
+  "entry": "mobile-asset-calendar.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-12T22:34:00.012Z",
+  "updatedAt": "2026-08-12T22:34:00.012Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

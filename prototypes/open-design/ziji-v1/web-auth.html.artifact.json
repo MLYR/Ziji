@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "web-auth.html",
+  "entry": "web-auth.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-12T15:27:31.440Z",
+  "updatedAt": "2026-08-12T15:27:31.440Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

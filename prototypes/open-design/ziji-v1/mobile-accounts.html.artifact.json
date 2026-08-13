@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "mobile-accounts.html",
+  "entry": "mobile-accounts.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-12T15:27:31.792Z",
+  "updatedAt": "2026-08-12T15:27:31.792Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

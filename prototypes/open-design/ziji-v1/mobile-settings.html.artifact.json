@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "mobile-settings.html",
+  "entry": "mobile-settings.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-12T15:27:32.017Z",
+  "updatedAt": "2026-08-12T15:27:32.017Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

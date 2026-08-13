@@ -1,0 +1,242 @@
+/* 总资产日历模块：复用资迹全局令牌，仅新增日历状态与资产方向语义。 */
+:root {
+  --asset-up: oklch(0.72 0.16 30);
+  --asset-down: oklch(0.74 0.115 178);
+  --asset-zero: var(--muted-strong);
+  --calendar-cell: color-mix(in oklch, var(--surface) 96%, var(--bg));
+  --calendar-outside: color-mix(in oklch, var(--bg) 70%, var(--surface));
+}
+
+[data-theme="light"] {
+  --asset-up: oklch(0.50 0.17 30);
+  --asset-down: oklch(0.46 0.12 178);
+  --asset-zero: oklch(0.42 0.025 282);
+  --calendar-cell: var(--surface);
+  --calendar-outside: var(--surface-2);
+}
+
+/* 面包屑和工具条让日历保留在现有 Dashboard 信息层级中。 */
+.asset-calendar-page { display: grid; gap: 14px; }
+.calendar-breadcrumbs { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }
+.calendar-breadcrumbs a:hover { color: var(--fg); }
+/* 日历子模块复用共享图标令牌，不另起描边或尺寸体系。 */
+.calendar-breadcrumbs svg { width: var(--icon-xs); height: var(--icon-xs); }
+.calendar-title-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; }
+.calendar-title-row h2 { margin: 0; font: 600 26px/1.3 var(--font-display); letter-spacing: 0; }
+.calendar-title-row p { max-width: 62ch; margin: 5px 0 0; color: var(--muted); }
+.calendar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.demo-badge { color: var(--accent-text); border-color: color-mix(in oklch, var(--accent) 42%, var(--border)); }
+
+.calendar-toolbar {
+  display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: 12px;
+  min-height: 62px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--surface);
+}
+.calendar-toolbar fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.calendar-toolbar legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.calendar-toggle { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+.calendar-toggle button {
+  min-width: 78px; min-height: 40px; padding: 0 12px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--muted-strong); cursor: pointer; font-weight: 550;
+  transition: background .18s var(--ease), color .18s var(--ease), transform .16s var(--ease);
+}
+.calendar-toggle button:hover { background: var(--surface-hover); color: var(--fg); }
+.calendar-toggle button:active { transform: translateY(1px); }
+.calendar-toggle button[aria-pressed="true"] { background: var(--surface-hover); color: var(--fg); box-shadow: inset 0 0 0 1px var(--border); }
+.calendar-toggle button[data-primary="true"][aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); box-shadow: none; }
+.month-navigation { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+.month-label { min-width: 118px; text-align: center; font: 600 15px var(--font-mono); }
+.calendar-mode-help { justify-self: end; color: var(--muted); font-size: 11px; text-align: right; }
+
+/* 月度汇总使用连续数据带，不将每个指标做成独立悬浮卡片。 */
+.calendar-summary {
+  display: grid; grid-template-columns: 1.1fr 1.1fr 1.25fr .8fr repeat(3, .66fr);
+  border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); overflow: hidden;
+}
+.calendar-summary-item { min-width: 0; padding: 14px 15px; border-right: 1px solid var(--border-soft); }
+.calendar-summary-item:last-child { border-right: 0; }
+.calendar-summary-item span { display: block; color: var(--muted); font-size: 10px; letter-spacing: .01em; }
+.calendar-summary-item strong { display: block; margin-top: 6px; font: 600 14px/1.25 var(--font-mono); font-variant-numeric: tabular-nums; }
+.calendar-summary-item.emphasis strong { font-size: 18px; }
+.calendar-summary-item small { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; }
+.asset-up { color: var(--asset-up) !important; }
+.asset-down { color: var(--asset-down) !important; }
+.asset-zero { color: var(--asset-zero) !important; }
+
+.calendar-meta-strip {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface-2); color: var(--muted); font-size: 10px;
+}
+.calendar-meta-strip span { display: inline-flex; align-items: center; gap: 6px; }
+.calendar-meta-strip svg { width: var(--icon-sm); height: var(--icon-sm); }
+
+/* 自然月使用一体化 7 列网格，避免 35 个独立圆角卡片带来的模板感。 */
+.asset-calendar-shell { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); overflow: hidden; }
+.asset-calendar-head {
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border); background: var(--surface-2);
+}
+.asset-calendar-head span { display: grid; place-items: center; min-height: 34px; color: var(--muted); font-size: 10px; font-weight: 550; }
+.asset-calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); background: var(--border-soft); gap: 1px; }
+.asset-day {
+  position: relative; min-width: 0; min-height: 94px; display: flex; flex-direction: column; align-items: stretch;
+  gap: 7px; padding: 9px 10px; border: 0; background: var(--calendar-cell); color: var(--fg);
+  cursor: pointer; text-align: left; transition: background .18s var(--ease), box-shadow .18s var(--ease);
+}
+.asset-day:hover { background: var(--surface-hover); }
+.asset-day:active { background: color-mix(in oklch, var(--surface-hover), var(--fg) 4%); }
+.asset-day:focus-visible { position: relative; z-index: 4; outline: 2px solid var(--focus); outline-offset: -3px; }
+.asset-day.is-outside { background: var(--calendar-outside); color: var(--muted); cursor: default; }
+.asset-day.is-outside:hover { background: var(--calendar-outside); }
+.asset-day.is-selected { z-index: 2; background: color-mix(in oklch, var(--accent) 11%, var(--surface)); box-shadow: inset 0 0 0 2px var(--accent); }
+.asset-day.is-today { box-shadow: inset 0 0 0 1px var(--magenta-text); }
+.asset-day.is-selected.is-today { box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 0 4px var(--surface); }
+.asset-day.is-max-up::before, .asset-day.is-max-down::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+}
+.asset-day.is-max-up::before { background: var(--asset-up); }
+.asset-day.is-max-down::before { background: var(--asset-down); }
+.asset-day-top { display: flex; align-items: center; justify-content: space-between; min-height: 18px; gap: 4px; }
+.asset-day-number { font: 570 11px var(--font-mono); }
+.asset-day-markers { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+.asset-day-markers svg { width: var(--icon-xs); height: var(--icon-xs); }
+.asset-day-value { margin-top: auto; font: 600 12px/1.15 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.asset-day-status { min-height: 15px; color: var(--muted); font-size: 9px; line-height: 1.35; }
+.asset-day-status.status-warning { color: var(--accent-text); }
+.asset-day-status.status-error { color: var(--danger-text); }
+.asset-day-status.status-empty { color: var(--muted-strong); }
+.asset-day-status-line { display: inline-flex; align-items: center; gap: 4px; }
+.asset-day-status-line svg { width: 11px; height: 11px; flex: 0 0 auto; }
+.asset-day-state { color: var(--muted); font-size: 8px; letter-spacing: .04em; }
+.asset-day.is-skeleton { cursor: default; }
+.asset-day.is-skeleton .asset-day-number, .asset-day.is-skeleton .asset-day-value, .asset-day.is-skeleton .asset-day-status { color: transparent; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+
+.calendar-legend { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 10px 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 9px; }
+.calendar-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.calendar-legend i { width: 8px; height: 8px; border-radius: 2px; background: var(--asset-zero); }
+.calendar-legend .up-key { background: var(--asset-up); }
+.calendar-legend .down-key { background: var(--asset-down); }
+.calendar-legend svg { width: 12px; height: 12px; }
+
+.calendar-empty-month { min-height: 330px; display: grid; place-items: center; padding: 34px; background: var(--surface); text-align: center; }
+.calendar-empty-month svg { width: 34px; height: 34px; margin: 0 auto 12px; color: var(--muted); }
+.calendar-empty-month h3 { margin: 0; font: 600 15px/1.4 var(--font-display); }
+.calendar-empty-month p { max-width: 360px; margin: 7px auto 14px; color: var(--muted); }
+
+/* 日期详情 Sheet 分离规模变化与来源归因，表格金额保持纵向对齐。 */
+.asset-detail-sheet { width: min(650px, 100%); overflow: auto; border: 1px solid var(--border); border-radius: 0; background: var(--surface); box-shadow: var(--shadow); }
+.asset-detail-hero { padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.asset-detail-date { color: var(--muted); font-size: 11px; }
+.asset-detail-change { margin-top: 5px; font: 600 28px/1.25 var(--font-mono); font-variant-numeric: tabular-nums; }
+.asset-detail-quality { display: flex; align-items: center; gap: 7px; margin-top: 7px; color: var(--muted); font-size: 10px; }
+.asset-detail-quality svg { width: var(--icon-sm); height: var(--icon-sm); }
+.asset-balance-matrix { display: grid; grid-template-columns: 1.2fr repeat(3, 1fr); margin-top: 14px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.asset-matrix-cell { min-width: 0; padding: 11px; border-right: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); background: var(--surface); }
+.asset-matrix-cell:nth-child(4n) { border-right: 0; }
+.asset-matrix-cell:nth-last-child(-n+4) { border-bottom: 0; }
+.asset-matrix-cell.header { background: var(--surface-2); color: var(--muted); font-size: 9px; }
+.asset-matrix-cell.label { color: var(--muted-strong); font-size: 10px; font-weight: 550; }
+.asset-matrix-cell strong { font: 560 11px var(--font-mono); font-variant-numeric: tabular-nums; }
+.asset-detail-section { margin-top: 18px; }
+.asset-detail-section h3 { margin: 0 0 10px; font: 600 14px/1.4 var(--font-display); }
+.asset-detail-table { min-width: 610px; }
+.asset-detail-table th, .asset-detail-table td { padding-inline: 10px; }
+.asset-detail-table td { height: 52px; }
+.source-kind { display: inline-flex; align-items: center; min-height: 21px; padding: 0 6px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted-strong); font-size: 9px; }
+.source-zero-note { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--muted-strong); font-size: 10px; }
+.source-zero-note svg { width: var(--icon-sm); height: var(--icon-sm); color: var(--asset-zero); flex: 0 0 auto; }
+.asset-detail-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 16px; color: var(--muted); font-size: 9px; }
+
+/* 状态画廊提供同尺寸对照，避免把状态规范藏在说明文档里。 */
+.calendar-state-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.calendar-state-card { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); overflow: hidden; }
+.calendar-state-card header { min-height: 58px; padding: 12px 14px; border-bottom: 1px solid var(--border-soft); }
+.calendar-state-card h3 { margin: 0; font: 600 13px/1.4 var(--font-display); }
+.calendar-state-card p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
+.calendar-state-preview { min-height: 126px; display: grid; place-items: center; padding: 14px; }
+.calendar-state-preview .asset-day { width: 148px; min-height: 94px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); }
+.calendar-state-content { min-height: 95px; padding: 12px 14px; border-top: 1px solid var(--border-soft); color: var(--muted-strong); font-size: 10px; }
+.error-state-plate { text-align: center; }
+.error-state-plate svg { width: 30px; height: 30px; margin: 0 auto 8px; color: var(--danger-text); }
+.error-state-plate strong { display: block; color: var(--fg); }
+.error-state-plate p { margin: 4px 0 10px; color: var(--muted); }
+
+/* Mobile 390px 重排：控件纵向分组，月历固定七列且绝不横向滚动。 */
+.mobile-calendar-app { padding-bottom: 28px; }
+.mobile-calendar-header { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; min-height: 56px; padding: 0 12px; }
+.mobile-calendar-header h1 { margin: 0; text-align: center; font: 600 17px/1.4 var(--font-display); letter-spacing: 0; }
+.mobile-calendar-content { padding: 0 12px 24px; overflow-x: clip; }
+.mobile-calendar-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.mobile-calendar-tabs button { min-height: 44px; border: 0; border-radius: 7px; background: transparent; color: var(--muted-strong); cursor: pointer; font-weight: 550; }
+.mobile-calendar-tabs button[aria-pressed="true"] { background: var(--surface-hover); color: var(--fg); box-shadow: inset 0 0 0 1px var(--border); }
+.mobile-calendar-mode-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
+.mobile-mode-toggle { display: inline-flex; align-items: center; gap: 7px; min-height: 44px; color: var(--muted-strong); font-size: 11px; }
+.mobile-toggle-control { display: grid; place-items: center; width: 48px; min-height: 44px; border: 0; background: transparent; cursor: pointer; }
+.mobile-toggle-control .switch { pointer-events: none; }
+.mobile-month-nav { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; margin-top: 14px; }
+.mobile-month-nav strong { text-align: center; font: 600 14px var(--font-mono); }
+.mobile-today-link { display: block; width: max-content; min-height: 44px; margin: 0 auto; padding: 0 8px; border: 0; background: transparent; color: var(--magenta-text); cursor: pointer; font-size: 10px; }
+.mobile-calendar-summary { display: grid; grid-template-columns: 1.15fr 1fr 1fr; margin-top: 12px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.mobile-calendar-summary > div { min-width: 0; padding: 10px; border-right: 1px solid var(--border-soft); background: var(--surface); }
+.mobile-calendar-summary > div:last-child { border-right: 0; }
+.mobile-calendar-summary span { display: block; color: var(--muted); font-size: 8px; }
+.mobile-calendar-summary strong { display: block; margin-top: 4px; font: 600 11px/1.3 var(--font-mono); }
+.mobile-data-note { margin: 10px 0; font-size: 9px; }
+.mobile-asset-calendar { border-radius: var(--radius); }
+.mobile-asset-calendar .asset-calendar-head span { min-height: 28px; font-size: 9px; }
+.mobile-asset-calendar .asset-day { min-height: 65px; gap: 4px; padding: 5px 4px; }
+.mobile-asset-calendar .asset-day-number { font-size: 9px; }
+.mobile-asset-calendar .asset-day-value { font-size: 9px; letter-spacing: -.025em; }
+.mobile-asset-calendar .asset-day-status { min-height: 13px; font-size: 7px; }
+.mobile-asset-calendar .asset-day-status-line { gap: 2px; }
+.mobile-asset-calendar .asset-day-status-line svg { width: 8px; height: 8px; }
+.mobile-asset-calendar .asset-day-state { display: none; }
+.mobile-asset-calendar .asset-day-markers svg { width: 9px; height: 9px; }
+.mobile-asset-calendar .calendar-legend { gap: 10px; padding: 8px; font-size: 8px; }
+.mobile-asset-calendar .calendar-legend span:nth-child(n+4) { display: none; }
+.mobile-calendar-meta { margin-top: 10px; display: grid; gap: 3px; color: var(--muted); font-size: 8px; }
+.mobile-asset-detail { width: min(390px, 100%); max-height: 92dvh; }
+.mobile-calendar-header .icon-btn, .mobile-asset-detail .icon-btn { width: 44px; min-height: 44px; }
+.mobile-asset-detail .dialog-head { padding: 13px 16px 10px; }
+.mobile-asset-detail .dialog-body { padding: 13px 16px; }
+.mobile-asset-detail .asset-detail-change { font-size: 24px; }
+.mobile-asset-detail .asset-balance-matrix { grid-template-columns: 1.15fr repeat(3, 1fr); }
+.mobile-asset-detail .asset-matrix-cell { padding: 8px 6px; }
+.mobile-asset-detail .asset-matrix-cell strong { font-size: 9px; }
+.mobile-source-list { display: grid; margin: 0 -16px; border-top: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); }
+.mobile-source-row { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto 16px; align-items: center; gap: 8px; min-height: 60px; padding: 8px 16px; border: 0; border-bottom: 1px solid var(--border-soft); background: transparent; color: var(--fg); text-align: left; cursor: pointer; }
+.mobile-source-row:last-child { border-bottom: 0; }
+.mobile-source-row:active { background: var(--surface-hover); }
+.mobile-source-row[disabled] { cursor: default; }
+.mobile-source-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; background: var(--surface-2); color: var(--muted-strong); }
+.mobile-source-icon svg { width: var(--icon-sm); height: var(--icon-sm); }
+.mobile-source-main strong { display: block; font-size: 10px; }
+.mobile-source-main span { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; }
+.mobile-source-value { text-align: right; font: 600 10px var(--font-mono); }
+.mobile-source-value span { display: block; margin-top: 2px; color: var(--muted); font: 8px var(--font-body); }
+.mobile-source-row > svg { width: var(--icon-xs); height: var(--icon-xs); color: var(--muted); }
+
+@media (max-width: 1180px) {
+  .calendar-toolbar { grid-template-columns: auto auto 1fr; }
+  .calendar-mode-help { display: none; }
+  .calendar-summary { grid-template-columns: repeat(4, 1fr); }
+  .calendar-summary-item:nth-child(4) { border-right: 0; }
+  .calendar-summary-item:nth-child(-n+4) { border-bottom: 1px solid var(--border-soft); }
+  .calendar-summary-item:nth-child(6) { border-right: 1px solid var(--border-soft); }
+  .calendar-state-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .calendar-title-row { align-items: flex-start; flex-direction: column; }
+  .calendar-actions { justify-content: flex-start; }
+  .calendar-toolbar { grid-template-columns: 1fr; }
+  .month-navigation { justify-content: space-between; }
+  .calendar-summary { grid-template-columns: repeat(2, 1fr); }
+  .calendar-summary-item { border-bottom: 1px solid var(--border-soft); }
+  .calendar-summary-item:nth-child(2n) { border-right: 0; }
+  .asset-day { min-height: 68px; padding: 6px 5px; }
+  .asset-day-value { font-size: 9px; }
+  .asset-day-status { font-size: 7px; }
+  .calendar-state-grid { grid-template-columns: 1fr; }
+}

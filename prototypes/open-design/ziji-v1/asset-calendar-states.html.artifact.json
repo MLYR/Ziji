@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "asset-calendar-states.html",
+  "entry": "asset-calendar-states.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-12T22:34:00.090Z",
+  "updatedAt": "2026-08-12T22:34:00.090Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

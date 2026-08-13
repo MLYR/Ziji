@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "mobile-investments.html",
+  "entry": "mobile-investments.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-12T15:27:31.970Z",
+  "updatedAt": "2026-08-12T15:27:31.970Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

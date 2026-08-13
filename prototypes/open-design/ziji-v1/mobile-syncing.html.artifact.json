@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "mobile-syncing.html",
+  "entry": "mobile-syncing.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-12T15:27:32.109Z",
+  "updatedAt": "2026-08-12T15:27:32.109Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

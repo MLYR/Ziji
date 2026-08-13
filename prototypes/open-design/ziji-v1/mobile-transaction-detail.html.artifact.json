@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "mobile-transaction-detail.html",
+  "entry": "mobile-transaction-detail.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-12T15:27:31.927Z",
+  "updatedAt": "2026-08-12T15:27:31.927Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}
