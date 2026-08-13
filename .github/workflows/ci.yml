@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# 同一分支只保留最新流水线，减少过时检查占用执行资源。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: OpenAPI contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # 生成后要求工作树无差异，防止契约与提交的共享类型漂移。
+      - run: pnpm run api:check
+      - run: pnpm run api:generate
+      - run: pnpm run api:types:check
+
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      # Maven Wrapper 是后端唯一受支持的构建入口。
+      - run: ./mvnw --batch-mode --no-transfer-progress test
+        working-directory: backend
+
+  web:
+    name: Web checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Web 的 check/test 脚本由工程自身声明，CI 不复制工具参数。
+      - run: pnpm --filter web check
+      - run: pnpm --filter web test
+
+  mobile:
+    name: Mobile checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Maestro 需原生模拟器，基础 CI 先执行类型、配置和单元检查。
+      - run: pnpm --filter mobile check
+      - run: pnpm --filter mobile test
