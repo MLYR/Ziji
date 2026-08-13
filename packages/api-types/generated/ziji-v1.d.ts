@@ -1557,6 +1557,8 @@ export interface components {
         EmailChallengeRequest: {
             /** Format: email */
             email: string;
+            /** @description 可选防滥用信号；缺失时按来源 IP 与 MISSING_DEVICE 域标记计算设备限流摘要。 */
+            deviceId?: string;
         };
         RegisterRequest: {
             /** Format: email */
@@ -2909,9 +2911,10 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description 请求过于频繁 */
+        /** @description 请求过于频繁；Retry-After 为所有超限窗口中的最长剩余秒数 */
         RateLimited: {
             headers: {
+                /** @description 所有超限窗口中的最长剩余时间（秒） */
                 "Retry-After"?: number;
                 [name: string]: unknown;
             };

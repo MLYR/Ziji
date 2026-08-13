@@ -6,7 +6,7 @@
 
 - 产品与技术基线：`doc/`
 - OpenAPI 3.1 契约：`openapi/ziji-v1.yaml`
-- Flyway V001～V007：`backend/src/main/resources/db/migration/`
+- Flyway V001～V008：`backend/src/main/resources/db/migration/`
 - UI 原型入口：`prototypes/open-design/ziji-v1/index.html`
 - 当前任务与依赖：`doc/开发进度与任务跟踪.md`
 
@@ -104,7 +104,7 @@ pnpm api:types:check
 JAVA_HOME=$(/usr/libexec/java_home -v 25) \
   ./backend/mvnw -f backend/pom.xml -Pdb-codegen flyway:info
 
-# 执行 V001～V007 并从真实 PostgreSQL schema 生成 jOOQ 类型
+# 执行 V001～V008 并从真实 PostgreSQL schema 生成 jOOQ 类型
 JAVA_HOME=$(/usr/libexec/java_home -v 25) \
   ./backend/mvnw -f backend/pom.xml -Pdb-codegen generate-sources
 ```

@@ -32,7 +32,7 @@ paths:
       operationId: createRegistrationChallenge
       summary: 发送注册邮箱验证码
       security: []
-      x-requirement-ids: [AUTH-001]
+      x-requirement-ids: [AUTH-001, SEC-002]
       requestBody: { $ref: '#/components/requestBodies/EmailChallengeRequest' }
       responses:
         '202': { $ref: '#/components/responses/ChallengeAccepted' }
@@ -121,7 +121,7 @@ paths:
       operationId: createPasswordResetChallenge
       summary: 发送密码重置验证码
       security: []
-      x-requirement-ids: [AUTH-003]
+      x-requirement-ids: [AUTH-003, SEC-002]
       requestBody: { $ref: '#/components/requestBodies/EmailChallengeRequest' }
       responses:
         '202': { $ref: '#/components/responses/ChallengeAccepted' }
@@ -1566,6 +1566,11 @@ components:
       required: [email]
       properties:
         email: { type: string, format: email, maxLength: 320 }
+        deviceId:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: 可选防滥用信号；缺失时按来源 IP 与 MISSING_DEVICE 域标记计算设备限流摘要。
     RegisterRequest:
       type: object
       additionalProperties: false
@@ -3017,7 +3022,7 @@ components:
     NotFound: { description: 资源不存在或对当前用户不可见, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     Conflict: { description: 幂等键异参、版本冲突或唯一约束冲突, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     BusinessRuleViolation: { description: 业务规则不允许本次操作, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
-    RateLimited: { description: 请求过于频繁, headers: { Retry-After: { schema: { type: integer, minimum: 1 } } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    RateLimited: { description: 请求过于频繁；Retry-After 为所有超限窗口中的最长剩余秒数, headers: { Retry-After: { description: 所有超限窗口中的最长剩余时间（秒）, schema: { type: integer, minimum: 1 } } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     PayloadTooLarge: { description: 文件超过 V1 上传上限, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     UnsupportedMediaType: { description: 不支持的文件类型, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     ChallengeAccepted:
