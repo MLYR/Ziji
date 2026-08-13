@@ -1990,7 +1990,7 @@ export interface components {
             /** @enum {string} */
             amountFormat: "STANDARD" | "ACCOUNTING";
             /** @enum {string} */
-            status: "ACTIVE" | "CLOSING" | "CLOSED" | "DISABLED";
+            status: "ACTIVE" | "LOCKED" | "CLOSING" | "CLOSED";
             version: number;
         };
         Session: {

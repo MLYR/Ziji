@@ -252,6 +252,8 @@ Web 登录/刷新响应不在 JSON 中返回 refreshToken，而是设置 `Secure
 | PATCH | `/users/me` | 修改昵称、时区、基准币种、语言和金额格式 | AUTH-006 |
 | POST | `/users/me/password-change` | 使用当前密码修改密码 | AUTH-003 |
 
+V1 用户状态 `User.status` 固定为 `ACTIVE`、`LOCKED`、`CLOSING`、`CLOSED`。其中 `LOCKED` 表示认证安全锁定，不表示账户归档或注销完成。
+
 修改用户使用 `If-Match`。修改时区或基准币种不能改写历史原币账务。
 
 修改时区不重新划分已入账交易的 `businessDate`。修改基准币种后，历史统计默认按新的当前基准币种展示，但每个历史日期仍使用对应日期的历史汇率。

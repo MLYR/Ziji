@@ -2059,7 +2059,7 @@ components:
         baseCurrency: { $ref: '#/components/schemas/Currency' }
         locale: { type: string }
         amountFormat: { type: string, enum: [STANDARD, ACCOUNTING] }
-        status: { type: string, enum: [ACTIVE, CLOSING, CLOSED, DISABLED] }
+        status: { type: string, enum: [ACTIVE, LOCKED, CLOSING, CLOSED] }
         version: { type: integer, minimum: 1 }
     Session:
       type: object
