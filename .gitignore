@@ -1,0 +1,52 @@
+# macOS / IDE
+.DS_Store
+.idea/
+*.iml
+.vscode/
+.reasonix/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+secrets/
+
+# Java / Maven / jOOQ
+backend/target/
+backend/.classpath
+backend/.project
+backend/.settings/
+backend/src/generated/
+*.log
+hs_err_pid*
+
+# Node / pnpm
+node_modules/
+.pnpm-store/
+*.tsbuildinfo
+
+# Web / Vite / tests
+web/dist/
+web/coverage/
+web/playwright-report/
+web/test-results/
+
+# Expo / React Native / native build products
+mobile/.expo/
+mobile/.expo-shared/
+mobile/dist/
+mobile/coverage/
+mobile/android/.gradle/
+mobile/android/app/build/
+mobile/ios/Pods/
+mobile/ios/build/
+
+# OpenAPI 生成类型属于机器契约基线，必须提交并由漂移检查保护。
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo

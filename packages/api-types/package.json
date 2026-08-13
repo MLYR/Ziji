@@ -1,0 +1,21 @@
+{
+  "name": "@ziji/api-types",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "由 Ziji OpenAPI 契约生成的 Web/Mobile 共享 TypeScript 类型",
+  "scripts": {
+    "generate": "openapi-typescript ../../openapi/ziji-v1.yaml -o generated/ziji-v1.d.ts",
+    "check": "node ../../scripts/check-api-types.mjs"
+  },
+  "exports": {
+    ".": "./generated/ziji-v1.d.ts"
+  },
+  "files": [
+    "generated"
+  ],
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}

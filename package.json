@@ -1,0 +1,22 @@
+{
+  "name": "ziji",
+  "version": "0.1.0",
+  "private": true,
+  "description": "资迹 Ziji 个人与家庭财务管理项目",
+  "packageManager": "pnpm@10.4.1",
+  "engines": {
+    "node": "22.22.3",
+    "pnpm": "10.4.1"
+  },
+  "scripts": {
+    "api:lint": "redocly lint openapi/ziji-v1.yaml",
+    "api:check": "pnpm api:lint && node scripts/check-openapi.mjs",
+    "api:generate": "pnpm --filter @ziji/api-types run generate",
+    "api:types:check": "pnpm --filter @ziji/api-types run check",
+    "check:workspace": "pnpm --recursive --if-present run check",
+    "test:workspace": "pnpm --recursive --if-present run test"
+  },
+  "devDependencies": {
+    "@redocly/cli": "2.46.1"
+  }
+}

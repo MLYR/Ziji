@@ -1,0 +1,48 @@
+name: ziji-local
+
+services:
+  postgres:
+    # 固定维护版本，避免本地数据库随 latest 标签漂移。
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_DB: ziji
+      POSTGRES_USER: ziji
+      POSTGRES_PASSWORD: ziji-local
+    ports:
+      - "5432:5432"
+    volumes:
+      - ziji-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ziji -d ziji"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  mailpit:
+    # Mailpit 捕获 local 环境邮件，Web UI 位于 http://localhost:8025。
+    image: axllent/mailpit:v1.27.8
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  minio:
+    # MinIO 只模拟私有 S3 对象存储，不承载账务事实。
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ziji-local
+      MINIO_ROOT_PASSWORD: ziji-local-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ziji-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  ziji-postgres-data:
+  ziji-minio-data:

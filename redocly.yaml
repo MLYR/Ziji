@@ -1,0 +1,9 @@
+extends:
+  - recommended
+
+rules:
+  # operationId 的稳定性与唯一性由项目脚本进一步校验。
+  operation-operationId: error
+  operation-operationId-unique: error
+  no-invalid-media-type-examples: error
+  no-invalid-parameter-examples: error

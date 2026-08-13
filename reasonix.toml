@@ -1,0 +1,2 @@
+[permissions]
+allow = ["Bash=cd /Users/zreo/CODE/Ziji && echo \"=== 根目录 ===\" && ls -la && echo \"\" && echo \"=== doc 目录 ===\" && ls -la doc/ && echo \"\" && echo \"=== prototypes 目录树 ===\" && find prototypes -type f | sort && echo \"\" && echo \"=== git 状态 ===\" && if [ -d .git ]; then echo \"已初始化，提交数：$(git rev-list --count HEAD 2>/dev/null || echo 0)\"; else echo \"未初始化\"; fi && echo \"\" && echo \"=== 缺失检查 ===\" && for f in README.md .gitignore; do [ -e \"$f\" ] && echo \"存在: $f\" || echo \"缺失: $f\"; done"]
