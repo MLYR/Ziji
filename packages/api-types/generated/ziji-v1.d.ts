@@ -1584,10 +1584,13 @@ export interface components {
             /** Format: email */
             email: string;
             password: string;
+            /** @description 经 NFKC 与 trim 规范化的展示设备名称。 */
             deviceName: string;
+            /** @description 可空客户端不透明稳定设备标识；非空时为 1～200 字符且不得全空白，保留客户端原值，不做 NFKC 或 trim。 */
             deviceId?: string | null;
         };
         MobileRefreshRequest: {
+            /** @description 仅客户端持有一次的刷新凭据；V1 签发值为 rt1_ 加 32 字节 SecureRandom 的无填充 Base64URL，服务端不保存原文并在每次成功刷新后轮换。 */
             refreshToken: string;
         };
         PasswordResetRequest: {
@@ -2005,7 +2008,9 @@ export interface components {
         Session: {
             /** Format: uuid */
             id: string;
+            /** @description 经 NFKC 与 trim 规范化的 1～100 字符展示设备名称。 */
             deviceName: string;
+            /** @description NULL 或 1～200 字符的客户端不透明稳定设备标识；保留客户端原值，不做 NFKC/trim，且非空值不得全空白。 */
             deviceId?: string | null;
             /** Format: date-time */
             createdAt: string;
@@ -2015,8 +2020,11 @@ export interface components {
             status: "ACTIVE" | "REVOKED" | "EXPIRED";
         };
         TokenPair: {
+            /** @description RS256 access JWT；固定最长 30 分钟，不写入服务端持久化或日志。 */
             accessToken: string;
+            /** @description 仅本次响应交付的轮换刷新凭据；安全存储后不得记录或回显。 */
             refreshToken: string;
+            /** @description Access Token 有效秒数，最长 30 分钟。 */
             expiresIn: number;
         };
         Account: {
@@ -2622,7 +2630,9 @@ export interface components {
         WebSessionEnvelope: {
             data: {
                 session: components["schemas"]["Session"];
+                /** @description RS256 access JWT；固定最长 30 分钟，不写入服务端持久化或日志。 */
                 accessToken: string;
+                /** @description Access Token 有效秒数，最长 30 分钟。 */
                 expiresIn: number;
             };
             meta: components["schemas"]["ResponseMeta"];

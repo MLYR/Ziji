@@ -258,23 +258,34 @@ GET /transactions?accountId=...&limit=50&cursor=opaque
 
 发送注册或密码重置验证码请求使用同一 `EmailChallengeRequest`：`email` 必填，`deviceId` 可选，长度 1～200。`deviceId` 只是防滥用信号，不是可信身份凭据；缺失时服务端按来源 IP 和 `MISSING_DEVICE` 域标记计算设备限流摘要。来源 IP 默认取连接对端；只有受信反向代理已显式配置并覆盖客户端转发头时才接受代理地址，客户端自行传入的 `Forwarded`/`X-Forwarded-For` 不得改变限流主体。语法合法请求不因邮箱是否存在而返回不同结果。
 
+稳定设备会话、刷新 Token 与 Access Token 的生命周期固定如下：每次成功登录创建新的 `sessionId`；同一用户使用相同非空 `deviceId` 登录时，同一事务撤销旧活动会话和刷新 Token（`REPLACED_BY_LOGIN`）后创建新会话，缺失 `deviceId` 时创建独立会话。`deviceName` 经 NFKC、trim 后为 1～100 字符；`deviceId` 是保留客户端原值的不透明稳定标识，不做 NFKC/trim，非空时为 1～200 字符且不得全空白。会话和刷新 Token 以首次签发起固定 30 天绝对到期，正常轮换不改变 `sessionId` 或延长到期；`lastSeenAt` 仅在创建和成功刷新时更新。新刷新 Token 固定 `createdAt = issuedAt < expiresAt`，格式为 `rt1_` 加 32 字节 SecureRandom 的无填充 Base64URL，原文只交付客户端一次，服务端仅保存 `v1:` 加域分离 SHA-256 的 64 位小写十六进制摘要。
+
+Access Token 固定为至少 2048 位 RSA 签发的 RS256 JWT，header 必须为 `alg=RS256`、`typ=at+jwt` 和受控 `kid`，claims 必须包含 `iss=ziji-backend`、`aud=ziji-api`、`sub`、`sid`、`jti`、`iat`、`nbf`、`exp`。其有效期最长 30 分钟，允许 60 秒时钟偏差且不得超过稳定会话到期；验证只接受当前或上一受信公钥和明确 `kid`，拒绝未知 `kid`、其他算法、错误 typ/issuer/audience 或非法时间。私钥、公钥、Access Token 和原始刷新 Token 不得进入数据库、日志、异常、审计 metadata、outbox 或幂等记录；当前私钥签发，当前/上一公钥验证，上一公钥停止签发后至少保留 24 小时。
+
 移动端登录成功：
 
 ```json
 {
   "data": {
-    "accessToken": "short-lived-token",
-    "accessTokenExpiresAt": "2026-08-12T09:00:00Z",
-    "refreshToken": "rotating-secret",
-    "refreshTokenExpiresAt": "2026-09-11T08:30:00Z",
-    "sessionId": "0191...",
-    "user": {}
+    "session": {
+      "id": "0191...",
+      "deviceName": "iPhone",
+      "deviceId": "opaque-device-id",
+      "createdAt": "2026-08-12T08:30:00Z",
+      "lastSeenAt": "2026-08-12T08:30:00Z",
+      "status": "ACTIVE"
+    },
+    "tokens": {
+      "accessToken": "short-lived-rs256-jwt",
+      "refreshToken": "rt1_43Base64UrlCharactersFor32RandomBytes",
+      "expiresIn": 1800
+    }
   },
   "meta": { "requestId": "req_01" }
 }
 ```
 
-Web 登录/刷新响应不在 JSON 中返回 refreshToken，而是设置 `Secure`、`HttpOnly`、`SameSite` Cookie；所有 Web 状态变更请求同时校验 CSRF Token。移动端在响应体返回刷新 Token并存入系统安全存储。两套 operationId 分离，底层复用同一认证服务。刷新 Token 轮换不改变稳定 `sessionId`；已消费 Token 被重复使用时撤销整个设备会话。
+Web 登录/刷新响应不在 JSON 中返回 refreshToken，而是设置 `Secure`、`HttpOnly`、`SameSite` Cookie；所有 Web 状态变更请求同时校验 CSRF Token。移动端在响应体返回刷新 Token并存入系统安全存储。两套 operationId 分离，底层复用同一认证服务。刷新 Token 正常轮换必须在同一数据库事务锁定当前 Token、消费旧 Token、插入新 Token、设置 `replacedById` 并更新 `lastSeenAt`；失败整体回滚且并发最多一个成功。已消费 Token 保留可识别状态，后续重用攻击撤销整个设备会话。
 
 ### 4.2 当前用户
 

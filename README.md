@@ -6,7 +6,7 @@
 
 - 产品与技术基线：`doc/`
 - OpenAPI 3.1 契约：`openapi/ziji-v1.yaml`
-- Flyway V001～V010：`backend/src/main/resources/db/migration/`
+- Flyway V001～V011：`backend/src/main/resources/db/migration/`
 - UI 原型入口：`prototypes/open-design/ziji-v1/index.html`
 - 当前任务与依赖：`doc/开发进度与任务跟踪.md`
 
@@ -69,7 +69,25 @@ export ZIJI_AUTH_ENVELOPE_KEK_BASE64="$(openssl rand -base64 32)"
 
 `ZIJI_AUTH_HMAC_PREVIOUS_KEY_VERSION` 与 `ZIJI_AUTH_HMAC_PREVIOUS_KEY_BASE64` 必须同时设置或同时留空；配置上一版本时，`ZIJI_AUTH_HMAC_PREVIOUS_KEY_RETENTION` 不得小于 `48h`。`ZIJI_AUTH_TRUSTED_PROXY_ADDRESSES` 缺失或为空表示不信任任何代理。测试 profile 中的固定 HMAC/KEK 只用于自动测试，不能用于 `local`、`staging` 或 `production`。
 
-`local` 是默认 profile，测试使用 Testcontainers 注入连接；`staging`/`production` 必须显式设置 `SPRING_PROFILES_ACTIVE`，并由部署环境或密钥管理系统注入数据库、邮件、对象存储以及 `ZIJI_AUTH_HMAC_CURRENT_KEY_VERSION`、`ZIJI_AUTH_HMAC_CURRENT_KEY_BASE64`、`ZIJI_AUTH_HMAC_PREVIOUS_KEY_VERSION`、`ZIJI_AUTH_HMAC_PREVIOUS_KEY_BASE64`、`ZIJI_AUTH_HMAC_PREVIOUS_KEY_RETENTION`、`ZIJI_AUTH_ENVELOPE_KEK_VERSION`、`ZIJI_AUTH_ENVELOPE_KEK_BASE64`、`ZIJI_AUTH_TRUSTED_PROXY_ADDRESSES`；缺失必需值时启动失败。
+Access Token 使用 RS256。启动本地会话实现前，生成至少 2048 位的临时 RSA 私钥与对应公钥，再将 PKCS#8 私钥和 X.509 公钥分别 Base64 为单行环境变量；`kid` 由部署受控分配。上一公钥与上一 `kid` 必须同时设置或同时留空，且 `ZIJI_AUTH_ACCESS_TOKEN_PREVIOUS_PUBLIC_KEY_RETENTION` 不得小于 `24h`。示例命令如下，生成结果与临时 PEM 文件都不得提交：
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/ziji-access-token-private.pem
+export ZIJI_AUTH_ACCESS_TOKEN_CURRENT_KID=local-rs256-1
+export ZIJI_AUTH_ACCESS_TOKEN_CURRENT_PRIVATE_KEY_PKCS8_BASE64="$(openssl pkcs8 -topk8 -nocrypt -in /tmp/ziji-access-token-private.pem -outform DER | base64 | tr -d '\n')"
+export ZIJI_AUTH_ACCESS_TOKEN_CURRENT_PUBLIC_KEY_X509_BASE64="$(openssl pkey -in /tmp/ziji-access-token-private.pem -pubout -outform DER | base64 | tr -d '\n')"
+```
+
+设置前在不输出密钥内容的前提下验证 DER 编码可读：
+
+```bash
+printf '%s' "$ZIJI_AUTH_ACCESS_TOKEN_CURRENT_PRIVATE_KEY_PKCS8_BASE64" \
+  | openssl base64 -d -A | openssl pkey -inform DER -noout
+printf '%s' "$ZIJI_AUTH_ACCESS_TOKEN_CURRENT_PUBLIC_KEY_X509_BASE64" \
+  | openssl base64 -d -A | openssl pkey -pubin -inform DER -noout
+```
+
+`local` 是默认 profile，测试使用 Testcontainers 注入连接；`staging`/`production` 必须显式设置 `SPRING_PROFILES_ACTIVE`，并由部署环境或密钥管理系统注入数据库、邮件、对象存储、既有 HMAC/KEK 变量以及 `ZIJI_AUTH_ACCESS_TOKEN_CURRENT_KID`、`ZIJI_AUTH_ACCESS_TOKEN_CURRENT_PRIVATE_KEY_PKCS8_BASE64`、`ZIJI_AUTH_ACCESS_TOKEN_CURRENT_PUBLIC_KEY_X509_BASE64`、`ZIJI_AUTH_ACCESS_TOKEN_PREVIOUS_KID`、`ZIJI_AUTH_ACCESS_TOKEN_PREVIOUS_PUBLIC_KEY_X509_BASE64`、`ZIJI_AUTH_ACCESS_TOKEN_PREVIOUS_PUBLIC_KEY_RETENTION`。RSA 测试密钥只允许 test profile 使用，不能用于 `local`、`staging` 或 `production`；BE-AUTH-004 将绑定并校验这些会话密钥配置。
 
 ## 2. 开发入口
 
@@ -115,7 +133,7 @@ pnpm api:types:check
 JAVA_HOME=$(/usr/libexec/java_home -v 25) \
   ./backend/mvnw -f backend/pom.xml -Pdb-codegen flyway:info
 
-# 执行 V001～V010 并从真实 PostgreSQL schema 生成 jOOQ 类型
+# 执行 V001～V011 并从真实 PostgreSQL schema 生成 jOOQ 类型
 JAVA_HOME=$(/usr/libexec/java_home -v 25) \
   ./backend/mvnw -f backend/pom.xml -Pdb-codegen generate-sources
 ```

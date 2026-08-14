@@ -1619,13 +1619,26 @@ components:
       properties:
         email: { type: string, format: email, maxLength: 320 }
         password: { type: string, minLength: 1, maxLength: 128, writeOnly: true }
-        deviceName: { type: string, minLength: 1, maxLength: 100 }
-        deviceId: { type: [string, 'null'], maxLength: 200 }
+        deviceName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: 经 NFKC 与 trim 规范化的展示设备名称。
+        deviceId:
+          type: [string, 'null']
+          maxLength: 200
+          description: 可空客户端不透明稳定设备标识；非空时为 1～200 字符且不得全空白，保留客户端原值，不做 NFKC 或 trim。
     MobileRefreshRequest:
       type: object
       additionalProperties: false
       required: [refreshToken]
-      properties: { refreshToken: { type: string, minLength: 32, maxLength: 500, writeOnly: true } }
+      properties:
+        refreshToken:
+          type: string
+          minLength: 32
+          maxLength: 500
+          writeOnly: true
+          description: 仅客户端持有一次的刷新凭据；V1 签发值为 rt1_ 加 32 字节 SecureRandom 的无填充 Base64URL，服务端不保存原文并在每次成功刷新后轮换。
     PasswordResetRequest:
       type: object
       additionalProperties: false
@@ -2096,8 +2109,8 @@ components:
       required: [id, deviceName, createdAt, lastSeenAt, status]
       properties:
         id: { type: string, format: uuid }
-        deviceName: { type: string }
-        deviceId: { type: [string, 'null'] }
+        deviceName: { type: string, description: 经 NFKC 与 trim 规范化的 1～100 字符展示设备名称。 }
+        deviceId: { type: [string, 'null'], description: NULL 或 1～200 字符的客户端不透明稳定设备标识；保留客户端原值，不做 NFKC/trim，且非空值不得全空白。 }
         createdAt: { type: string, format: date-time }
         lastSeenAt: { type: string, format: date-time }
         status: { type: string, enum: [ACTIVE, REVOKED, EXPIRED] }
@@ -2106,9 +2119,15 @@ components:
       additionalProperties: false
       required: [accessToken, refreshToken, expiresIn]
       properties:
-        accessToken: { type: string, minLength: 20 }
-        refreshToken: { type: string, minLength: 32 }
-        expiresIn: { type: integer, minimum: 1 }
+        accessToken:
+          type: string
+          minLength: 20
+          description: RS256 access JWT；固定最长 30 分钟，不写入服务端持久化或日志。
+        refreshToken:
+          type: string
+          minLength: 32
+          description: 仅本次响应交付的轮换刷新凭据；安全存储后不得记录或回显。
+        expiresIn: { type: integer, minimum: 1, description: Access Token 有效秒数，最长 30 分钟。 }
     Account:
       type: object
       additionalProperties: false
@@ -2731,8 +2750,11 @@ components:
           required: [session, accessToken, expiresIn]
           properties:
             session: { $ref: '#/components/schemas/Session' }
-            accessToken: { type: string, minLength: 20 }
-            expiresIn: { type: integer, minimum: 1 }
+            accessToken:
+              type: string
+              minLength: 20
+              description: RS256 access JWT；固定最长 30 分钟，不写入服务端持久化或日志。
+            expiresIn: { type: integer, minimum: 1, description: Access Token 有效秒数，最长 30 分钟。 }
         meta: { $ref: '#/components/schemas/ResponseMeta' }
     MobileSessionEnvelope:
       type: object
