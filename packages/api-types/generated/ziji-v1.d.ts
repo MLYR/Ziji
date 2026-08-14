@@ -2893,9 +2893,11 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description 幂等键异参、版本冲突或唯一约束冲突 */
+        /** @description 幂等键异参、处理中、版本冲突或唯一约束冲突；处理中时 Retry-After 固定为 5 秒 */
         Conflict: {
             headers: {
+                /** @description 仅 IDEMPOTENCY_REQUEST_IN_PROGRESS 返回的重试等待秒数 */
+                "Retry-After"?: 5;
                 [name: string]: unknown;
             };
             content: {
@@ -3578,7 +3580,7 @@ export interface components {
         };
     };
     parameters: {
-        /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+        /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
         IdempotencyKey: string;
         /** @description 资源 ETag，例如双引号包围的实体版本。 */
         IfMatch: string;
@@ -3654,7 +3656,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -3769,7 +3771,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -3789,6 +3791,7 @@ export interface operations {
                 content?: never;
             };
             400: components["responses"]["BadRequest"];
+            409: components["responses"]["Conflict"];
         };
     };
     getCurrentUser: {
@@ -3933,7 +3936,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -3997,7 +4000,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description 资源 ETag，例如双引号包围的实体版本。 */
                 "If-Match": components["parameters"]["IfMatch"];
@@ -4081,7 +4084,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4099,13 +4102,14 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     reviseLiquidityHold: {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description 资源 ETag，例如双引号包围的实体版本。 */
                 "If-Match": components["parameters"]["IfMatch"];
@@ -4132,7 +4136,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description 资源 ETag，例如双引号包围的实体版本。 */
                 "If-Match": components["parameters"]["IfMatch"];
@@ -4175,7 +4179,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -4191,6 +4195,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["BusinessRuleViolation"];
         };
     };
@@ -4215,7 +4220,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description 资源 ETag，例如双引号包围的实体版本。 */
                 "If-Match": components["parameters"]["IfMatch"];
@@ -4241,7 +4246,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description 资源 ETag，例如双引号包围的实体版本。 */
                 "If-Match": components["parameters"]["IfMatch"];
@@ -4267,7 +4272,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4285,6 +4290,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     listCategories: {
@@ -4309,7 +4315,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -4355,7 +4361,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description 资源 ETag，例如双引号包围的实体版本。 */
                 "If-Match": components["parameters"]["IfMatch"];
@@ -4398,7 +4404,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -4463,7 +4469,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4487,7 +4493,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4508,13 +4514,14 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     acceptAccountInvitation: {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4534,7 +4541,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4560,7 +4567,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description 资源 ETag，例如双引号包围的实体版本。 */
                 "If-Match": components["parameters"]["IfMatch"];
@@ -4616,7 +4623,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description 资源 ETag，例如双引号包围的实体版本。 */
                 "If-Match": components["parameters"]["IfMatch"];
@@ -4642,7 +4649,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4684,7 +4691,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description 资源 ETag，例如双引号包围的实体版本。 */
                 "If-Match": components["parameters"]["IfMatch"];
@@ -4710,7 +4717,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -4725,6 +4732,7 @@ export interface operations {
             201: components["responses"]["ImportBatchCreated"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
         };
@@ -4733,7 +4741,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4789,7 +4797,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description 资源 ETag，例如双引号包围的实体版本。 */
                 "If-Match": components["parameters"]["IfMatch"];
@@ -4840,7 +4848,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description 资源 ETag，例如双引号包围的实体版本。 */
                 "If-Match": components["parameters"]["IfMatch"];
@@ -4862,7 +4870,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description 资源 ETag，例如双引号包围的实体版本。 */
                 "If-Match": components["parameters"]["IfMatch"];
@@ -4906,7 +4914,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -4966,7 +4974,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4990,7 +4998,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -5048,7 +5056,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -5063,6 +5071,7 @@ export interface operations {
             201: components["responses"]["InvestmentTradeCreated"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["BusinessRuleViolation"];
         };
     };
@@ -5295,7 +5304,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -5317,7 +5326,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -5372,7 +5381,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -5388,6 +5397,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     updateRecurringRule: {
@@ -5435,7 +5445,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -5455,7 +5465,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -5481,7 +5491,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -5492,6 +5502,7 @@ export interface operations {
             202: components["responses"]["DataExportAccepted"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     getDataExport: {
@@ -5529,7 +5540,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -5540,6 +5551,7 @@ export interface operations {
             202: components["responses"]["AccountClosureAccepted"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["BusinessRuleViolation"];
         };
     };

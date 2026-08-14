@@ -141,6 +141,7 @@ paths:
       responses:
         '204': { description: 密码已重置 }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /users/me:
     get:
       tags: [Users]
@@ -332,6 +333,7 @@ paths:
           application/json: { schema: { $ref: '#/components/schemas/CreateLiquidityHoldRequest' } }
       responses:
         '201': { $ref: '#/components/responses/LiquidityHoldCreated' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -388,6 +390,7 @@ paths:
           application/json: { schema: { $ref: '#/components/schemas/PostTransactionRequest' } }
       responses:
         '201': { $ref: '#/components/responses/TransactionCreated' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '422': { $ref: '#/components/responses/BusinessRuleViolation' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
@@ -452,6 +455,7 @@ paths:
           application/json: { schema: { $ref: '#/components/schemas/BalanceAdjustmentRequest' } }
       responses:
         '201': { $ref: '#/components/responses/TransactionCreated' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -597,6 +601,7 @@ paths:
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
       responses:
         '204': { description: 邀请已撤销 }
+        '409': { $ref: '#/components/responses/Conflict' }
         '404': { $ref: '#/components/responses/NotFound' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -727,6 +732,7 @@ paths:
                 contentType: text/csv, application/vnd.ms-excel, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
       responses:
         '201': { $ref: '#/components/responses/ImportBatchCreated' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
         '415': { $ref: '#/components/responses/UnsupportedMediaType' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
@@ -964,6 +970,7 @@ paths:
           application/json: { schema: { $ref: '#/components/schemas/CreateInvestmentTradeRequest' } }
       responses:
         '201': { $ref: '#/components/responses/InvestmentTradeCreated' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/BusinessRuleViolation' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1200,6 +1207,7 @@ paths:
           application/json: { schema: { $ref: '#/components/schemas/CreateRecurringRuleRequest' } }
       responses:
         '201': { $ref: '#/components/responses/RecurringRuleCreated' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1268,6 +1276,7 @@ paths:
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
       responses:
         '202': { $ref: '#/components/responses/DataExportAccepted' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /users/me/exports/{exportId}:
@@ -1300,6 +1309,7 @@ paths:
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
       responses:
         '202': { $ref: '#/components/responses/AccountClosureAccepted' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/BusinessRuleViolation' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1372,7 +1382,7 @@ components:
       name: Idempotency-Key
       in: header
       required: true
-      description: 当前用户、API 主版本和 operationId 作用域内唯一；同键异参返回冲突。
+      description: 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。
       schema: { type: string, minLength: 16, maxLength: 100 }
     IfMatch:
       name: If-Match
@@ -3020,7 +3030,7 @@ components:
     Unauthenticated: { description: 未认证或会话失效, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     Forbidden: { description: 无对象权限或 CSRF 校验失败, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     NotFound: { description: 资源不存在或对当前用户不可见, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
-    Conflict: { description: 幂等键异参、版本冲突或唯一约束冲突, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    Conflict: { description: 幂等键异参、处理中、版本冲突或唯一约束冲突；处理中时 Retry-After 固定为 5 秒, headers: { Retry-After: { description: 仅 IDEMPOTENCY_REQUEST_IN_PROGRESS 返回的重试等待秒数, schema: { type: integer, const: 5 } } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     BusinessRuleViolation: { description: 业务规则不允许本次操作, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     RateLimited: { description: 请求过于频繁；Retry-After 为所有超限窗口中的最长剩余秒数, headers: { Retry-After: { description: 所有超限窗口中的最长剩余时间（秒）, schema: { type: integer, minimum: 1 } } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     PayloadTooLarge: { description: 文件超过 V1 上传上限, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }

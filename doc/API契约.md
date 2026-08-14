@@ -91,14 +91,32 @@ Authentication: Authorization: Bearer <access-token>
 幂等键作用域固定为：
 
 ```text
-当前用户 + API 主版本 + OpenAPI operationId + Idempotency-Key
+认证写操作：当前用户 + API 主版本 + OpenAPI operationId + Idempotency-Key
+公开 registerUser/resetPassword：匿名主体 + API 主版本 + OpenAPI operationId + Idempotency-Key
 ```
 
-`operationId` 是接口语义的唯一稳定标识，例如 `postTransaction` 和 `reverseTransaction` 属于不同作用域。服务端对 HTTP 方法、规范化资源标识和业务载荷生成 `requestHash`：JSON 对象键排序、Decimal 使用规范十进制字符串，并忽略 X-Request-Id 等非业务头。
+`operationId` 是接口语义的唯一稳定标识，例如 `postTransaction` 和 `reverseTransaction` 属于不同作用域。公开写接口的匿名主体不是伪造系统用户，也不是所有 `user_id IS NULL` 请求共用的范围；它是 `HMAC-SHA-256(K_idempotency, frame("ZIJI-IDEMPOTENCY-ANONYMOUS-EMAIL-V1", normalizedEmail))` 的 32 字节结果与密钥版本。`normalizedEmail` 使用认证基线的 NFKC、trim、`Locale.ROOT` 小写，`frame` 对每段 UTF-8 字节使用 4 字节大端长度前缀。HMAC 密钥只由外部密钥配置提供，和验证码限流密钥分离；数据库、日志、错误和幂等响应不保存原始邮箱、验证码、密码或 Token。轮换期同时查询当前和上一版本，上一版本至少保留 7 天，且切换前必须排空或围栏旧配置写入实例。
+
+V1 保留公开接口的 `Idempotency-Key`，不以移除请求头规避没有当前用户的问题：注册或密码重置已经提交、但响应在网络中丢失时，客户端必须能以同一请求安全恢复结果，不能重复创建用户、重复撤销会话或只得到不可解释的验证码失效。版本化匿名主体在同请求 Hash 命中前不重放结果，并配合既有统一认证响应，避免由幂等机制枚举邮箱。
+
+`requestHash` 固定为以下长度前缀帧的 SHA-256，输出为 64 位小写十六进制。API 主版本和 operationId 已在作用域中，故不重复放入 Hash：
+
+```text
+frame("ZIJI-IDEMPOTENCY-REQUEST-V1")
++ frame(HTTP method upper-case)
++ frame(normalized media type)
++ frame(canonical actual resource identifier)
++ frame(canonical typed business payload)
++ frame(canonical If-Match precondition or explicit absent marker)
+```
+
+实际资源标识使用路由完成一次解码和类型校验后的路径变量重建，并包含改变写入语义的 query 参数；UUID 小写、日期为 ISO `YYYY-MM-DD`、时间统一为 UTC RFC 3339，歧义的编码斜杠、路径穿越和重复语义 query 参数必须在路由校验阶段拒绝。JSON 对象键按 UTF-8 字节字典序递归排序，数组保持原序，字段缺失与 `null` 分别编码。Decimal 仅由类型化 DTO/业务载荷以无指数、无多余尾零的十进制字符串规范化，普通字符串（包括账号、编号、文本）的内容和前导零不得猜测或改写。`If-Match` 属于业务前置条件并进入 Hash；Authorization、X-Request-Id、Accept-Language、CSRF 传输值和 Idempotency-Key 本身不进入 Hash。二进制或 multipart 请求把已验证的非文件字段、每个业务文件分片的规范化媒体类型、字节长度和 SHA-256 放入载荷帧，数组式文件分片保留顺序。
 
 相同作用域、相同 Key、相同 requestHash 返回首次响应；相同作用域和 Key 但 requestHash 不同，返回 `409 IDEMPOTENCY_KEY_REUSED`。业务结果和幂等记录在同一数据库事务提交。
 
-请求仍在处理时，重复调用返回首次完成结果，或返回 `409 IDEMPOTENCY_REQUEST_IN_PROGRESS` 和 `Retry-After`；不得并行执行第二次业务写入。
+请求仍在处理时，数据库唯一索引/行锁最多等待 5 秒；若取得终态则安全重放，否则返回 `409 IDEMPOTENCY_REQUEST_IN_PROGRESS` 和 `Retry-After: 5`，不得应用层轮询或并行执行第二次业务写入。`PROCESSING` 的 30 秒租约仅用于异常遗留行恢复，正常路径不能单独提交它；`FAILED_RETRYABLE` 在首次 5xx 后 5 秒才可由同 Key/Hash 串行接管，`FAILED_FINAL` 重放首次稳定 4xx。请求格式/头校验、未认证、CSRF、权限/不可见资源和限流不创建幂等记录；同 Key 异 Hash和处理中响应也不覆盖原记录。
+
+V1 客户端最大重试窗口为 24 小时，幂等记录最短保留 7 天。`expires_at` 是最早清理候选时间和重放保护下限，不是业务资源失效时间；到期且未被交易或同步操作引用的终态记录才可删除。清理后相同 Key 视为新请求，客户端不得依赖旧响应重放。
 
 ### 2.5 乐观锁
 
@@ -175,7 +193,7 @@ GET /transactions?accountId=...&limit=50&cursor=opaque
 | 404 | RESOURCE_NOT_FOUND | 资源不存在或用户不可见 |
 | 409 | VERSION_CONFLICT | 乐观锁冲突 |
 | 409 | IDEMPOTENCY_KEY_REUSED | 相同幂等键载荷不同 |
-| 409 | IDEMPOTENCY_REQUEST_IN_PROGRESS | 相同幂等请求仍在处理中 |
+| 409 | IDEMPOTENCY_REQUEST_IN_PROGRESS | 相同幂等请求仍在处理中；返回 Retry-After: 5 |
 | 409 | DUPLICATE_RESOURCE | 唯一资源重复 |
 | 409 | TRANSACTION_HAS_DEPENDENCIES | 修改/撤销存在依赖 |
 | 409 | LAST_OWNER_REQUIRED | 操作会导致账户没有 OWNER |
@@ -223,6 +241,8 @@ GET /transactions?accountId=...&limit=50&cursor=opaque
 ```
 
 密码不写日志或审计 metadata。登录失败响应不得区分“邮箱不存在”和“密码错误”。
+
+`POST /auth/register` 与 `POST /auth/password-reset` 虽然未认证，仍必须携带 `Idempotency-Key`；它们使用 §2.4 的版本化匿名主体，而不是要求不存在的当前用户。两个端点都可能返回 `409 IDEMPOTENCY_KEY_REUSED` 或 `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`，后者带 `Retry-After: 5`；响应不得借幂等状态泄露邮箱是否存在。
 
 发送注册或密码重置验证码请求使用同一 `EmailChallengeRequest`：`email` 必填，`deviceId` 可选，长度 1～200。`deviceId` 只是防滥用信号，不是可信身份凭据；缺失时服务端按来源 IP 和 `MISSING_DEVICE` 域标记计算设备限流摘要。来源 IP 默认取连接对端；只有受信反向代理已显式配置并覆盖客户端转发头时才接受代理地址，客户端自行传入的 `Forwarded`/`X-Forwarded-For` 不得改变限流主体。语法合法请求不因邮箱是否存在而返回不同结果。
 
@@ -792,6 +812,7 @@ POST /sync/operations
 - 每个操作重新校验当前成员权限
 - 相同 idempotencyKey 不同 payload 返回 REJECTED
 - 服务端返回的冲突资源只包含用户仍有权限查看的字段
+- `SyncOperation.idempotencyKey` 使用 §2.4 的认证主体、API 主版本和实际 OpenAPI `applySyncOperations`；客户端 `SyncOperation.operationId`、操作类型、实际 entityId 和规范化 payload 进入 requestHash，不另造派生 operationId；不同 entityId 即使复用 Key 也因 requestHash 不同稳定拒绝
 
 ## 6. 异步任务契约
 
