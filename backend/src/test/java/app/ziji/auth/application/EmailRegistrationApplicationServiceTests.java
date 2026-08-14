@@ -192,7 +192,19 @@ class EmailRegistrationApplicationServiceTests {
 		store.challenge = EmailChallenge.issue(UUID.randomUUID(), purpose, EMAIL, "challenge-hash", now);
 		DirectTransactionRunner transactions = new DirectTransactionRunner();
 		EmailChallengeApplicationService challengeService = new EmailChallengeApplicationService(
-			transactions, store, (challengePurpose, subjects, instant) -> RateLimitDecision.permitted(),
+			transactions, store, new AuthRateLimitStore() {
+				@Override
+				public RateLimitDecision consume(EmailChallengePurpose purpose,
+					AuthRateLimitSubjects subjects, Instant now) {
+					return RateLimitDecision.permitted();
+				}
+
+				@Override
+				public RateLimitDecision consumeLogin(String normalizedEmail,
+					SourceAddress sourceAddress, Instant now) {
+					return RateLimitDecision.permitted();
+				}
+			},
 			() -> "123456", new FakeChallengeHasher(), (challengeId, challengePurpose, code) -> null,
 			event -> { }, Clock.fixed(NOW, ZoneOffset.UTC), UUID::randomUUID);
 		FakePasswordHasher passwordHasher = new FakePasswordHasher();
@@ -242,6 +254,11 @@ class EmailRegistrationApplicationServiceTests {
 		public String hash(String password) {
 			hashCalls++;
 			return "$argon2id$fake-" + password.length();
+		}
+
+		@Override
+		public boolean supports(int hashVersion, String encodedHash) {
+			return hashVersion == 1 && encodedHash != null && encodedHash.startsWith("$argon2id$fake-");
 		}
 
 		@Override

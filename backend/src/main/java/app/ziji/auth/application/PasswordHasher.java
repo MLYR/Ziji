@@ -5,5 +5,10 @@ public interface PasswordHasher {
 
 	String hash(String password);
 
+	/**
+	 * 无日志、无昂贵计算地确认编码值是否属于当前可安全校验的密码 Hash 格式。
+	 */
+	boolean supports(int hashVersion, String encodedHash);
+
 	boolean matches(String password, String encodedHash);
 }

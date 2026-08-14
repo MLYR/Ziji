@@ -209,6 +209,11 @@ class EmailRegistrationPostgresIntegrationTests extends PostgresIntegrationTestS
 			}
 
 			@Override
+			public boolean supports(int hashVersion, String encodedHash) {
+				return false;
+			}
+
+			@Override
 			public boolean matches(String password, String encodedHash) {
 				return false;
 			}

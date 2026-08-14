@@ -204,6 +204,13 @@ class EmailChallengeApplicationServiceTests {
 			calls++;
 			return decision;
 		}
+
+		@Override
+		public RateLimitDecision consumeLogin(String normalizedEmail,
+			SourceAddress sourceAddress, Instant now) {
+			calls++;
+			return decision;
+		}
 	}
 
 	private static final class FakeChallengeStore implements EmailChallengeStore {

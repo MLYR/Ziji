@@ -11,19 +11,25 @@ import app.ziji.auth.application.AuthRateLimitSubjects;
 import app.ziji.auth.application.RateLimitDecision;
 import app.ziji.auth.domain.AuthRateLimitWindow;
 import app.ziji.auth.domain.EmailChallengePurpose;
+import app.ziji.auth.domain.LoginRateLimitPurpose;
+import app.ziji.auth.domain.LoginRateLimitWindow;
 import app.ziji.auth.domain.RateLimitDimension;
+import app.ziji.auth.domain.SourceAddress;
 import org.jooq.DSLContext;
 import org.jooq.Record;
 import org.springframework.stereotype.Repository;
 
 /**
  * PostgreSQL 固定窗口实现；每次请求按冻结顺序对全部桶做原子 UPSERT，拒绝不抛异常回滚计数。
+ * 验证码与密码登录使用各自的作用域、窗口集合与 HMAC 域，但共用同一张限流事实表与同一 UPSERT 语义。
  */
 @Repository
 public class PostgresAuthRateLimitStore implements AuthRateLimitStore {
 
-	private static final String ACTION = "SEND_EMAIL_CHALLENGE";
-	private static final String POLICY = "AUTH_CHALLENGE_V1";
+	private static final String CHALLENGE_ACTION = "SEND_EMAIL_CHALLENGE";
+	private static final String CHALLENGE_POLICY = "AUTH_CHALLENGE_V1";
+	private static final String LOGIN_ACTION = "LOGIN_PASSWORD";
+	private static final String LOGIN_POLICY = "AUTH_LOGIN_V1";
 
 	private static final String UPSERT_SQL = """
 		INSERT INTO auth_rate_limit_buckets AS bucket
@@ -65,21 +71,14 @@ public class PostgresAuthRateLimitStore implements AuthRateLimitStore {
 		}
 		int retryAfterSeconds = 0;
 		for (AuthRateLimitWindow window : AuthRateLimitWindow.ordered()) {
-			WindowBounds bounds = WindowBounds.forWindow(window, now);
+			WindowBounds bounds = WindowBounds.forWindow(window.windowStartedAt(now), window.windowEndsAt(now));
 			byte[] subject = subjectBytes(window.dimension(), subjects);
 			for (AuthHmacKey key : subjectHasher.keyRing().keysInVersionOrder()) {
 				byte[] subjectHash = subjectHasher.digest(
 					purpose, window.dimension(), subject, key);
-				Record result = upsert(window, purpose, key, subjectHash, bounds, now);
-				int requestCount = result.get("request_count", Integer.class);
-				int limitCount = result.get("limit_count", Integer.class);
-				OffsetDateTime windowEndsAt = result.get("window_ends_at", OffsetDateTime.class);
-				if (requestCount > limitCount) {
-					Duration remainingDuration = Duration.between(now, windowEndsAt.toInstant());
-					long remaining = remainingDuration.getSeconds()
-						+ (remainingDuration.getNano() > 0 ? 1 : 0);
-					retryAfterSeconds = Math.max(retryAfterSeconds, (int) Math.max(1, remaining));
-				}
+				retryAfterSeconds = Math.max(retryAfterSeconds, upsertAndMeasure(
+					window.code(), window.seconds(), window.limit(), window.dimension(),
+					purpose.name(), CHALLENGE_ACTION, CHALLENGE_POLICY, key, subjectHash, bounds, now));
 			}
 		}
 		return retryAfterSeconds == 0
@@ -87,23 +86,67 @@ public class PostgresAuthRateLimitStore implements AuthRateLimitStore {
 			: RateLimitDecision.denied(retryAfterSeconds);
 	}
 
-	private Record upsert(
-		AuthRateLimitWindow window,
-		EmailChallengePurpose purpose,
+	@Override
+	public RateLimitDecision consumeLogin(
+		String normalizedEmail,
+		SourceAddress sourceAddress,
+		Instant now) {
+		if (normalizedEmail == null || normalizedEmail.isBlank() || sourceAddress == null || now == null) {
+			throw new AuthInfrastructureException("登录限流请求输入无效。");
+		}
+		// 登录只使用 IP 与 EMAIL；deviceId 传 null，AuthRateLimitSubjects 不会为登录生成 DEVICE 主体。
+		AuthRateLimitSubjects subjects = AuthRateLimitSubjects.of(normalizedEmail, null, sourceAddress);
+		int retryAfterSeconds = 0;
+		for (LoginRateLimitWindow window : LoginRateLimitWindow.ordered()) {
+			WindowBounds bounds = WindowBounds.forWindow(window.windowStartedAt(now), window.windowEndsAt(now));
+			byte[] subject = subjectBytes(window.dimension(), subjects);
+			for (AuthHmacKey key : subjectHasher.keyRing().keysInVersionOrder()) {
+				byte[] subjectHash = subjectHasher.digestLogin(
+					LoginRateLimitPurpose.LOGIN, window.dimension(), subject, key);
+				retryAfterSeconds = Math.max(retryAfterSeconds, upsertAndMeasure(
+					window.code(), window.seconds(), window.limit(), window.dimension(),
+					LoginRateLimitPurpose.LOGIN.name(), LOGIN_ACTION, LOGIN_POLICY, key, subjectHash, bounds, now));
+			}
+		}
+		return retryAfterSeconds == 0
+			? RateLimitDecision.permitted()
+			: RateLimitDecision.denied(retryAfterSeconds);
+	}
+
+	/**
+	 * 对单个桶做原子 UPSERT 并在其超限时累加最长 Retry-After；返回该桶贡献的剩余秒数（未超限为 0）。
+	 */
+	private int upsertAndMeasure(
+		String windowCode,
+		int windowSeconds,
+		int limitCount,
+		RateLimitDimension dimension,
+		String purposeName,
+		String action,
+		String policy,
 		AuthHmacKey key,
 		byte[] subjectHash,
 		WindowBounds bounds,
 		Instant now) {
 		Record result = dsl.resultQuery(
 			UPSERT_SQL,
-			uuid(), ACTION, purpose.name(), window.dimension().name(), subjectHash,
-			key.version(), POLICY, window.code(), window.seconds(), window.limit(),
+			uuid(), action, purposeName, dimension.name(), subjectHash,
+			key.version(), policy, windowCode, windowSeconds, limitCount,
 			bounds.startedAt(), bounds.endsAt(), utc(now), utc(now))
 			.fetchOne();
 		if (result == null) {
 			throw new AuthInfrastructureException("限流桶更新未返回结果。");
 		}
-		return result;
+		int requestCount = result.get("request_count", Integer.class);
+		int storedLimit = result.get("limit_count", Integer.class);
+		OffsetDateTime windowEndsAt = result.get("window_ends_at", OffsetDateTime.class);
+		if (requestCount > storedLimit) {
+			Duration remainingDuration = Duration.between(now, windowEndsAt.toInstant());
+			long remaining = remainingDuration.getSeconds()
+				+ (remainingDuration.getNano() > 0 ? 1 : 0);
+			return (int) Math.max(1, remaining);
+		}
+		return 0;
 	}
 
 	private static byte[] subjectBytes(RateLimitDimension dimension, AuthRateLimitSubjects subjects) {
@@ -124,10 +167,8 @@ public class PostgresAuthRateLimitStore implements AuthRateLimitStore {
 	}
 
 	private record WindowBounds(OffsetDateTime startedAt, OffsetDateTime endsAt) {
-		private static WindowBounds forWindow(AuthRateLimitWindow window, Instant now) {
-			return new WindowBounds(
-				window.windowStartedAt(now).atOffset(ZoneOffset.UTC),
-				window.windowEndsAt(now).atOffset(ZoneOffset.UTC));
+		private static WindowBounds forWindow(Instant startedAt, Instant endsAt) {
+			return new WindowBounds(startedAt.atOffset(ZoneOffset.UTC), endsAt.atOffset(ZoneOffset.UTC));
 		}
 	}
 }

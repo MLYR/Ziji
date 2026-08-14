@@ -144,8 +144,32 @@ class AuthSecurityTests {
 		assertTrue(second.startsWith("$argon2id$"));
 		assertNotEquals(first, second);
 		assertFalse(first.contains("same-password"));
+		assertTrue(hasher.supports(1, first));
 		assertTrue(hasher.matches("same-password", first));
 		assertFalse(hasher.matches("other-password", first));
+	}
+
+	@Test
+	void argon2idPasswordHasherSupportsOnlyCompleteCurrentFormat() {
+		PasswordHasher hasher = new Argon2idPasswordHasher();
+		String valid = hasher.hash("same-password");
+
+		assertTrue(hasher.supports(1, valid));
+		assertFalse(hasher.supports(1, "$argon2id$broken"));
+		assertFalse(hasher.supports(2, valid));
+		assertFalse(hasher.supports(1, valid.replace("$v=19$", "$v=16$")));
+		assertFalse(hasher.supports(1, valid.replace("$m=16384,t=2,p=1$", "$m=8192,t=2,p=1$")));
+		assertFalse(hasher.supports(1,
+			"$argon2id$v=19$m=16384,t=2,p=1$%%%$" + Base64.getEncoder().withoutPadding().encodeToString(new byte[32])));
+		assertFalse(hasher.supports(1,
+			"$argon2id$v=19$m=16384,t=2,p=1$" + Base64.getEncoder().withoutPadding().encodeToString(new byte[16]) + "$%%%"));
+		assertFalse(hasher.supports(1, argon2idHash(new byte[15], new byte[32])));
+		assertFalse(hasher.supports(1, argon2idHash(new byte[16], new byte[31])));
+		assertFalse(hasher.supports(1, valid + "$extra"));
+		String[] fields = valid.split("\\$", -1);
+		assertFalse(hasher.supports(1,
+			"$argon2id$m=16384,t=2,p=1$v=19$" + fields[4] + "$" + fields[5]));
+		assertFalse(hasher.matches("same-password", "$argon2id$broken"));
 	}
 
 	@Test
@@ -217,5 +241,11 @@ class AuthSecurityTests {
 		byte[] key = new byte[32];
 		Arrays.fill(key, value);
 		return key;
+	}
+
+	private static String argon2idHash(byte[] salt, byte[] hash) {
+		return "$argon2id$v=19$m=16384,t=2,p=1$"
+			+ Base64.getEncoder().withoutPadding().encodeToString(salt) + "$"
+			+ Base64.getEncoder().withoutPadding().encodeToString(hash);
 	}
 }
