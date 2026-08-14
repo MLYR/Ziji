@@ -58,7 +58,18 @@ source .env
 set +a
 ```
 
-`local` 是默认 profile，测试使用 Testcontainers 注入连接；`staging`/`production` 必须显式设置 `SPRING_PROFILES_ACTIVE` 并注入全部数据库、邮件和对象存储变量，缺失时启动失败。
+认证密钥不提供仓库默认值。启动 `local` 后端前，在同一终端生成两把相互独立的本地临时 32 字节密钥；不要把命令输出提交到仓库，也不要在 HMAC 与 KEK 之间复用：
+
+```bash
+export ZIJI_AUTH_HMAC_CURRENT_KEY_VERSION=2
+export ZIJI_AUTH_HMAC_CURRENT_KEY_BASE64="$(openssl rand -base64 32)"
+export ZIJI_AUTH_ENVELOPE_KEK_VERSION=1
+export ZIJI_AUTH_ENVELOPE_KEK_BASE64="$(openssl rand -base64 32)"
+```
+
+`ZIJI_AUTH_HMAC_PREVIOUS_KEY_VERSION` 与 `ZIJI_AUTH_HMAC_PREVIOUS_KEY_BASE64` 必须同时设置或同时留空；配置上一版本时，`ZIJI_AUTH_HMAC_PREVIOUS_KEY_RETENTION` 不得小于 `48h`。`ZIJI_AUTH_TRUSTED_PROXY_ADDRESSES` 缺失或为空表示不信任任何代理。测试 profile 中的固定 HMAC/KEK 只用于自动测试，不能用于 `local`、`staging` 或 `production`。
+
+`local` 是默认 profile，测试使用 Testcontainers 注入连接；`staging`/`production` 必须显式设置 `SPRING_PROFILES_ACTIVE`，并由部署环境或密钥管理系统注入数据库、邮件、对象存储以及 `ZIJI_AUTH_HMAC_CURRENT_KEY_VERSION`、`ZIJI_AUTH_HMAC_CURRENT_KEY_BASE64`、`ZIJI_AUTH_HMAC_PREVIOUS_KEY_VERSION`、`ZIJI_AUTH_HMAC_PREVIOUS_KEY_BASE64`、`ZIJI_AUTH_HMAC_PREVIOUS_KEY_RETENTION`、`ZIJI_AUTH_ENVELOPE_KEK_VERSION`、`ZIJI_AUTH_ENVELOPE_KEK_BASE64`、`ZIJI_AUTH_TRUSTED_PROXY_ADDRESSES`；缺失必需值时启动失败。
 
 ## 2. 开发入口
 
