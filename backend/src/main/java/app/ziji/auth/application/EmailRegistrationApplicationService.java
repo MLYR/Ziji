@@ -17,11 +17,8 @@ import app.ziji.shared.application.TransactionRunner;
 import app.ziji.user.application.UserEmailAlreadyExistsException;
 import app.ziji.user.application.UserRegistrationCommand;
 import app.ziji.user.application.UserRegistrationPort;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
 
 /** 邮箱注册用例；验证码消费与 users 写入必须加入同一个最外层 REQUIRED 事务。 */
-@Service
 public final class EmailRegistrationApplicationService {
 
 	private static final Set<String> BASE_CURRENCIES = Set.of("CNY", "USD", "HKD", "JPY", "EUR");
@@ -33,7 +30,6 @@ public final class EmailRegistrationApplicationService {
 	private final Clock clock;
 	private final Supplier<UUID> uuidGenerator;
 
-	@Autowired
 	public EmailRegistrationApplicationService(
 		TransactionRunner transactionRunner,
 		EmailChallengeApplicationService challengeService,

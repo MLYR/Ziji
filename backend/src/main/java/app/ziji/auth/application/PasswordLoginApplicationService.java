@@ -11,8 +11,6 @@ import app.ziji.shared.application.TransactionRunner;
 import app.ziji.user.application.UserCredential;
 import app.ziji.user.application.UserCredentialLookupPort;
 import app.ziji.user.application.UserCredentialStatus;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
 
 /**
  * 邮箱密码凭据认证用例；只负责凭据校验、登录限流和统一失败语义，不创建任何会话、Token、Cookie 或审计事实。
@@ -21,7 +19,6 @@ import org.springframework.stereotype.Service;
  * 限流拒绝时事务先提交计数，再由应用层抛出带最长 Retry-After 的异常。通过限流后才查询凭据，
  * 并对每次请求只执行一次 Argon2id 校验（存在且支持的账号校验存储 Hash，其余校验 dummy Hash）以防止时序枚举。
  */
-@Service
 public final class PasswordLoginApplicationService {
 
 	/** 凭据认证允许的账号状态；LOCKED 与 CLOSED 即使密码正确也拒绝，但仍会执行一次密码校验。 */
@@ -35,7 +32,6 @@ public final class PasswordLoginApplicationService {
 	/** 进程生命周期内只生成一次的 dummy Argon2id 编码，用于不存在或不支持账号的等时校验。 */
 	private final String loginTimingDummyHash;
 
-	@Autowired
 	public PasswordLoginApplicationService(
 		TransactionRunner transactionRunner,
 		AuthRateLimitStore rateLimitStore,

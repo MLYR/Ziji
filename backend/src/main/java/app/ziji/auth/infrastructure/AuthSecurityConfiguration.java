@@ -1,12 +1,28 @@
 package app.ziji.auth.infrastructure;
 
 import java.security.SecureRandom;
+import java.time.Clock;
 import java.util.Base64;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import app.ziji.auth.application.AuthRateLimitStore;
+import app.ziji.auth.application.ChallengeCodeHasher;
+import app.ziji.auth.application.DeviceSessionApplicationService;
+import app.ziji.auth.application.DeviceSessionStore;
+import app.ziji.auth.application.EmailChallengeApplicationService;
+import app.ziji.auth.application.EmailChallengeOutbox;
+import app.ziji.auth.application.EmailChallengeStore;
+import app.ziji.auth.application.EmailRegistrationApplicationService;
+import app.ziji.auth.application.EnvelopeEncryptor;
+import app.ziji.auth.application.PasswordHasher;
+import app.ziji.auth.application.PasswordLoginApplicationService;
 import app.ziji.auth.application.SourceAddressResolver;
+import app.ziji.auth.application.VerificationCodeGenerator;
 import app.ziji.auth.domain.SourceAddress;
+import app.ziji.shared.application.TransactionRunner;
+import app.ziji.user.application.UserCredentialLookupPort;
+import app.ziji.user.application.UserRegistrationPort;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -76,6 +92,56 @@ class AuthSecurityConfiguration {
 			.map(address -> SourceAddress.parseLiteral(address.trim()))
 			.collect(Collectors.toUnmodifiableSet());
 		return new TrustedProxySourceAddressResolver(trusted);
+	}
+
+	@Bean
+	EmailChallengeApplicationService emailChallengeApplicationService(
+		TransactionRunner transactionRunner,
+		EmailChallengeStore challengeStore,
+		AuthRateLimitStore rateLimitStore,
+		VerificationCodeGenerator codeGenerator,
+		ChallengeCodeHasher codeHasher,
+		EnvelopeEncryptor envelopeEncryptor,
+		EmailChallengeOutbox outbox,
+		Clock clock) {
+		// Spring 装配留在 infrastructure，application 用例保持对框架无依赖。
+		return new EmailChallengeApplicationService(
+			transactionRunner, challengeStore, rateLimitStore, codeGenerator, codeHasher, envelopeEncryptor, outbox, clock);
+	}
+
+	@Bean
+	EmailRegistrationApplicationService emailRegistrationApplicationService(
+		TransactionRunner transactionRunner,
+		EmailChallengeApplicationService challengeService,
+		PasswordHasher passwordHasher,
+		UserRegistrationPort userRegistrationPort,
+		Clock clock) {
+		// Spring 装配留在 infrastructure，application 用例保持对框架无依赖。
+		return new EmailRegistrationApplicationService(
+			transactionRunner, challengeService, passwordHasher, userRegistrationPort, clock);
+	}
+
+	@Bean
+	PasswordLoginApplicationService passwordLoginApplicationService(
+		TransactionRunner transactionRunner,
+		AuthRateLimitStore rateLimitStore,
+		UserCredentialLookupPort credentialLookupPort,
+		PasswordHasher passwordHasher) {
+		// Spring 装配留在 infrastructure，application 用例保持对框架无依赖。
+		return new PasswordLoginApplicationService(
+			transactionRunner, rateLimitStore, credentialLookupPort, passwordHasher);
+	}
+
+	@Bean
+	DeviceSessionApplicationService deviceSessionApplicationService(
+		TransactionRunner transactionRunner,
+		DeviceSessionStore sessionStore,
+		app.ziji.auth.application.AccessTokenService accessTokenService,
+		SecureRandom secureRandom,
+		Clock clock) {
+		// Spring 装配留在 infrastructure，application 用例保持对框架无依赖。
+		return new DeviceSessionApplicationService(
+			transactionRunner, sessionStore, accessTokenService, secureRandom, clock);
 	}
 
 	private static boolean configured(String value) {

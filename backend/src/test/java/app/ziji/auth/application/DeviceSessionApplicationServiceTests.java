@@ -5,17 +5,17 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
-import app.ziji.auth.domain.DeviceId;
-import app.ziji.auth.domain.DeviceName;
 import app.ziji.auth.domain.DeviceSession;
 import app.ziji.auth.domain.RefreshToken;
 import app.ziji.auth.domain.RefreshTokenHash;
+import app.ziji.auth.domain.SessionRevocationReason;
 import app.ziji.auth.domain.StoredRefreshToken;
 import app.ziji.shared.application.TransactionRunner;
 import org.junit.jupiter.api.Test;
@@ -158,6 +158,170 @@ class DeviceSessionApplicationServiceTests {
 		assertFalse(result.toString().contains(result.refreshToken()));
 	}
 
+	@Test
+	void consumedTokenReuseRevokesOnlyItsSessionAndAllCurrentTokens() {
+		FakeStore store = new FakeStore();
+		UUID userId = UUID.randomUUID();
+		SessionTokenResult compromised = service(store, NOW).createForAuthenticatedUser(
+			new CreateDeviceSessionCommand(userId, "Phone", "reuse-device"));
+		SessionTokenResult unaffected = service(store, NOW).createForAuthenticatedUser(
+			new CreateDeviceSessionCommand(userId, "Tablet", "unaffected-device"));
+		SessionTokenResult rotated = service(store, NOW.plusSeconds(1)).rotate(
+			new RotateRefreshTokenCommand(compromised.refreshToken()));
+
+		RefreshTokenReuseResult result = service(store, NOW.plusSeconds(2)).handleConsumedRefreshTokenReuse(
+			new RotateRefreshTokenCommand(compromised.refreshToken()));
+
+		assertEquals(RefreshTokenReuseResult.Status.REVOKED, result.status());
+		assertEquals("REFRESH_TOKEN_REUSE", store.sessions.get(compromised.sessionId()).revokeReason());
+		assertNull(findByHash(store, compromised.refreshToken()).revokedAt());
+		assertEquals(NOW.plusSeconds(2), findByHash(store, rotated.refreshToken()).revokedAt());
+		assertNull(store.sessions.get(unaffected.sessionId()).revokedAt());
+		assertNull(findByHash(store, unaffected.refreshToken()).revokedAt());
+	}
+
+	@Test
+	void invalidUnknownOrdinaryRevokedAndExpiredTokensDoNotTriggerReuseDisposition() {
+		FakeStore store = new FakeStore();
+		UUID userId = UUID.randomUUID();
+		SessionTokenResult current = service(store, NOW).createForAuthenticatedUser(
+			new CreateDeviceSessionCommand(userId, "Desktop", "reject-device"));
+		SessionTokenResult expired = service(store, NOW.minusSeconds(DeviceSession.ABSOLUTE_LIFETIME.toSeconds() + 1))
+			.createForAuthenticatedUser(new CreateDeviceSessionCommand(UUID.randomUUID(), "Old", "expired-device"));
+		StoredRefreshToken currentToken = findByHash(store, current.refreshToken());
+		store.replaceToken(StoredRefreshToken.restore(currentToken.id(), currentToken.sessionId(),
+			RefreshTokenHash.restore(currentToken.tokenHash()), currentToken.issuedAt(), currentToken.expiresAt(),
+			currentToken.consumedAt(), NOW, currentToken.replacedById(), currentToken.createdAt()));
+
+		assertEquals(RefreshTokenReuseResult.Status.NOT_REUSED,
+			service(store, NOW).handleConsumedRefreshTokenReuse(new RotateRefreshTokenCommand("rt1_bad")).status());
+		assertEquals(RefreshTokenReuseResult.Status.NOT_REUSED,
+			service(store, NOW).handleConsumedRefreshTokenReuse(
+				new RotateRefreshTokenCommand(RefreshToken.generate(new SecureRandom()).value())).status());
+		assertEquals(RefreshTokenReuseResult.Status.NOT_REUSED,
+			service(store, NOW).handleConsumedRefreshTokenReuse(new RotateRefreshTokenCommand(current.refreshToken())).status());
+		assertEquals(RefreshTokenReuseResult.Status.NOT_REUSED,
+			service(store, NOW).handleConsumedRefreshTokenReuse(new RotateRefreshTokenCommand(expired.refreshToken())).status());
+
+		assertNull(store.sessions.get(current.sessionId()).revokedAt());
+		assertEquals(NOW, findByHash(store, current.refreshToken()).revokedAt());
+		assertNull(store.sessions.get(expired.sessionId()).revokedAt());
+	}
+
+	@Test
+	void consumedTokenReuseAfterExpiryStillRevokesItsSession() {
+		FakeStore store = new FakeStore();
+		Instant issuedAt = NOW.minus(DeviceSession.ABSOLUTE_LIFETIME).plusSeconds(1);
+		SessionTokenResult initial = service(store, issuedAt).createForAuthenticatedUser(
+			new CreateDeviceSessionCommand(UUID.randomUUID(), "Short-lived", "expired-reuse-device"));
+		service(store, NOW).rotate(new RotateRefreshTokenCommand(initial.refreshToken()));
+
+		RefreshTokenReuseResult result = service(store, NOW.plusSeconds(2)).handleConsumedRefreshTokenReuse(
+			new RotateRefreshTokenCommand(initial.refreshToken()));
+
+		assertEquals(RefreshTokenReuseResult.Status.REVOKED, result.status());
+		assertEquals("REFRESH_TOKEN_REUSE", store.sessions.get(initial.sessionId()).revokeReason());
+	}
+
+	@Test
+	void currentSelectedAndAllDeviceRevocationsUseTheirRequestedReasons() {
+		FakeStore store = new FakeStore();
+		UUID userId = UUID.randomUUID();
+		SessionTokenResult current = service(store, NOW).createForAuthenticatedUser(
+			new CreateDeviceSessionCommand(userId, "Phone", "current-device"));
+		SessionTokenResult selected = service(store, NOW).createForAuthenticatedUser(
+			new CreateDeviceSessionCommand(userId, "Tablet", "selected-device"));
+		SessionTokenResult all = service(store, NOW).createForAuthenticatedUser(
+			new CreateDeviceSessionCommand(userId, "Browser", "all-device"));
+
+		assertEquals(SessionRevocationResult.Status.REVOKED,
+			service(store, NOW.plusSeconds(1)).revokeCurrentDevice(userId, current.sessionId()).status());
+		assertEquals("CURRENT_DEVICE", store.sessions.get(current.sessionId()).revokeReason());
+		assertEquals(SessionRevocationResult.Status.REVOKED,
+			service(store, NOW.plusSeconds(2)).revokeSelectedDevice(userId, selected.sessionId()).status());
+		assertEquals("SELECTED_DEVICE", store.sessions.get(selected.sessionId()).revokeReason());
+		SessionRevocationResult allResult = service(store, NOW.plusSeconds(3)).revokeAllDevices(userId);
+		assertEquals(SessionRevocationResult.Status.REVOKED, allResult.status());
+		assertEquals(1, allResult.revokedSessionCount());
+		assertEquals("ALL_DEVICES", store.sessions.get(all.sessionId()).revokeReason());
+		assertEquals(NOW.plusSeconds(1), findByHash(store, current.refreshToken()).revokedAt());
+		assertEquals(NOW.plusSeconds(2), findByHash(store, selected.refreshToken()).revokedAt());
+		assertEquals(NOW.plusSeconds(3), findByHash(store, all.refreshToken()).revokedAt());
+	}
+
+	@Test
+	void otherUsersCannotRevokeSessionAndRepeatedRevocationIsIdempotent() {
+		FakeStore store = new FakeStore();
+		UUID ownerId = UUID.randomUUID();
+		SessionTokenResult owned = service(store, NOW).createForAuthenticatedUser(
+			new CreateDeviceSessionCommand(ownerId, "Phone", "owner-device"));
+
+		assertEquals(SessionRevocationResult.Status.NOT_FOUND,
+			service(store, NOW.plusSeconds(1)).revokeSelectedDevice(UUID.randomUUID(), owned.sessionId()).status());
+		assertNull(store.sessions.get(owned.sessionId()).revokedAt());
+		assertNull(findByHash(store, owned.refreshToken()).revokedAt());
+
+		assertEquals(SessionRevocationResult.Status.REVOKED,
+			service(store, NOW.plusSeconds(2)).revokeCurrentDevice(ownerId, owned.sessionId()).status());
+		Instant revokedAt = store.sessions.get(owned.sessionId()).revokedAt();
+		assertEquals(SessionRevocationResult.Status.ALREADY_REVOKED,
+			service(store, NOW.plusSeconds(3)).revokeCurrentDevice(ownerId, owned.sessionId()).status());
+		assertEquals(revokedAt, store.sessions.get(owned.sessionId()).revokedAt());
+		assertEquals("CURRENT_DEVICE", store.sessions.get(owned.sessionId()).revokeReason());
+	}
+
+	@Test
+	void legacyNullBaselineUsesSecurityAdminWithoutChangingHistoricalFacts() {
+		FakeStore store = new FakeStore();
+		UUID userId = UUID.randomUUID();
+		UUID sessionId = UUID.randomUUID();
+		Instant issuedAt = NOW.minusSeconds(10_000);
+		Instant expiresAt = issuedAt.plusSeconds(7 * 24 * 60 * 60L);
+		DeviceSession legacy = DeviceSession.restore(
+			sessionId, userId, " legacy-device ", null, issuedAt, expiresAt, null, null, issuedAt, null);
+		RefreshToken token = RefreshToken.generate(new SecureRandom());
+		store.insertSession(legacy);
+		store.insertRefreshToken(StoredRefreshToken.issue(
+			UUID.randomUUID(), sessionId, RefreshTokenHash.from(token), issuedAt, expiresAt));
+
+		SessionRevocationResult result = service(store, NOW).revokeCurrentDevice(userId, sessionId);
+		DeviceSession revoked = store.sessions.get(sessionId);
+
+		assertEquals(SessionRevocationResult.Status.REVOKED, result.status());
+		assertEquals("SECURITY_ADMIN", revoked.revokeReason());
+		assertNull(revoked.securityBaselineVersion());
+		assertEquals(" legacy-device ", revoked.deviceId());
+		assertNull(revoked.deviceName());
+		assertEquals(issuedAt, revoked.issuedAt());
+		assertEquals(expiresAt, revoked.expiresAt());
+		assertEquals(issuedAt, revoked.lastSeenAt());
+		assertEquals(NOW, findByHash(store, token.value()).revokedAt());
+	}
+
+	@Test
+	void securityResultsAndExceptionsDoNotExposeRefreshTokenOrHash() {
+		FakeStore store = new FakeStore();
+		SessionTokenResult initial = service(store, NOW).createForAuthenticatedUser(
+			new CreateDeviceSessionCommand(UUID.randomUUID(), "Secure", "secret-device"));
+		SessionTokenResult rotated = service(store, NOW.plusSeconds(1)).rotate(
+			new RotateRefreshTokenCommand(initial.refreshToken()));
+		String hash = RefreshTokenHash.from(RefreshToken.fromClient(initial.refreshToken())).value();
+		RefreshTokenRejectedException exception = assertThrows(RefreshTokenRejectedException.class,
+			() -> service(store, NOW.plusSeconds(2)).rotate(new RotateRefreshTokenCommand(initial.refreshToken())));
+		RefreshTokenReuseResult reuse = service(store, NOW.plusSeconds(2)).handleConsumedRefreshTokenReuse(
+			new RotateRefreshTokenCommand(initial.refreshToken()));
+		SessionRevocationResult revocation = service(store, NOW.plusSeconds(3)).revokeCurrentDevice(
+			store.sessions.get(initial.sessionId()).userId(), initial.sessionId());
+
+		assertFalse(exception.getMessage().contains(initial.refreshToken()));
+		assertFalse(exception.getMessage().contains(hash));
+		assertFalse(reuse.toString().contains(initial.refreshToken()));
+		assertFalse(reuse.toString().contains(hash));
+		assertFalse(revocation.toString().contains(initial.refreshToken()));
+		assertFalse(revocation.toString().contains(hash));
+		assertFalse(rotated.toString().contains(initial.refreshToken()));
+	}
+
 	private static StoredRefreshToken findByHash(FakeStore store, String rawToken) {
 		String hash = RefreshTokenHash.from(RefreshToken.fromClient(rawToken)).value();
 		return store.tokensByHash.get(hash);
@@ -223,6 +387,44 @@ class DeviceSessionApplicationServiceTests {
 		}
 
 		@Override
+		public Optional<DeviceSession> findSessionForUserForUpdate(UUID userId, UUID sessionId) {
+			DeviceSession session = sessions.get(sessionId);
+			return session == null || !session.userId().equals(userId) ? Optional.empty() : Optional.of(session);
+		}
+
+		@Override
+		public List<DeviceSession> findActiveSessionsForUserForUpdate(UUID userId) {
+			return sessions.values().stream()
+				.filter(session -> session.userId().equals(userId) && session.revokedAt() == null)
+				.sorted(Comparator.comparing(DeviceSession::id))
+				.toList();
+		}
+
+		@Override
+		public boolean revokeSession(UUID sessionId, Instant revokedAt, SessionRevocationReason reason) {
+			DeviceSession session = sessions.get(sessionId);
+			if (session == null || session.revokedAt() != null) {
+				return false;
+			}
+			// Fake 存储保留历史字段，只模拟持久化端口允许的不可逆撤销状态转换。
+			sessions.put(sessionId, DeviceSession.restore(session.id(), session.userId(), session.deviceId(),
+				session.deviceName(), session.issuedAt(), session.expiresAt(), revokedAt, reason.name(), session.lastSeenAt(),
+				session.securityBaselineVersion()));
+			return true;
+		}
+
+		@Override
+		public void revokeCurrentRefreshTokens(UUID sessionId, Instant revokedAt) {
+			for (StoredRefreshToken token : List.copyOf(tokens.values())) {
+				if (token.sessionId().equals(sessionId) && token.consumedAt() == null && token.revokedAt() == null) {
+					replaceToken(StoredRefreshToken.restore(token.id(), token.sessionId(),
+						RefreshTokenHash.restore(token.tokenHash()), token.issuedAt(), token.expiresAt(), token.consumedAt(),
+						revokedAt, token.replacedById(), token.createdAt()));
+				}
+			}
+		}
+
+		@Override
 		public boolean consumeRefreshToken(UUID tokenId, Instant consumedAt) {
 			StoredRefreshToken token = tokens.get(tokenId);
 			if (token == null || token.consumedAt() != null || token.revokedAt() != null) {
@@ -252,9 +454,9 @@ class DeviceSessionApplicationServiceTests {
 				|| lastSeenAt.isBefore(session.lastSeenAt())) {
 				return false;
 			}
-			sessions.put(sessionId, DeviceSession.restore(session.id(), session.userId(),
-				DeviceId.ofNullable(session.deviceId()), DeviceName.of(session.deviceName()), session.issuedAt(),
-				session.expiresAt(), session.revokedAt(), session.revokeReason(), lastSeenAt));
+			sessions.put(sessionId, DeviceSession.restore(session.id(), session.userId(), session.deviceId(),
+				session.deviceName(), session.issuedAt(), session.expiresAt(), session.revokedAt(), session.revokeReason(),
+				lastSeenAt, session.securityBaselineVersion()));
 			return true;
 		}
 

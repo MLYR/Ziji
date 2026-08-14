@@ -12,15 +12,13 @@ import app.ziji.auth.domain.DeviceName;
 import app.ziji.auth.domain.DeviceSession;
 import app.ziji.auth.domain.RefreshToken;
 import app.ziji.auth.domain.RefreshTokenHash;
+import app.ziji.auth.domain.SessionRevocationReason;
 import app.ziji.auth.domain.StoredRefreshToken;
 import app.ziji.shared.application.TransactionRunner;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
 
 /**
- * 已认证用户的稳定设备会话和正常刷新轮换用例；不包含 HTTP、Cookie、CSRF 或撤销 API 编排。
+ * 已认证用户的稳定设备会话、正常刷新轮换和传输无关的撤销用例；不包含 HTTP、Cookie、CSRF 或 Mobile 编排。
  */
-@Service
 public final class DeviceSessionApplicationService {
 
 	private final TransactionRunner transactionRunner;
@@ -30,7 +28,6 @@ public final class DeviceSessionApplicationService {
 	private final Clock clock;
 	private final Supplier<UUID> uuidGenerator;
 
-	@Autowired
 	public DeviceSessionApplicationService(
 		TransactionRunner transactionRunner,
 		DeviceSessionStore sessionStore,
@@ -112,7 +109,68 @@ public final class DeviceSessionApplicationService {
 		});
 	}
 
+	/**
+	 * 仅在正常轮换返回 CONSUMED 信号后调用：重新解析并计算同一域分离摘要，再在行锁内复核已消费状态。
+	 */
+	public RefreshTokenReuseResult handleConsumedRefreshTokenReuse(RotateRefreshTokenCommand command) {
+		RefreshToken refreshToken = parseRefreshTokenForReuse(command);
+		Instant now = clock.instant();
+
+		return transactionRunner.required(() -> {
+			if (refreshToken == null) {
+				return RefreshTokenReuseResult.notReused();
+			}
+			String tokenHash = RefreshTokenHash.from(refreshToken).value();
+			RefreshTokenSessionState state = sessionStore.findRefreshTokenForUpdate(tokenHash).orElse(null);
+			if (!isConsumedReuseCandidate(state)) {
+				return RefreshTokenReuseResult.notReused();
+			}
+			if (state.session().revokedAt() != null) {
+				return RefreshTokenReuseResult.alreadyRevoked();
+			}
+			// 已锁定会话后才撤销其所有未消费、未撤销 Token，避免与正常轮换留下可用凭据。
+			if (!sessionStore.revokeSession(
+				state.session().id(), now, effectiveReason(state.session(), SessionRevocationReason.REFRESH_TOKEN_REUSE))) {
+				return RefreshTokenReuseResult.alreadyRevoked();
+			}
+			sessionStore.revokeCurrentRefreshTokens(state.session().id(), now);
+			return RefreshTokenReuseResult.revoked();
+		});
+	}
+
+	/** 撤销当前已认证用户的当前设备会话；重复调用不会恢复任何安全状态。 */
+	public SessionRevocationResult revokeCurrentDevice(UUID authenticatedUserId, UUID sessionId) {
+		return revokeOneDevice(authenticatedUserId, sessionId, SessionRevocationReason.CURRENT_DEVICE);
+	}
+
+	/** 撤销当前已认证用户指定的可见设备；他人或不存在的会话统一返回安全结果。 */
+	public SessionRevocationResult revokeSelectedDevice(UUID authenticatedUserId, UUID sessionId) {
+		return revokeOneDevice(authenticatedUserId, sessionId, SessionRevocationReason.SELECTED_DEVICE);
+	}
+
+	/** 按数据库锁定顺序撤销当前用户的所有未撤销会话及其当前 Refresh Token。 */
+	public SessionRevocationResult revokeAllDevices(UUID authenticatedUserId) {
+		Instant now = clock.instant();
+		return transactionRunner.required(() -> {
+			if (authenticatedUserId == null) {
+				return SessionRevocationResult.alreadyRevoked();
+			}
+			int revokedCount = 0;
+			for (DeviceSession session : sessionStore.findActiveSessionsForUserForUpdate(authenticatedUserId)) {
+				if (sessionStore.revokeSession(
+					session.id(), now, effectiveReason(session, SessionRevocationReason.ALL_DEVICES))) {
+					sessionStore.revokeCurrentRefreshTokens(session.id(), now);
+					revokedCount++;
+				}
+			}
+			return revokedCount == 0 ? SessionRevocationResult.alreadyRevoked() : SessionRevocationResult.revoked(revokedCount);
+		});
+	}
+
 	private static void requireCurrent(RefreshTokenSessionState state, Instant now) {
+		if (!state.session().isCurrentSecurityBaseline()) {
+			throw new RefreshTokenRejectedException(RefreshTokenRejectedException.Reason.INVALID);
+		}
 		if (state.refreshToken().consumedAt() != null) {
 			throw new RefreshTokenRejectedException(RefreshTokenRejectedException.Reason.CONSUMED);
 		}
@@ -128,6 +186,43 @@ public final class DeviceSessionApplicationService {
 		if (!now.isBefore(state.session().expiresAt())) {
 			throw new RefreshTokenRejectedException(RefreshTokenRejectedException.Reason.SESSION_EXPIRED);
 		}
+	}
+
+	private SessionRevocationResult revokeOneDevice(
+		UUID authenticatedUserId,
+		UUID sessionId,
+		SessionRevocationReason requestedReason) {
+		Instant now = clock.instant();
+		return transactionRunner.required(() -> {
+			if (authenticatedUserId == null || sessionId == null) {
+				return SessionRevocationResult.notFound();
+			}
+			DeviceSession session = sessionStore.findSessionForUserForUpdate(authenticatedUserId, sessionId).orElse(null);
+			if (session == null) {
+				return SessionRevocationResult.notFound();
+			}
+			if (session.revokedAt() != null) {
+				return SessionRevocationResult.alreadyRevoked();
+			}
+			// 历史 NULL 基线不伪造现代操作原因，统一以 SECURITY_ADMIN 完成不可逆安全处置。
+			if (!sessionStore.revokeSession(session.id(), now, effectiveReason(session, requestedReason))) {
+				return SessionRevocationResult.alreadyRevoked();
+			}
+			sessionStore.revokeCurrentRefreshTokens(session.id(), now);
+			return SessionRevocationResult.revoked(1);
+		});
+	}
+
+	private static boolean isConsumedReuseCandidate(RefreshTokenSessionState state) {
+		return state != null
+			&& state.refreshToken().consumedAt() != null
+			&& state.refreshToken().revokedAt() == null;
+	}
+
+	private static SessionRevocationReason effectiveReason(
+		DeviceSession session,
+		SessionRevocationReason requestedReason) {
+		return session.isCurrentSecurityBaseline() ? requestedReason : SessionRevocationReason.SECURITY_ADMIN;
 	}
 
 	private static SessionInput validateCreate(CreateDeviceSessionCommand command) {
@@ -149,6 +244,14 @@ public final class DeviceSessionApplicationService {
 			return RefreshToken.fromClient(command.refreshToken());
 		} catch (AuthDomainException exception) {
 			throw new RefreshTokenRejectedException(RefreshTokenRejectedException.Reason.INVALID);
+		}
+	}
+
+	private static RefreshToken parseRefreshTokenForReuse(RotateRefreshTokenCommand command) {
+		try {
+			return command == null ? null : RefreshToken.fromClient(command.refreshToken());
+		} catch (AuthDomainException exception) {
+			return null;
 		}
 	}
 

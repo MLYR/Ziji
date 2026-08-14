@@ -10,13 +10,10 @@ import app.ziji.auth.domain.EmailAddress;
 import app.ziji.auth.domain.EmailChallenge;
 import app.ziji.auth.domain.EmailChallengeStatus;
 import app.ziji.shared.application.TransactionRunner;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
 
 /**
  * 邮箱验证码签发与消费用例；所有数据库事实写入都包在一个 REQUIRED 事务中。
  */
-@Service
 public final class EmailChallengeApplicationService {
 
 	private static final int EXPIRES_IN_SECONDS = (int) EmailChallenge.VALIDITY.toSeconds();
@@ -31,7 +28,6 @@ public final class EmailChallengeApplicationService {
 	private final Clock clock;
 	private final Supplier<UUID> uuidGenerator;
 
-	@Autowired
 	public EmailChallengeApplicationService(
 		TransactionRunner transactionRunner,
 		EmailChallengeStore challengeStore,
