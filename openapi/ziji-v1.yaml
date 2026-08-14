@@ -1547,6 +1547,24 @@ components:
       additionalProperties: false
       required: [requestId]
       properties: { requestId: { type: string, minLength: 1, maxLength: 100 } }
+    VersionConflictDetails:
+      type: object
+      additionalProperties: false
+      required: [currentVersion, currentEtag, resourceLocation]
+      properties:
+        currentVersion: { type: integer, minimum: 1, description: 当前可见资源版本号 }
+        currentEtag:
+          type: string
+          minLength: 3
+          maxLength: 82
+          pattern: '^"[1-9][0-9]*"$'
+          description: 双引号包围的当前资源版本，例如 "7"。
+        resourceLocation:
+          type: string
+          minLength: 1
+          maxLength: 500
+          pattern: '^/(?!/)[^\s]*$'
+          description: 以单个斜杠开头的相对 API 地址；不得以 // 开头。
     Problem:
       type: object
       additionalProperties: false
@@ -1559,6 +1577,7 @@ components:
         detail: { type: [string, 'null'], maxLength: 1000 }
         instance: { type: [string, 'null'], maxLength: 500 }
         requestId: { type: string, maxLength: 100 }
+        versionConflict: { $ref: '#/components/schemas/VersionConflictDetails' }
         fieldErrors:
           type: array
           maxItems: 100
@@ -3030,7 +3049,7 @@ components:
     Unauthenticated: { description: 未认证或会话失效, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     Forbidden: { description: 无对象权限或 CSRF 校验失败, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     NotFound: { description: 资源不存在或对当前用户不可见, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
-    Conflict: { description: 幂等键异参、处理中、版本冲突或唯一约束冲突；处理中时 Retry-After 固定为 5 秒, headers: { Retry-After: { description: 仅 IDEMPOTENCY_REQUEST_IN_PROGRESS 返回的重试等待秒数, schema: { type: integer, const: 5 } } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    Conflict: { description: 幂等键异参、处理中、版本冲突或唯一约束冲突；仅 code=VERSION_CONFLICT 时返回完整 versionConflict，资源不可见时按 404 返回；处理中时 Retry-After 固定为 5 秒, headers: { Retry-After: { description: 仅 IDEMPOTENCY_REQUEST_IN_PROGRESS 返回的重试等待秒数, schema: { type: integer, const: 5 } } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     BusinessRuleViolation: { description: 业务规则不允许本次操作, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     RateLimited: { description: 请求过于频繁；Retry-After 为所有超限窗口中的最长剩余秒数, headers: { Retry-After: { description: 所有超限窗口中的最长剩余时间（秒）, schema: { type: integer, minimum: 1 } } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     PayloadTooLarge: { description: 文件超过 V1 上传上限, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }

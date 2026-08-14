@@ -126,7 +126,16 @@ V1 客户端最大重试窗口为 24 小时，幂等记录最短保留 7 天。`
 ETag: "7"
 ```
 
-更新时必须携带 `If-Match: "7"`。版本不一致返回 `409 VERSION_CONFLICT`，响应携带当前版本和允许展示给用户比较的当前资源字段。
+更新时必须携带 `If-Match: "7"`。版本不一致返回 `409 VERSION_CONFLICT`，响应通过有界的版本冲突字段指向当前可见资源；不得直接携带当前资源对象。
+缺失或格式不是双引号包围的正整数时按 `400 VALIDATION_ERROR` 处理；格式正确但版本已过期或不一致时返回 `409 VERSION_CONFLICT`。
+
+`VERSION_CONFLICT` 的 Problem Details 必须包含有界的 `versionConflict`，且只包含以下字段：
+
+- `currentVersion`：当前用户可见资源的整数版本，最小为 `1`。
+- `currentEtag`：双引号包围的当前版本，例如 `"7"`。
+- `resourceLocation`：以单个 `/` 开头的相对 API 地址，禁止以 `//` 开头。
+
+服务端不得在冲突响应中直接嵌入 `currentResource` 或任意当前资源对象。客户端应使用 `resourceLocation` 重新 GET 当前可见资源后再决定是否重试。资源不存在或对当前用户不可见时仍按 `404 RESOURCE_NOT_FOUND` 返回，不得通过 `versionConflict` 泄漏资源存在性。其他 `409`（幂等、唯一约束或业务冲突）不得携带 `versionConflict`。
 
 ### 2.6 分页和排序
 
@@ -171,9 +180,10 @@ GET /transactions?accountId=...&limit=50&cursor=opaque
       "message": "提交版本为 3，当前版本为 4"
     }
   ],
-  "currentResource": {
-    "id": "0191...",
-    "version": 4
+  "versionConflict": {
+    "currentVersion": 4,
+    "currentEtag": "\"4\"",
+    "resourceLocation": "/api/v1/accounts/0191..."
   }
 }
 ```
@@ -191,7 +201,7 @@ GET /transactions?accountId=...&limit=50&cursor=opaque
 | 401 | INVALID_CREDENTIALS | 邮箱或密码错误，响应不泄露账号是否存在 |
 | 403 | PERMISSION_DENIED | 已认证但无资源操作权限 |
 | 404 | RESOURCE_NOT_FOUND | 资源不存在或用户不可见 |
-| 409 | VERSION_CONFLICT | 乐观锁冲突 |
+| 409 | VERSION_CONFLICT | 乐观锁冲突；携带 `versionConflict` 三字段，资源不可见时按 404 返回 |
 | 409 | IDEMPOTENCY_KEY_REUSED | 相同幂等键载荷不同 |
 | 409 | IDEMPOTENCY_REQUEST_IN_PROGRESS | 相同幂等请求仍在处理中；返回 Retry-After: 5 |
 | 409 | DUPLICATE_RESOURCE | 唯一资源重复 |

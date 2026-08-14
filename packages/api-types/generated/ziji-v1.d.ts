@@ -1539,6 +1539,14 @@ export interface components {
         ResponseMeta: {
             requestId: string;
         };
+        VersionConflictDetails: {
+            /** @description 当前可见资源版本号 */
+            currentVersion: number;
+            /** @description 双引号包围的当前资源版本，例如 "7"。 */
+            currentEtag: string;
+            /** @description 以单个斜杠开头的相对 API 地址；不得以 // 开头。 */
+            resourceLocation: string;
+        };
         Problem: {
             /** Format: uri */
             type: string;
@@ -1548,6 +1556,7 @@ export interface components {
             detail?: string | null;
             instance?: string | null;
             requestId: string;
+            versionConflict?: components["schemas"]["VersionConflictDetails"];
             fieldErrors?: {
                 field: string;
                 code: string;
@@ -2893,7 +2902,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description 幂等键异参、处理中、版本冲突或唯一约束冲突；处理中时 Retry-After 固定为 5 秒 */
+        /** @description 幂等键异参、处理中、版本冲突或唯一约束冲突；仅 code=VERSION_CONFLICT 时返回完整 versionConflict，资源不可见时按 404 返回；处理中时 Retry-After 固定为 5 秒 */
         Conflict: {
             headers: {
                 /** @description 仅 IDEMPOTENCY_REQUEST_IN_PROGRESS 返回的重试等待秒数 */
