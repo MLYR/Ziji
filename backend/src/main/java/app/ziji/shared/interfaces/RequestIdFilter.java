@@ -15,7 +15,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
-class RequestIdFilter extends OncePerRequestFilter {
+final class RequestIdFilter extends OncePerRequestFilter {
 
 	static final String HEADER = "X-Request-ID";
 	static final String ATTRIBUTE = RequestIdFilter.class.getName() + ".requestId";

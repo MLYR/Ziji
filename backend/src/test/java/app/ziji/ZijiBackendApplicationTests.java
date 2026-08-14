@@ -15,11 +15,21 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import tools.jackson.databind.ObjectMapper;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -31,6 +41,9 @@ class ZijiBackendApplicationTests extends PostgresIntegrationTestSupport {
 
 	@Autowired
 	private JdbcTemplate jdbc;
+
+	@Autowired
+	private ObjectMapper objectMapper;
 
 	@Test
 	void contextLoads() {
@@ -50,6 +63,73 @@ class ZijiBackendApplicationTests extends PostgresIntegrationTestSupport {
 		// 认证用例完成前，未知业务路径必须 fail closed。
 		mvc.perform(get("/api/v1/not-yet-implemented"))
 			.andExpect(status().isForbidden());
+	}
+
+	@Test
+	void currentUserEndpointRequiresAuthentication() throws Exception {
+		// 用户资料路径仅开放给已认证主体，匿名请求必须在安全过滤器处返回 401。
+		mvc.perform(get("/api/v1/users/me"))
+			.andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	void authenticatedUuidCanReadCurrentUserThroughSecurityFilterChain() throws Exception {
+		UUID userId = insertUser();
+
+		mvc.perform(get("/api/v1/users/me").with(user(userId.toString())))
+			.andExpect(status().isOk())
+			.andExpect(header().string("ETag", "\"1\""))
+			.andExpect(jsonPath("$.data.id").value(userId.toString()));
+	}
+
+	@Test
+	void authenticatedUuidCanPatchCurrentUserWithCsrfThroughSecurityFilterChain() throws Exception {
+		UUID userId = insertUser();
+
+		mvc.perform(patch("/api/v1/users/me")
+				.with(user(userId.toString()))
+				.with(csrf())
+				.header("If-Match", "\"1\"")
+				.contentType("application/merge-patch+json")
+				.content("{\"nickname\":\"安全链路昵称\"}"))
+			.andExpect(status().isOk())
+			.andExpect(header().string("ETag", "\"2\""))
+			.andExpect(jsonPath("$.data.nickname").value("安全链路昵称"));
+	}
+
+	@Test
+	void authenticatedPrincipalWithoutUserRowIsRejectedAsAuthenticationFailure() throws Exception {
+		UUID missingUserId = UUID.randomUUID();
+
+		mvc.perform(get("/api/v1/users/me").with(user(missingUserId.toString())))
+			.andExpect(status().isUnauthorized())
+			.andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+	}
+
+	@Test
+	void invalidRequestIdIsReplacedBeforeUserProblemIsBuilt() throws Exception {
+		UUID userId = insertUser();
+		String maliciousRequestId = "x".repeat(101) + "<invalid>";
+
+		MvcResult result = mvc.perform(patch("/api/v1/users/me")
+				.with(user(userId.toString()))
+				.with(csrf())
+				.header("X-Request-ID", maliciousRequestId)
+				.header("If-Match", "\"1\"")
+				.contentType("application/merge-patch+json")
+				.content("{\"unknown\":\"x\"}"))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+			.andReturn();
+
+		String responseRequestId = result.getResponse().getHeader("X-Request-ID");
+		String problemRequestId = objectMapper.readTree(result.getResponse().getContentAsString())
+			.get("requestId").textValue();
+		assertNotNull(responseRequestId);
+		assertNotNull(problemRequestId);
+		assertEquals(responseRequestId, problemRequestId);
+		assertNotEquals(maliciousRequestId, responseRequestId);
+		assertTrue(responseRequestId.length() <= 100);
 	}
 
 	@Test
@@ -97,5 +177,21 @@ class ZijiBackendApplicationTests extends PostgresIntegrationTestSupport {
 		BigDecimal storedAmount = jdbc.queryForObject(
 			"SELECT amount FROM ledger_entries WHERE id = ?", BigDecimal.class, debitEntryId);
 		org.junit.jupiter.api.Assertions.assertEquals(0, new BigDecimal("10.00").compareTo(storedAmount));
+	}
+
+	private UUID insertUser() {
+		UUID userId = UUID.randomUUID();
+		Instant now = Instant.parse("2026-08-14T00:00:00Z");
+		String email = userId + "@example.test";
+		jdbc.update("""
+			INSERT INTO users
+				(id, email, email_normalized, email_verified_at, password_hash,
+				 password_hash_version, nickname, timezone, base_currency, locale, amount_format,
+				 status, created_at, updated_at, version)
+			VALUES (?, ?, ?, ?, 'test-only-hash', 1, '原昵称', 'Asia/Shanghai', 'CNY', 'zh-CN',
+				'STANDARD', 'ACTIVE', ?, ?, 1)
+			""", userId, email, email, java.sql.Timestamp.from(now),
+			java.sql.Timestamp.from(now), java.sql.Timestamp.from(now));
+		return userId;
 	}
 }

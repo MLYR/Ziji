@@ -8,8 +8,6 @@ refreshMobileSession
 revokeCurrentSession
 createPasswordResetChallenge
 resetPassword
-getCurrentUser
-updateCurrentUser
 changePassword
 listUserSessions
 revokeAllUserSessions
