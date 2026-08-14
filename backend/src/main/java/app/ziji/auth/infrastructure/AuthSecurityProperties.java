@@ -12,6 +12,7 @@ public class AuthSecurityProperties {
 
 	private HmacProperties hmac = new HmacProperties();
 	private EnvelopeProperties envelope = new EnvelopeProperties();
+	private AccessTokenProperties accessToken = new AccessTokenProperties();
 	private List<String> trustedProxyAddresses = new ArrayList<>();
 
 	public HmacProperties getHmac() {
@@ -28,6 +29,14 @@ public class AuthSecurityProperties {
 
 	public void setEnvelope(EnvelopeProperties envelope) {
 		this.envelope = envelope;
+	}
+
+	public AccessTokenProperties getAccessToken() {
+		return accessToken;
+	}
+
+	public void setAccessToken(AccessTokenProperties accessToken) {
+		this.accessToken = accessToken;
 	}
 
 	public List<String> getTrustedProxyAddresses() {
@@ -112,6 +121,64 @@ public class AuthSecurityProperties {
 
 		public void setKekVersion(int kekVersion) {
 			this.kekVersion = kekVersion;
+		}
+	}
+
+	/** Access Token RSA 密钥配置；所有真实密钥只允许从外部环境或密钥设施注入。 */
+	public static class AccessTokenProperties {
+		private String currentKid;
+		private String currentPrivateKeyPkcs8Base64;
+		private String currentPublicKeyX509Base64;
+		private String previousKid;
+		private String previousPublicKeyX509Base64;
+		private Duration previousPublicKeyRetention = Duration.ofHours(24);
+
+		public String getCurrentKid() {
+			return currentKid;
+		}
+
+		public void setCurrentKid(String currentKid) {
+			this.currentKid = currentKid;
+		}
+
+		public String getCurrentPrivateKeyPkcs8Base64() {
+			return currentPrivateKeyPkcs8Base64;
+		}
+
+		public void setCurrentPrivateKeyPkcs8Base64(String currentPrivateKeyPkcs8Base64) {
+			this.currentPrivateKeyPkcs8Base64 = currentPrivateKeyPkcs8Base64;
+		}
+
+		public String getCurrentPublicKeyX509Base64() {
+			return currentPublicKeyX509Base64;
+		}
+
+		public void setCurrentPublicKeyX509Base64(String currentPublicKeyX509Base64) {
+			this.currentPublicKeyX509Base64 = currentPublicKeyX509Base64;
+		}
+
+		public String getPreviousKid() {
+			return previousKid;
+		}
+
+		public void setPreviousKid(String previousKid) {
+			this.previousKid = previousKid;
+		}
+
+		public String getPreviousPublicKeyX509Base64() {
+			return previousPublicKeyX509Base64;
+		}
+
+		public void setPreviousPublicKeyX509Base64(String previousPublicKeyX509Base64) {
+			this.previousPublicKeyX509Base64 = previousPublicKeyX509Base64;
+		}
+
+		public Duration getPreviousPublicKeyRetention() {
+			return previousPublicKeyRetention;
+		}
+
+		public void setPreviousPublicKeyRetention(Duration previousPublicKeyRetention) {
+			this.previousPublicKeyRetention = previousPublicKeyRetention;
 		}
 	}
 }

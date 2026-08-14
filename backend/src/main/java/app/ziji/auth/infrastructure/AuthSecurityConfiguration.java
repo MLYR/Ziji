@@ -64,6 +64,12 @@ class AuthSecurityConfiguration {
 	}
 
 	@Bean
+	AccessTokenKeyRing accessTokenKeyRing(AuthSecurityProperties properties) {
+		// RSA 私钥、公钥、kid 与轮换保留期在启动时一次性校验，错误配置必须 fail closed。
+		return AccessTokenKeyRing.from(properties.getAccessToken());
+	}
+
+	@Bean
 	SourceAddressResolver sourceAddressResolver(AuthSecurityProperties properties) {
 		Set<SourceAddress> trusted = properties.getTrustedProxyAddresses().stream()
 			.filter(address -> address != null && !address.isBlank())
