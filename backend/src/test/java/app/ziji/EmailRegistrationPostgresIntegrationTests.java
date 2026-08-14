@@ -173,10 +173,11 @@ class EmailRegistrationPostgresIntegrationTests extends PostgresIntegrationTestS
 		String equivalent = "ＲＥＧＩＳＴＲＡＴＩＯＮ－ＮＦＫＣ@example.test";
 		insertChallenge(EmailChallengePurpose.REGISTER, canonical, "123456", NOW);
 		registrationService(NOW, userRegistrationPort).register(command(canonical, "123456"));
-		insertChallenge(EmailChallengePurpose.REGISTER, equivalent, "123456", NOW);
+		// 新挑战必须晚于已消费挑战，才能稳定验证唯一冲突会回滚其消费。
+		insertChallenge(EmailChallengePurpose.REGISTER, equivalent, "123456", NOW.plusSeconds(1));
 
 		assertThrows(EmailAlreadyRegisteredException.class,
-			() -> registrationService(NOW, userRegistrationPort).register(command(equivalent, "123456")));
+			() -> registrationService(NOW.plusSeconds(1), userRegistrationPort).register(command(equivalent, "123456")));
 		assertEquals(1, userCount(canonical));
 		assertFalse(jdbc.queryForObject("SELECT consumed_at IS NOT NULL FROM email_challenges "
 			+ "WHERE email_normalized = ? AND consumed_at IS NULL", Boolean.class, canonical));

@@ -225,9 +225,9 @@ GET /transactions?accountId=...&limit=50&cursor=opaque
 | --- | --- | --- | --- |
 | POST | `/auth/registration-challenges` | 发送注册邮箱验证码 | AUTH-001 |
 | POST | `/auth/register` | 验证邮箱验证码并创建用户 | AUTH-001 |
-| POST | `/auth/web/sessions` | Web 邮箱密码登录并设置刷新 Cookie | AUTH-002 |
+| POST | `/auth/web/sessions` | Web 邮箱密码登录；凭据认证通过后由会话用例设置刷新 Cookie | AUTH-002 |
 | POST | `/auth/web/sessions/refresh` | Web 通过刷新 Cookie 轮换会话 | AUTH-002、SEC-001 |
-| POST | `/auth/mobile/sessions` | Mobile 邮箱密码登录并在响应体返回刷新 Token | AUTH-002 |
+| POST | `/auth/mobile/sessions` | Mobile 邮箱密码登录；凭据认证通过后由会话用例在响应体返回刷新 Token | AUTH-002 |
 | POST | `/auth/mobile/sessions/refresh` | Mobile 通过请求体刷新 Token 轮换会话 | AUTH-002、SEC-001 |
 | DELETE | `/auth/sessions/current` | 退出当前设备 | AUTH-004 |
 | POST | `/auth/password-reset-challenges` | 发送密码重置验证码 | AUTH-003 |
@@ -250,7 +250,9 @@ GET /transactions?accountId=...&limit=50&cursor=opaque
 }
 ```
 
-密码不写日志或审计 metadata。登录失败响应不得区分“邮箱不存在”和“密码错误”。
+密码不写日志或审计 metadata。登录失败的 `LOCKED`、`CLOSED`、邮箱不存在、密码错误、损坏或不支持的 Hash 均返回 `401 INVALID_CREDENTIALS`，不得区分账号存在、状态、密码版本或内部错误。`ACTIVE`、`CLOSING` 可以完成凭据认证；`CLOSING` 下普通业务写入仍由后续用例单独限制。
+
+两个登录端点对所有语法合法请求在 PostgreSQL 固定窗口内计数：先 IP `10m/30`、`24h/300`，再 EMAIL `15m/10`、`24h/50`；成功、失败、状态不允许和已超限请求都计数。任一窗口超限返回 `429 RATE_LIMITED`，`Retry-After` 为所有超限窗口的最长剩余秒数。登录限流不使用 `deviceId`；`deviceName/deviceId` 是后续会话建立的输入，不能改变登录限流主体。BE-AUTH-003 只负责认证、限流和统一失败，稳定会话、Token、Cookie 与 Mobile 刷新凭据分别由 BE-AUTH-004/007 负责。
 
 `POST /auth/register` 与 `POST /auth/password-reset` 虽然未认证，仍必须携带 `Idempotency-Key`；它们使用 §2.4 的版本化匿名主体，而不是要求不存在的当前用户。两个端点都可能返回 `409 IDEMPOTENCY_KEY_REUSED` 或 `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`，后者带 `Retry-After: 5`；响应不得借幂等状态泄露邮箱是否存在。
 

@@ -2884,6 +2884,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description 邮箱不存在、密码错误、LOCKED 或 CLOSED 统一返回 INVALID_CREDENTIALS，不泄露账号存在、状态或密码 Hash 信息 */
+        InvalidCredentials: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description 无对象权限或 CSRF 校验失败 */
         Forbidden: {
             headers: {
@@ -3692,7 +3701,7 @@ export interface operations {
         requestBody: components["requestBodies"]["LoginRequest"];
         responses: {
             201: components["responses"]["WebSessionCreated"];
-            401: components["responses"]["Unauthenticated"];
+            401: components["responses"]["InvalidCredentials"];
             429: components["responses"]["RateLimited"];
         };
     };
@@ -3722,7 +3731,7 @@ export interface operations {
         requestBody: components["requestBodies"]["LoginRequest"];
         responses: {
             201: components["responses"]["MobileSessionCreated"];
-            401: components["responses"]["Unauthenticated"];
+            401: components["responses"]["InvalidCredentials"];
             429: components["responses"]["RateLimited"];
         };
     };
