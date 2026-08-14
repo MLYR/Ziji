@@ -31,6 +31,7 @@
 		<java.version>25</java.version>
 		<!-- 覆盖 Spring Boot BOM 的 pgjdbc 属性，修复 CVE-2026-54291，并同步插件依赖。 -->
 		<postgresql.version>42.7.12</postgresql.version>
+		<bouncycastle.version>1.85.2</bouncycastle.version>
 		<spring-modulith.version>2.0.7</spring-modulith.version>
 		<!-- 本地生成默认连接 compose 中的开发库，可通过 -Dziji.db.* 覆盖。 -->
 		<ziji.db.url>jdbc:postgresql://localhost:5432/ziji</ziji.db.url>
@@ -53,6 +54,11 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-security</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.bouncycastle</groupId>
+			<artifactId>bcprov-jdk18on</artifactId>
+			<version>${bouncycastle.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

@@ -16,6 +16,7 @@ import javax.crypto.spec.SecretKeySpec;
 
 import app.ziji.auth.application.AuthRateLimitSubjects;
 import app.ziji.auth.application.EncryptedCodeEnvelope;
+import app.ziji.auth.application.PasswordHasher;
 import app.ziji.auth.domain.EmailChallengePurpose;
 import app.ziji.auth.domain.RateLimitDimension;
 import app.ziji.auth.domain.SourceAddress;
@@ -130,6 +131,21 @@ class AuthSecurityTests {
 		for (int index = 0; index < 100; index++) {
 			assertTrue(generator.generate().matches("[0-9]{6}"));
 		}
+	}
+
+	@Test
+	void argon2idPasswordHasherUsesRandomSaltAndDoesNotStorePlaintext() {
+		PasswordHasher hasher = new Argon2idPasswordHasher();
+
+		String first = hasher.hash("same-password");
+		String second = hasher.hash("same-password");
+
+		assertTrue(first.startsWith("$argon2id$"));
+		assertTrue(second.startsWith("$argon2id$"));
+		assertNotEquals(first, second);
+		assertFalse(first.contains("same-password"));
+		assertTrue(hasher.matches("same-password", first));
+		assertFalse(hasher.matches("other-password", first));
 	}
 
 	@Test
