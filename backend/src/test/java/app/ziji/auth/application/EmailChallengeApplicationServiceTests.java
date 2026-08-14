@@ -29,7 +29,7 @@ class EmailChallengeApplicationServiceTests {
 
 	@Test
 	void issueUsesNormalizedEmailAndStoresOnlyHashAndEncryptedOutboxCode() {
-		Fixture fixture = fixture(RateLimitDecision.allowed());
+		Fixture fixture = fixture(RateLimitDecision.permitted());
 
 		EmailChallengeIssueResult result = fixture.service.issue(
 			new EmailChallengeIssueCommand(EmailChallengePurpose.REGISTER,
@@ -61,7 +61,7 @@ class EmailChallengeApplicationServiceTests {
 
 	@Test
 	void registerAndResetPasswordChallengesAreIsolated() {
-		Fixture fixture = fixture(RateLimitDecision.allowed());
+		Fixture fixture = fixture(RateLimitDecision.permitted());
 
 		fixture.service.issue(command(EmailChallengePurpose.REGISTER));
 		fixture.service.issue(command(EmailChallengePurpose.RESET_PASSWORD));
@@ -76,7 +76,7 @@ class EmailChallengeApplicationServiceTests {
 
 	@Test
 	void correctVerificationConsumesOnceAndWrongAttemptsStopAtFive() {
-		Fixture fixture = fixture(RateLimitDecision.allowed());
+		Fixture fixture = fixture(RateLimitDecision.permitted());
 		fixture.service.issue(command(EmailChallengePurpose.REGISTER));
 
 		assertEquals(EmailChallengeVerificationResult.VALID,
@@ -86,7 +86,7 @@ class EmailChallengeApplicationServiceTests {
 			fixture.service.verify(new EmailChallengeVerificationCommand(
 				EmailChallengePurpose.REGISTER, "USER@example.com", "123456")));
 
-		Fixture wrongFixture = fixture(RateLimitDecision.allowed());
+		Fixture wrongFixture = fixture(RateLimitDecision.permitted());
 		wrongFixture.service.issue(command(EmailChallengePurpose.REGISTER));
 		for (int attempt = 0; attempt < 5; attempt++) {
 			assertEquals(EmailChallengeVerificationResult.INVALID,
@@ -100,7 +100,7 @@ class EmailChallengeApplicationServiceTests {
 
 	@Test
 	void injectedClockExpiresChallengeWithoutUsingSystemTime() {
-		Fixture fixture = fixture(RateLimitDecision.allowed(), NOW);
+		Fixture fixture = fixture(RateLimitDecision.permitted(), NOW);
 		fixture.service.issue(command(EmailChallengePurpose.REGISTER));
 		fixture.service = fixture.serviceAt(NOW.plusSeconds(600));
 

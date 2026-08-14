@@ -20,7 +20,7 @@ import org.springframework.stereotype.Repository;
  * PostgreSQL 固定窗口实现；每次请求按冻结顺序对全部桶做原子 UPSERT，拒绝不抛异常回滚计数。
  */
 @Repository
-public final class PostgresAuthRateLimitStore implements AuthRateLimitStore {
+public class PostgresAuthRateLimitStore implements AuthRateLimitStore {
 
 	private static final String ACTION = "SEND_EMAIL_CHALLENGE";
 	private static final String POLICY = "AUTH_CHALLENGE_V1";
@@ -31,7 +31,8 @@ public final class PostgresAuthRateLimitStore implements AuthRateLimitStore {
 			 policy_code, window_code, window_seconds, limit_count,
 			 window_started_at, window_ends_at, request_count, blocked_until,
 			 created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS timestamptz), CAST(? AS timestamptz), 1, NULL,
+			CAST(? AS timestamptz), CAST(? AS timestamptz))
 		ON CONFLICT (
 			action, purpose, dimension, subject_hash, hash_key_version,
 			policy_code, window_code, window_started_at
@@ -82,7 +83,7 @@ public final class PostgresAuthRateLimitStore implements AuthRateLimitStore {
 			}
 		}
 		return retryAfterSeconds == 0
-			? RateLimitDecision.allowed()
+			? RateLimitDecision.permitted()
 			: RateLimitDecision.denied(retryAfterSeconds);
 	}
 

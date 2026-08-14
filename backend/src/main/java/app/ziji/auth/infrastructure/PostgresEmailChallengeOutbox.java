@@ -3,6 +3,7 @@ package app.ziji.auth.infrastructure;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 
+import app.ziji.auth.application.EncryptedCodeEnvelope;
 import app.ziji.auth.application.EmailChallengeIssuedEvent;
 import app.ziji.auth.application.EmailChallengeOutbox;
 import tools.jackson.core.JacksonException;
@@ -12,13 +13,14 @@ import org.springframework.stereotype.Repository;
 
 /** 将版本化加密事件写入既有 outbox_events 表，调用方事务负责原子提交。 */
 @Repository
-public final class PostgresEmailChallengeOutbox implements EmailChallengeOutbox {
+public class PostgresEmailChallengeOutbox implements EmailChallengeOutbox {
 
 	private static final String INSERT_SQL = """
 		INSERT INTO outbox_events
 			(id, aggregate_type, aggregate_id, event_type, payload, payload_version,
 			 occurred_at, published_at, attempt_count, next_attempt_at)
-		VALUES (?, 'EmailChallenge', ?, 'EmailChallengeIssued', CAST(? AS jsonb), 1, ?, NULL, 0, ?)
+		VALUES (?, 'EmailChallenge', ?, 'EmailChallengeIssued', CAST(? AS jsonb), 1,
+			CAST(? AS timestamptz), NULL, 0, CAST(? AS timestamptz))
 		""";
 
 	private final DSLContext dsl;

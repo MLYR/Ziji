@@ -22,7 +22,7 @@ import org.springframework.stereotype.Repository;
 
 /** 只读取非敏感用户资料列，并用 PostgreSQL 条件更新实现乐观锁。 */
 @Repository
-public final class PostgresUserProfileStore implements UserProfileStore {
+public class PostgresUserProfileStore implements UserProfileStore {
 
 	private static final String SELECT_SQL = """
 		SELECT id, email, nickname, timezone, base_currency, locale, amount_format, status, version
@@ -37,7 +37,7 @@ public final class PostgresUserProfileStore implements UserProfileStore {
 			base_currency = COALESCE(?, base_currency),
 			locale = COALESCE(?, locale),
 			amount_format = COALESCE(?, amount_format),
-			updated_at = ?,
+			updated_at = CAST(? AS timestamptz),
 			version = version + 1
 		WHERE id = ? AND version = ?
 		RETURNING id, email, nickname, timezone, base_currency, locale, amount_format, status, version

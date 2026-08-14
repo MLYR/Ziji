@@ -61,8 +61,6 @@ class EmailChallengePostgresIntegrationTests extends PostgresIntegrationTestSupp
 	private static final Instant NOW = Instant.parse("2026-08-14T00:00:00Z");
 	private static final SourceAddress SOURCE = SourceAddress.parseLiteral("192.0.2.10");
 	private static final String EMAIL = "user@example.com";
-	private static final byte[] TEST_KEK =
-		"0123456789abcdef0123456789abcdef".getBytes(StandardCharsets.UTF_8);
 
 	@Autowired
 	private JdbcTemplate jdbc;
@@ -84,6 +82,9 @@ class EmailChallengePostgresIntegrationTests extends PostgresIntegrationTestSupp
 
 	@Autowired
 	private AesGcmEnvelopeEncryptor envelopeEncryptor;
+
+	@Autowired
+	private EnvelopeKey envelopeKey;
 
 	@Autowired
 	private ObjectMapper objectMapper;
@@ -323,7 +324,7 @@ class EmailChallengePostgresIntegrationTests extends PostgresIntegrationTestSupp
 		UUID challengeId = jdbc.queryForObject(
 			"SELECT aggregate_id FROM outbox_events", UUID.class);
 		assertEquals("123456", decrypt(
-			root.path("verificationCode"), new EnvelopeKey(1, TEST_KEK), challengeId,
+			root.path("verificationCode"), envelopeKey, challengeId,
 			EmailChallengePurpose.REGISTER));
 
 		List<byte[]> hashes = jdbc.query("""

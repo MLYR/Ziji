@@ -3,7 +3,6 @@ package app.ziji.user.interfaces;
 import java.security.Principal;
 import java.time.DateTimeException;
 import java.time.ZoneId;
-import java.util.Iterator;
 import java.util.Enumeration;
 import java.util.Objects;
 import java.util.Optional;
@@ -32,7 +31,7 @@ import org.springframework.web.bind.annotation.RestController;
 /** 当前用户资料 HTTP 边界；merge-patch 只转换为类型化应用命令。 */
 @RestController
 @RequestMapping("/api/v1/users/me")
-public final class UserProfileController {
+public class UserProfileController {
 
 	private static final String MERGE_PATCH = "application/merge-patch+json";
 	private static final Set<String> PATCH_FIELDS = Set.of(
@@ -81,8 +80,8 @@ public final class UserProfileController {
 		if (body == null || !body.isObject() || body.size() == 0) {
 			throw invalid();
 		}
-		for (Iterator<String> fields = body.fieldNames(); fields.hasNext();) {
-			if (!PATCH_FIELDS.contains(fields.next())) {
+		for (String field : body.propertyNames()) {
+			if (!PATCH_FIELDS.contains(field)) {
 				// 未知字段不能静默丢弃，避免客户端误以为设置已保存。
 				throw invalid();
 			}

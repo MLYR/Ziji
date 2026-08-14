@@ -163,7 +163,7 @@ class AuthSecurityTests {
 		assertEquals(3, envelopeKey.secretCopy()[0]);
 	}
 
-	private static byte[] decrypt(
+	private static String decrypt(
 		EncryptedCodeEnvelope envelope,
 		EnvelopeKey key,
 		UUID challengeId,

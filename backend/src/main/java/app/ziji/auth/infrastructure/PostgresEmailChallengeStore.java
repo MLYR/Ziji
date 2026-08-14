@@ -16,7 +16,7 @@ import org.springframework.stereotype.Repository;
 
 /** 使用 PostgreSQL 行锁和条件更新实现挑战替换、过期、错误计数和一次性消费。 */
 @Repository
-public final class PostgresEmailChallengeStore implements EmailChallengeStore {
+public class PostgresEmailChallengeStore implements EmailChallengeStore {
 
 	private static final String FIND_LATEST_FOR_UPDATE_SQL = """
 		SELECT id, purpose, email_normalized, code_hash, expires_at, attempt_count,
@@ -32,39 +32,39 @@ public final class PostgresEmailChallengeStore implements EmailChallengeStore {
 		INSERT INTO email_challenges
 			(id, purpose, email_normalized, code_hash, expires_at, attempt_count,
 			 max_attempts, consumed_at, invalidated_at, invalidation_reason, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, CAST(? AS timestamptz), ?, ?, ?, ?, ?, CAST(? AS timestamptz))
 		""";
 
 	private static final String REPLACE_ACTIVE_SQL = """
 		UPDATE email_challenges
-		SET invalidated_at = ?, invalidation_reason = 'REPLACED'
+		SET invalidated_at = CAST(? AS timestamptz), invalidation_reason = 'REPLACED'
 		WHERE email_normalized = ? AND purpose = ?
 			AND consumed_at IS NULL AND invalidated_at IS NULL
 		""";
 
 	private static final String MARK_EXPIRED_SQL = """
 		UPDATE email_challenges
-		SET invalidated_at = ?, invalidation_reason = 'EXPIRED'
+		SET invalidated_at = CAST(? AS timestamptz), invalidation_reason = 'EXPIRED'
 		WHERE id = ? AND consumed_at IS NULL AND invalidated_at IS NULL
-			AND expires_at <= ?
+			AND expires_at <= CAST(? AS timestamptz)
 		""";
 
 	private static final String CONSUME_SQL = """
 		UPDATE email_challenges
-		SET consumed_at = ?
+		SET consumed_at = CAST(? AS timestamptz)
 		WHERE id = ? AND consumed_at IS NULL AND invalidated_at IS NULL
-			AND expires_at > ? AND attempt_count < max_attempts
+			AND expires_at > CAST(? AS timestamptz) AND attempt_count < max_attempts
 		""";
 
 	private static final String RECORD_FAILED_ATTEMPT_SQL = """
 		UPDATE email_challenges
 		SET attempt_count = attempt_count + 1,
 			invalidated_at = CASE
-				WHEN attempt_count + 1 >= max_attempts THEN ? ELSE NULL END,
+				WHEN attempt_count + 1 >= max_attempts THEN CAST(? AS timestamptz) ELSE NULL END,
 			invalidation_reason = CASE
 				WHEN attempt_count + 1 >= max_attempts THEN 'MAX_ATTEMPTS' ELSE NULL END
 		WHERE id = ? AND consumed_at IS NULL AND invalidated_at IS NULL
-			AND expires_at > ? AND attempt_count < max_attempts
+			AND expires_at > CAST(? AS timestamptz) AND attempt_count < max_attempts
 		""";
 
 	private final DSLContext dsl;

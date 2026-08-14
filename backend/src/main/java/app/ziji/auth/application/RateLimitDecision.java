@@ -11,7 +11,7 @@ public final class RateLimitDecision {
 		this.retryAfterSeconds = retryAfterSeconds;
 	}
 
-	public static RateLimitDecision allowed() {
+	public static RateLimitDecision permitted() {
 		return new RateLimitDecision(true, 0);
 	}
 

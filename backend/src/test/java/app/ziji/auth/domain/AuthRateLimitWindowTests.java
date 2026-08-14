@@ -15,7 +15,7 @@ class AuthRateLimitWindowTests {
 		Instant before = Instant.ofEpochSecond(59, 999_000_000);
 		Instant boundary = Instant.ofEpochSecond(60);
 
-		assertEquals(Instant.ZERO, window.windowStartedAt(before));
+		assertEquals(Instant.EPOCH, window.windowStartedAt(before));
 		assertEquals(boundary, window.windowStartedAt(boundary));
 		assertEquals(1, window.retryAfterSeconds(before));
 	}

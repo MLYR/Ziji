@@ -11,7 +11,7 @@ import org.springframework.stereotype.Service;
 
 /** 用户资料用例；只更新 users 设置列，不修改历史账务或认证敏感字段。 */
 @Service
-public final class UserProfileApplicationService implements UserProfileUseCase {
+public class UserProfileApplicationService implements UserProfileUseCase {
 
 	private final UserProfileStore store;
 	private final TransactionRunner transactionRunner;
