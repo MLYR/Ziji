@@ -1679,7 +1679,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         accountClass: { type: string, enum: [ASSET, LIABILITY, INVESTMENT] }
-        accountType: { type: string, enum: [BANK, WECHAT, ALIPAY, CASH, BROKERAGE, CREDIT_CARD, LOAN, OTHER] }
+        accountType: { type: string, enum: [BANK, WECHAT, ALIPAY, CASH, BROKERAGE, FUND, CREDIT_CARD, LOAN, CONSUMER_LOAN, OTHER] }
         name: { type: string, minLength: 1, maxLength: 100 }
         currency: { $ref: '#/components/schemas/Currency' }
         institution: { type: [string, 'null'], maxLength: 120 }
@@ -2144,7 +2144,7 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         accountClass: { type: string, enum: [ASSET, LIABILITY, INVESTMENT] }
-        accountType: { type: string, enum: [BANK, WECHAT, ALIPAY, CASH, BROKERAGE, CREDIT_CARD, LOAN, OTHER] }
+        accountType: { type: string, enum: [BANK, WECHAT, ALIPAY, CASH, BROKERAGE, FUND, CREDIT_CARD, LOAN, CONSUMER_LOAN, OTHER] }
         currency: { $ref: '#/components/schemas/Currency' }
         institution: { type: [string, 'null'] }
         status: { type: string, enum: [ACTIVE, ARCHIVED] }

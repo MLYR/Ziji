@@ -1,14 +1,16 @@
 package app.ziji.account.domain;
 
-/** V002 与 OpenAPI 当前冻结的账户存储类型；产品标签到机器编码的缺口由 CHG-ACC-001 冻结。 */
+/** 账户子类型机器编码；FUND 仅投资账户，CONSUMER_LOAN 仅负债账户，OTHER 不得代替这两类。 */
 public enum AccountType {
 	BANK,
 	WECHAT,
 	ALIPAY,
 	CASH,
 	BROKERAGE,
+	FUND,
 	CREDIT_CARD,
 	LOAN,
+	CONSUMER_LOAN,
 	OTHER;
 
 	/** 只允许任务冻结的 class/type 配对，拒绝跨类组合。 */
@@ -18,8 +20,8 @@ public enum AccountType {
 		}
 		return switch (accountClass) {
 			case ASSET -> this == BANK || this == WECHAT || this == ALIPAY || this == CASH || this == OTHER;
-			case INVESTMENT -> this == BROKERAGE || this == OTHER;
-			case LIABILITY -> this == CREDIT_CARD || this == LOAN || this == OTHER;
+			case INVESTMENT -> this == BROKERAGE || this == FUND || this == OTHER;
+			case LIABILITY -> this == CREDIT_CARD || this == LOAN || this == CONSUMER_LOAN || this == OTHER;
 		};
 	}
 }

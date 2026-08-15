@@ -1617,7 +1617,7 @@ export interface components {
             /** @enum {string} */
             accountClass: "ASSET" | "LIABILITY" | "INVESTMENT";
             /** @enum {string} */
-            accountType: "BANK" | "WECHAT" | "ALIPAY" | "CASH" | "BROKERAGE" | "CREDIT_CARD" | "LOAN" | "OTHER";
+            accountType: "BANK" | "WECHAT" | "ALIPAY" | "CASH" | "BROKERAGE" | "FUND" | "CREDIT_CARD" | "LOAN" | "CONSUMER_LOAN" | "OTHER";
             name: string;
             currency: components["schemas"]["Currency"];
             institution?: string | null;
@@ -2034,7 +2034,7 @@ export interface components {
             /** @enum {string} */
             accountClass: "ASSET" | "LIABILITY" | "INVESTMENT";
             /** @enum {string} */
-            accountType: "BANK" | "WECHAT" | "ALIPAY" | "CASH" | "BROKERAGE" | "CREDIT_CARD" | "LOAN" | "OTHER";
+            accountType: "BANK" | "WECHAT" | "ALIPAY" | "CASH" | "BROKERAGE" | "FUND" | "CREDIT_CARD" | "LOAN" | "CONSUMER_LOAN" | "OTHER";
             currency: components["schemas"]["Currency"];
             institution?: string | null;
             /** @enum {string} */

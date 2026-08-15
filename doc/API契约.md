@@ -344,6 +344,16 @@ V1 用户状态 `User.status` 固定为 `ACTIVE`、`LOCKED`、`CLOSING`、`CLOSE
 
 创建成功返回账户以及 `openingTransactionId`。没有期初余额时该字段为 null。
 
+`accountClass` 与 `accountType` 必须符合冻结矩阵：
+
+| accountClass | accountType |
+| --- | --- |
+| ASSET | BANK、WECHAT、ALIPAY、CASH、OTHER |
+| INVESTMENT | BROKERAGE、FUND、OTHER |
+| LIABILITY | CREDIT_CARD、LOAN、CONSUMER_LOAN、OTHER |
+
+基金账户使用 `FUND`，消费贷款使用 `CONSUMER_LOAN`。`OTHER` 只表示对应大类的其他账户，不得代替这两类。
+
 创建账户时服务端原子创建账户、创建者的 ACTIVE OWNER membership、`included=true/ratio=1.000000` 计入设置和所需账务科目。所有账户都通过 ACTIVE AccountMember 授权，创建者字段不构成权限捷径。
 
 余额响应：

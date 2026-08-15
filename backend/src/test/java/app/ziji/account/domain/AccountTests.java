@@ -23,8 +23,8 @@ class AccountTests {
 	private static final Instant CREATED_AT = Instant.parse("2026-08-15T01:02:03Z");
 	private static final Set<String> ALLOWED_PAIRS = Set.of(
 		"ASSET:BANK", "ASSET:WECHAT", "ASSET:ALIPAY", "ASSET:CASH", "ASSET:OTHER",
-		"INVESTMENT:BROKERAGE", "INVESTMENT:OTHER",
-		"LIABILITY:CREDIT_CARD", "LIABILITY:LOAN", "LIABILITY:OTHER");
+		"INVESTMENT:BROKERAGE", "INVESTMENT:FUND", "INVESTMENT:OTHER",
+		"LIABILITY:CREDIT_CARD", "LIABILITY:LOAN", "LIABILITY:CONSUMER_LOAN", "LIABILITY:OTHER");
 
 	@Test
 	void acceptsEveryLegalClassAndTypePair() {
@@ -40,6 +40,32 @@ class AccountTests {
 				assertEquals(accountType, account.accountType());
 			}
 		}
+	}
+
+	@Test
+	void acceptsFundAndConsumerLoanOnlyForTheirFrozenClasses() {
+		Account fund = Account.create(
+			ACCOUNT_ID, AccountClass.INVESTMENT, AccountType.FUND, "场外基金", null,
+			AccountCurrency.CNY, null, CREATED_BY, CREATED_AT);
+		Account consumerLoan = Account.create(
+			ACCOUNT_ID, AccountClass.LIABILITY, AccountType.CONSUMER_LOAN, "消费贷", "银行",
+			AccountCurrency.CNY, null, CREATED_BY, CREATED_AT);
+		assertEquals(AccountType.FUND, fund.accountType());
+		assertEquals(AccountClass.INVESTMENT, fund.accountClass());
+		assertEquals(AccountType.CONSUMER_LOAN, consumerLoan.accountType());
+		assertEquals(AccountClass.LIABILITY, consumerLoan.accountClass());
+		assertThrows(AccountDomainException.class, () -> Account.create(
+			ACCOUNT_ID, AccountClass.ASSET, AccountType.FUND, "非法基金", null,
+			AccountCurrency.CNY, null, CREATED_BY, CREATED_AT));
+		assertThrows(AccountDomainException.class, () -> Account.create(
+			ACCOUNT_ID, AccountClass.LIABILITY, AccountType.FUND, "非法基金", null,
+			AccountCurrency.CNY, null, CREATED_BY, CREATED_AT));
+		assertThrows(AccountDomainException.class, () -> Account.create(
+			ACCOUNT_ID, AccountClass.ASSET, AccountType.CONSUMER_LOAN, "非法消费贷", null,
+			AccountCurrency.CNY, null, CREATED_BY, CREATED_AT));
+		assertThrows(AccountDomainException.class, () -> Account.create(
+			ACCOUNT_ID, AccountClass.INVESTMENT, AccountType.CONSUMER_LOAN, "非法消费贷", null,
+			AccountCurrency.CNY, null, CREATED_BY, CREATED_AT));
 	}
 
 	@Test
