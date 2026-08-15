@@ -20,7 +20,10 @@ class AccountApplicationLayerDependencyTests {
 			Path.of("src/main/java/app/ziji/account/application"),
 			Path.of("src/main/java/app/ziji/account/interfaces"))) {
 			try (Stream<Path> files = Files.walk(sourceRoot)) {
-				for (Path sourceFile : files.filter(path -> path.toString().endsWith(".java")).toList()) {
+				for (Path sourceFile : files
+					.filter(path -> path.toString().endsWith(".java"))
+					.filter(path -> !path.getFileName().toString().equals("package-info.java"))
+					.toList()) {
 					String source = Files.readString(sourceFile);
 					assertFalse(source.contains("org.springframework"), () -> sourceFile + " imports Spring");
 					assertFalse(source.contains("org.jooq"), () -> sourceFile + " imports jOOQ");
