@@ -21,6 +21,7 @@ import app.ziji.auth.application.PasswordManagementApplicationService;
 import app.ziji.auth.application.SourceAddressResolver;
 import app.ziji.auth.application.VerificationCodeGenerator;
 import app.ziji.auth.domain.SourceAddress;
+import app.ziji.shared.application.IdempotencyAnonymousSubjectHasher;
 import app.ziji.shared.application.TransactionRunner;
 import app.ziji.user.application.UserCredentialLookupPort;
 import app.ziji.user.application.UserPasswordManagementPort;
@@ -58,6 +59,32 @@ class AuthSecurityConfiguration {
 				decode(previousKeyBase64, "上一版本 HMAC"));
 		}
 		return new AuthHmacKeyRing(current, previous, hmac.getPreviousKeyRetention());
+	}
+
+	@Bean
+	IdempotencyHmacKeyRing idempotencyHmacKeyRing(AuthSecurityProperties properties) {
+		AuthSecurityProperties.IdempotencyProperties idempotency = properties.getIdempotency();
+		AuthHmacKey current = new AuthHmacKey(
+			idempotency.getCurrentKeyVersion(), decode(idempotency.getCurrentKeyBase64(), "幂等 HMAC"));
+		AuthHmacKey previous = null;
+		String previousKeyVersion = idempotency.getPreviousKeyVersion();
+		String previousKeyBase64 = idempotency.getPreviousKeyBase64();
+		boolean previousVersionConfigured = configured(previousKeyVersion);
+		boolean previousKeyConfigured = configured(previousKeyBase64);
+		if (previousVersionConfigured != previousKeyConfigured) {
+			throw new AuthInfrastructureException("上一版本幂等 HMAC 的版本和密钥必须同时配置。");
+		}
+		if (previousVersionConfigured) {
+			previous = new AuthHmacKey(
+				parseVersion(previousKeyVersion, "上一版本幂等 HMAC"),
+				decode(previousKeyBase64, "上一版本幂等 HMAC"));
+		}
+		return new IdempotencyHmacKeyRing(current, previous, idempotency.getPreviousKeyRetention());
+	}
+
+	@Bean
+	IdempotencyAnonymousSubjectHasher idempotencyAnonymousSubjectHasher(IdempotencyHmacKeyRing keyRing) {
+		return new HmacIdempotencyAnonymousSubjectHasher(keyRing);
 	}
 
 	@Bean

@@ -58,16 +58,18 @@ source .env
 set +a
 ```
 
-认证密钥不提供仓库默认值。启动 `local` 后端前，在同一终端生成两把相互独立的本地临时 32 字节密钥；不要把命令输出提交到仓库，也不要在 HMAC 与 KEK 之间复用：
+认证密钥不提供仓库默认值。启动 `local` 后端前，在同一终端生成三把相互独立的本地临时 32 字节密钥；不要把命令输出提交到仓库，也不要在限流 HMAC、匿名幂等 HMAC 与 KEK 之间复用：
 
 ```bash
 export ZIJI_AUTH_HMAC_CURRENT_KEY_VERSION=2
 export ZIJI_AUTH_HMAC_CURRENT_KEY_BASE64="$(openssl rand -base64 32)"
+export ZIJI_AUTH_IDEMPOTENCY_CURRENT_KEY_VERSION=2
+export ZIJI_AUTH_IDEMPOTENCY_CURRENT_KEY_BASE64="$(openssl rand -base64 32)"
 export ZIJI_AUTH_ENVELOPE_KEK_VERSION=1
 export ZIJI_AUTH_ENVELOPE_KEK_BASE64="$(openssl rand -base64 32)"
 ```
 
-`ZIJI_AUTH_HMAC_PREVIOUS_KEY_VERSION` 与 `ZIJI_AUTH_HMAC_PREVIOUS_KEY_BASE64` 必须同时设置或同时留空；配置上一版本时，`ZIJI_AUTH_HMAC_PREVIOUS_KEY_RETENTION` 不得小于 `48h`。`ZIJI_AUTH_TRUSTED_PROXY_ADDRESSES` 缺失或为空表示不信任任何代理。测试 profile 中的固定 HMAC/KEK 只用于自动测试，不能用于 `local`、`staging` 或 `production`。
+`ZIJI_AUTH_HMAC_PREVIOUS_KEY_VERSION` 与 `ZIJI_AUTH_HMAC_PREVIOUS_KEY_BASE64` 必须同时设置或同时留空；配置上一版本时，`ZIJI_AUTH_HMAC_PREVIOUS_KEY_RETENTION` 不得小于 `48h`。匿名幂等的 `ZIJI_AUTH_IDEMPOTENCY_PREVIOUS_KEY_VERSION` 与 `ZIJI_AUTH_IDEMPOTENCY_PREVIOUS_KEY_BASE64` 同样必须成对设置，且 `ZIJI_AUTH_IDEMPOTENCY_PREVIOUS_KEY_RETENTION` 不得小于 `168h`。`ZIJI_AUTH_TRUSTED_PROXY_ADDRESSES` 缺失或为空表示不信任任何代理。测试 profile 中的固定 HMAC/KEK 只用于自动测试，不能用于 `local`、`staging` 或 `production`。
 
 Access Token 使用 RS256。启动本地会话实现前，生成至少 2048 位的临时 RSA 私钥与对应公钥，再将 PKCS#8 私钥和 X.509 公钥分别 Base64 为单行环境变量；`kid` 由部署受控分配。上一公钥与上一 `kid` 必须同时设置或同时留空，且 `ZIJI_AUTH_ACCESS_TOKEN_PREVIOUS_PUBLIC_KEY_RETENTION` 不得小于 `24h`。示例命令如下，生成结果与临时 PEM 文件都不得提交：
 

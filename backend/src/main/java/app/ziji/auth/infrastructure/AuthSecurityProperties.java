@@ -11,6 +11,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class AuthSecurityProperties {
 
 	private HmacProperties hmac = new HmacProperties();
+	private IdempotencyProperties idempotency = new IdempotencyProperties();
 	private EnvelopeProperties envelope = new EnvelopeProperties();
 	private AccessTokenProperties accessToken = new AccessTokenProperties();
 	private List<String> trustedProxyAddresses = new ArrayList<>();
@@ -21,6 +22,14 @@ public class AuthSecurityProperties {
 
 	public void setHmac(HmacProperties hmac) {
 		this.hmac = hmac;
+	}
+
+	public IdempotencyProperties getIdempotency() {
+		return idempotency;
+	}
+
+	public void setIdempotency(IdempotencyProperties idempotency) {
+		this.idempotency = idempotency;
 	}
 
 	public EnvelopeProperties getEnvelope() {
@@ -61,6 +70,55 @@ public class AuthSecurityProperties {
 		private String previousKeyBase64;
 		private String previousKeyVersion;
 		private Duration previousKeyRetention = Duration.ofHours(48);
+
+		public String getCurrentKeyBase64() {
+			return currentKeyBase64;
+		}
+
+		public void setCurrentKeyBase64(String currentKeyBase64) {
+			this.currentKeyBase64 = currentKeyBase64;
+		}
+
+		public int getCurrentKeyVersion() {
+			return currentKeyVersion;
+		}
+
+		public void setCurrentKeyVersion(int currentKeyVersion) {
+			this.currentKeyVersion = currentKeyVersion;
+		}
+
+		public String getPreviousKeyBase64() {
+			return previousKeyBase64;
+		}
+
+		public void setPreviousKeyBase64(String previousKeyBase64) {
+			this.previousKeyBase64 = previousKeyBase64;
+		}
+
+		public String getPreviousKeyVersion() {
+			return previousKeyVersion;
+		}
+
+		public void setPreviousKeyVersion(String previousKeyVersion) {
+			this.previousKeyVersion = previousKeyVersion;
+		}
+
+		public Duration getPreviousKeyRetention() {
+			return previousKeyRetention;
+		}
+
+		public void setPreviousKeyRetention(Duration previousKeyRetention) {
+			this.previousKeyRetention = previousKeyRetention;
+		}
+	}
+
+	/** 公开写接口匿名主体专用 HMAC；上一版本必须覆盖完整的 7 天重放保护期。 */
+	public static class IdempotencyProperties {
+		private String currentKeyBase64;
+		private int currentKeyVersion;
+		private String previousKeyBase64;
+		private String previousKeyVersion;
+		private Duration previousKeyRetention = Duration.ofDays(7);
 
 		public String getCurrentKeyBase64() {
 			return currentKeyBase64;
