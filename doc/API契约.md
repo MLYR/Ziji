@@ -212,6 +212,7 @@ GET /transactions?accountId=...&limit=50&cursor=opaque
 | 422 | BUSINESS_RULE_VIOLATION | 格式正确但违反领域规则 |
 | 422 | INSUFFICIENT_POSITION | 卖出数量超过持仓 |
 | 429 | RATE_LIMITED | 触发限流，返回 Retry-After |
+| 500 | INTERNAL_ERROR | 无法安全重放的历史幂等结果或未预期内部失败；不得重新执行业务，也不泄漏 SQL、堆栈或敏感输入 |
 | 502 | EXTERNAL_PROVIDER_ERROR | 外部服务失败 |
 | 503 | TEMPORARILY_UNAVAILABLE | 暂时不可用，可重试 |
 
@@ -250,11 +251,15 @@ GET /transactions?accountId=...&limit=50&cursor=opaque
 }
 ```
 
+注册成功响应返回安全 `UserEnvelope`、`ETag` 和 `Location: /api/v1/users/me`；同 Key 同 Hash 重放从安全资源引用重建同一版本的公开资料，无法精确重建时按 `500 INTERNAL_ERROR` fail closed。
+
 密码不写日志或审计 metadata。登录失败的 `LOCKED`、`CLOSED`、邮箱不存在、密码错误、损坏或不支持的 Hash 均返回 `401 INVALID_CREDENTIALS`，不得区分账号存在、状态、密码版本或内部错误。`ACTIVE`、`CLOSING` 可以完成凭据认证；`CLOSING` 下普通业务写入仍由后续用例单独限制。
 
 两个登录端点对所有语法合法请求在 PostgreSQL 固定窗口内计数：先 IP `10m/30`、`24h/300`，再 EMAIL `15m/10`、`24h/50`；成功、失败、状态不允许和已超限请求都计数。任一窗口超限返回 `429 RATE_LIMITED`，`Retry-After` 为所有超限窗口的最长剩余秒数。登录限流不使用 `deviceId`；`deviceName/deviceId` 是后续会话建立的输入，不能改变登录限流主体。BE-AUTH-003 只负责认证、限流和统一失败，稳定会话、Token、Cookie 与 Mobile 刷新凭据分别由 BE-AUTH-004/007 负责。
 
 `POST /auth/register` 与 `POST /auth/password-reset` 虽然未认证，仍必须携带 `Idempotency-Key`；它们使用 §2.4 的版本化匿名主体，而不是要求不存在的当前用户。两个端点都可能返回 `409 IDEMPOTENCY_KEY_REUSED` 或 `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`，后者带 `Retry-After: 5`；响应不得借幂等状态泄露邮箱是否存在。
+
+若同 Key 的历史幂等记录无法提供 V009 允许的安全重放引用，服务端必须 fail closed 返回 `500 INTERNAL_ERROR`，不得伪造成功、暴露内部状态或重新执行业务写入。
 
 发送注册或密码重置验证码请求使用同一 `EmailChallengeRequest`：`email` 必填，`deviceId` 可选，长度 1～200。`deviceId` 只是防滥用信号，不是可信身份凭据；缺失时服务端按来源 IP 和 `MISSING_DEVICE` 域标记计算设备限流摘要。来源 IP 默认取连接对端；只有受信反向代理已显式配置并覆盖客户端转发头时才接受代理地址，客户端自行传入的 `Forwarded`/`X-Forwarded-For` 不得改变限流主体。语法合法请求不因邮箱是否存在而返回不同结果。
 
@@ -285,7 +290,7 @@ Access Token 固定为至少 2048 位 RSA 签发的 RS256 JWT，header 必须为
 }
 ```
 
-Web 登录/刷新响应不在 JSON 中返回 refreshToken，而是设置 `Secure`、`HttpOnly`、`SameSite` Cookie；所有 Web 状态变更请求同时校验 CSRF Token。移动端在响应体返回刷新 Token并存入系统安全存储。两套 operationId 分离，底层复用同一认证服务。刷新 Token 正常轮换必须在同一数据库事务锁定当前 Token、消费旧 Token、插入新 Token、设置 `replacedById` 并更新 `lastSeenAt`；失败整体回滚且并发最多一个成功。已消费 Token 保留可识别状态，后续重用攻击撤销整个设备会话。
+Web 登录/刷新响应不在 JSON 中返回 refreshToken，而是同时设置以下 host-only Cookie（不设置 `Domain`）：`ziji_refresh` 固定为 `Secure`、`HttpOnly`、`SameSite=Strict`、`Path=/api/v1`；`ziji_csrf` 固定为 `Secure`、非 `HttpOnly`、`SameSite=Strict`、`Path=/api/v1`。CSRF Header 固定为 `X-CSRF-Token`，不得使用 Spring 默认 `X-XSRF-TOKEN`。两枚 Cookie 的 `Max-Age` 不得超过稳定会话剩余绝对期限；本机 Web 会话退出、撤销全部设备、刷新 Token 无效或确认重用时以相同属性和 `Max-Age=0` 清理。Web 登录和刷新均返回 `Cache-Control: no-store`。携带 `ziji_refresh` 的不安全 Web 请求必须校验 CSRF；无该 Cookie 的 Mobile Bearer 请求不要求 CSRF。移动端在响应体返回刷新 Token 且绝不设置上述认证或 CSRF Cookie，并存入系统安全存储。两套 operationId 分离，底层复用同一认证服务。刷新 Token 正常轮换必须在同一数据库事务锁定当前 Token、消费旧 Token、插入新 Token、设置 `replacedById` 并更新 `lastSeenAt`；失败整体回滚且并发最多一个成功。已消费 Token 保留可识别状态，后续重用攻击撤销整个设备会话。
 
 ### 4.2 当前用户
 
@@ -296,6 +301,8 @@ Web 登录/刷新响应不在 JSON 中返回 refreshToken，而是设置 `Secure
 | POST | `/users/me/password-change` | 使用当前密码修改密码 | AUTH-003 |
 
 V1 用户状态 `User.status` 固定为 `ACTIVE`、`LOCKED`、`CLOSING`、`CLOSED`。其中 `LOCKED` 表示认证安全锁定，不表示账户归档或注销完成。
+
+已登录改密缺少有效 Bearer 会话时返回 `401 AUTHENTICATION_REQUIRED`；当前密码错误、密码 Hash 不支持或用户状态不允许改密时返回 `401 INVALID_CREDENTIALS`。两类响应均不得泄露用户状态、Hash 版本或内部失败原因，并设置 `Cache-Control: no-store`。
 
 修改用户使用 `If-Match`。修改时区或基准币种不能改写历史原币账务。
 

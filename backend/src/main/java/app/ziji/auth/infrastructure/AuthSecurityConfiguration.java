@@ -9,6 +9,8 @@ import java.util.stream.Collectors;
 import app.ziji.auth.application.AuthRateLimitStore;
 import app.ziji.auth.application.ChallengeCodeHasher;
 import app.ziji.auth.application.DeviceSessionApplicationService;
+import app.ziji.auth.application.DeviceSessionQueryService;
+import app.ziji.auth.application.DeviceSessionReadPort;
 import app.ziji.auth.application.DeviceSessionStore;
 import app.ziji.auth.application.EmailChallengeApplicationService;
 import app.ziji.auth.application.EmailChallengeOutbox;
@@ -172,6 +174,12 @@ class AuthSecurityConfiguration {
 		// Spring 装配留在 infrastructure，application 用例保持对框架无依赖。
 		return new DeviceSessionApplicationService(
 			transactionRunner, sessionStore, accessTokenService, secureRandom, clock);
+	}
+
+	@Bean
+	DeviceSessionQueryService deviceSessionQueryService(DeviceSessionReadPort sessionReadPort, Clock clock) {
+		// 读取端口和写端口分离，普通 Access Token 验证不会意外更新会话活动时间。
+		return new DeviceSessionQueryService(sessionReadPort, clock);
 	}
 
 	@Bean

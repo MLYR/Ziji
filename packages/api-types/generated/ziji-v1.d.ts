@@ -2988,6 +2988,7 @@ export interface components {
         UserCreated: {
             headers: {
                 ETag?: string;
+                Location?: string;
                 [name: string]: unknown;
             };
             content: {
@@ -3004,7 +3005,18 @@ export interface components {
                 "application/json": components["schemas"]["UserEnvelope"];
             };
         };
-        /** @description Web 会话已创建；刷新 Token 仅在 HttpOnly Cookie 中返回 */
+        /** @description 服务端无法安全完成或重放请求；不得暴露 SQL、堆栈、密码、验证码或 Token；仅已确认无业务事实的 FAILED_RETRYABLE 返回 Retry-After 5 秒 */
+        InternalError: {
+            headers: {
+                /** @description 仅 FAILED_RETRYABLE 返回的固定重试等待秒数 */
+                "Retry-After"?: 5;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description Web 会话已创建；响应以重复 Set-Cookie 设置 host-only 的 ziji_refresh（Secure、HttpOnly、SameSite=Strict、Path=/api/v1）与 ziji_csrf（Secure、非 HttpOnly、SameSite=Strict、Path=/api/v1），并设置 Cache-Control: no-store；刷新 Token 不出现在 JSON */
         WebSessionCreated: {
             headers: {
                 [name: string]: unknown;
@@ -3013,7 +3025,7 @@ export interface components {
                 "application/json": components["schemas"]["WebSessionEnvelope"];
             };
         };
-        /** @description Web 会话已轮换 */
+        /** @description Web 会话已轮换；响应以重复 Set-Cookie 轮换同属性的 ziji_refresh 与 ziji_csrf，并设置 Cache-Control: no-store；刷新 Token 不出现在 JSON */
         WebSessionRefreshed: {
             headers: {
                 [name: string]: unknown;
@@ -3699,6 +3711,7 @@ export interface operations {
             201: components["responses"]["UserCreated"];
             400: components["responses"]["BadRequest"];
             409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
         };
     };
     createWebSession: {
@@ -3711,6 +3724,7 @@ export interface operations {
         requestBody: components["requestBodies"]["LoginRequest"];
         responses: {
             201: components["responses"]["WebSessionCreated"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["InvalidCredentials"];
             429: components["responses"]["RateLimited"];
         };
@@ -3741,6 +3755,7 @@ export interface operations {
         requestBody: components["requestBodies"]["LoginRequest"];
         responses: {
             201: components["responses"]["MobileSessionCreated"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["InvalidCredentials"];
             429: components["responses"]["RateLimited"];
         };
@@ -3759,6 +3774,7 @@ export interface operations {
         };
         responses: {
             200: components["responses"]["MobileSessionRefreshed"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
         };
     };
@@ -3792,6 +3808,7 @@ export interface operations {
         requestBody: components["requestBodies"]["EmailChallengeRequest"];
         responses: {
             202: components["responses"]["ChallengeAccepted"];
+            400: components["responses"]["BadRequest"];
             429: components["responses"]["RateLimited"];
         };
     };
@@ -3820,6 +3837,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
         };
     };
     getCurrentUser: {
@@ -3879,7 +3897,15 @@ export interface operations {
                 content?: never;
             };
             400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthenticated"];
+            /** @description 未认证或会话失效返回 AUTHENTICATION_REQUIRED；当前密码错误、Hash 不支持或用户状态不允许改密返回 INVALID_CREDENTIALS；两者均不得泄露内部状态 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             403: components["responses"]["Forbidden"];
         };
     };
@@ -3896,6 +3922,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["SessionListOk"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
         };
@@ -3938,6 +3965,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

@@ -12,6 +12,7 @@ import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 
 @RestControllerAdvice
 class ApiExceptionHandler {
@@ -26,15 +27,21 @@ class ApiExceptionHandler {
 				"code", error.getCode() == null ? "INVALID" : error.getCode(),
 				"message", error.getDefaultMessage() == null ? "字段值无效" : error.getDefaultMessage()))
 			.toList();
-		ProblemDetail problem = base(HttpStatus.BAD_REQUEST, "请求校验失败", "VALIDATION_FAILED", request);
+		ProblemDetail problem = base(HttpStatus.BAD_REQUEST, "请求校验失败", "VALIDATION_ERROR", request);
 		problem.setProperty("fieldErrors", errors);
 		return problem;
 	}
 
+	@ExceptionHandler(HttpMessageNotReadableException.class)
+	ProblemDetail unreadableRequest(HttpMessageNotReadableException exception, HttpServletRequest request) {
+		// JSON 格式或类型错误在控制器前短路，不能误映射为内部异常或回显原始载荷。
+		return base(HttpStatus.BAD_REQUEST, "请求校验失败", "VALIDATION_ERROR", request);
+	}
+
 	@ExceptionHandler(Exception.class)
 	ProblemDetail unexpected(Exception exception, HttpServletRequest request) {
-		// 不向客户端泄漏异常、SQL 或内部类型；详细堆栈仍由服务端日志记录。
-		LOGGER.error("Unhandled request failure", exception);
+		// 不记录异常消息或堆栈，避免驱动异常把密码、Token、摘要或 SQL 参数写入日志。
+		LOGGER.error("Unhandled request failure type={}", exception.getClass().getSimpleName());
 		return base(HttpStatus.INTERNAL_SERVER_ERROR, "服务器处理请求失败", "INTERNAL_ERROR", request);
 	}
 

@@ -1,56 +1,167 @@
 package app.ziji.auth.infrastructure;
 
-import java.io.IOException;
-import java.net.URI;
+import java.util.Set;
+import java.time.Clock;
+import java.util.Enumeration;
+import java.util.function.Supplier;
 
+import app.ziji.auth.application.AccessTokenService;
+import app.ziji.auth.application.DeviceSessionQueryService;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ProblemDetail;
+import org.springframework.security.web.csrf.CsrfToken;
+import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
+import org.springframework.security.web.csrf.CsrfTokenRequestHandler;
 import tools.jackson.databind.ObjectMapper;
 
 @Configuration(proxyBeanMethods = false)
 class SecurityConfiguration {
 
 	@Bean
-	SecurityFilterChain securityFilterChain(HttpSecurity http, ObjectMapper objectMapper) throws Exception {
-		// 用户资料只允许已认证主体访问，其余尚未实现路由继续 fail closed。
+	CookieCsrfTokenRepository csrfTokenRepository() {
+		CookieCsrfTokenRepository repository = CookieCsrfTokenRepository.withHttpOnlyFalse();
+		repository.setCookieName("ziji_csrf");
+		repository.setHeaderName("X-CSRF-Token");
+		repository.setCookiePath("/api/v1");
+		repository.setCookieCustomizer(cookie -> cookie.secure(true).sameSite("Strict"));
+		return repository;
+	}
+
+	@Bean
+	AccessTokenAuthenticationFilter accessTokenAuthenticationFilter(
+		AccessTokenService accessTokenService,
+		DeviceSessionQueryService sessionQueryService,
+		Clock clock,
+		ObjectMapper objectMapper) {
+		return new AccessTokenAuthenticationFilter(accessTokenService, sessionQueryService, clock, objectMapper);
+	}
+
+	@Bean
+	SecurityFilterChain securityFilterChain(
+		HttpSecurity http,
+		ObjectMapper objectMapper,
+		AccessTokenAuthenticationFilter accessTokenAuthenticationFilter,
+		CookieCsrfTokenRepository csrfTokenRepository) throws Exception {
+		// 13 个已实现 operation 精确开放或认证；其余路径继续 fail closed。
 		http.authorizeHttpRequests(authorize -> authorize
 			.requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
-			.requestMatchers("/api/v1/users/me").authenticated()
+			.requestMatchers(HttpMethod.POST,
+				"/api/v1/auth/registration-challenges", "/api/v1/auth/register",
+				"/api/v1/auth/web/sessions", "/api/v1/auth/web/sessions/refresh",
+				"/api/v1/auth/mobile/sessions", "/api/v1/auth/mobile/sessions/refresh",
+				"/api/v1/auth/password-reset-challenges", "/api/v1/auth/password-reset").permitAll()
+			.requestMatchers(HttpMethod.GET, "/api/v1/users/me", "/api/v1/users/me/sessions").authenticated()
+			.requestMatchers(HttpMethod.PATCH, "/api/v1/users/me").authenticated()
+			.requestMatchers(HttpMethod.POST, "/api/v1/users/me/password-change").authenticated()
+			.requestMatchers(HttpMethod.DELETE,
+				"/api/v1/auth/sessions/current", "/api/v1/users/me/sessions", "/api/v1/users/me/sessions/*").authenticated()
 			.anyRequest().denyAll());
-		// Web 使用 Cookie CSRF token；正式会话仍必须采用 HttpOnly refresh cookie。
-		http.csrf(csrf -> csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()));
-		http.exceptionHandling(exceptions -> exceptions.authenticationEntryPoint((request, response, exception) -> {
-			if ("/api/v1/users/me".equals(request.getRequestURI())) {
-				writeAuthenticationProblem(request, response, objectMapper);
-				return;
-			}
-			// 未实现路由继续返回 403，避免认证规则变化扩大其他路径的访问面。
-			response.sendError(HttpStatus.FORBIDDEN.value());
-		}));
+		// 只有携带 Web refresh Cookie 的不安全请求走 CSRF；Mobile Bearer 请求不会被错误拦截。
+		CsrfTokenRequestHandler csrfRequestHandler = new StrictCsrfTokenRequestHandler();
+		http.csrf(csrf -> csrf.csrfTokenRepository(csrfTokenRepository)
+			.csrfTokenRequestHandler(csrfRequestHandler)
+			.requireCsrfProtectionMatcher(request -> unsafeWithRefreshCookie(request)));
+		http.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
+		http.addFilterBefore(accessTokenAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+		http.exceptionHandling(exceptions -> exceptions
+			.authenticationEntryPoint((request, response, exception) -> {
+				if (isImplementedAuthenticatedOperation(request)) {
+					AuthenticationProblemResponses.authenticationRequired(request, response, objectMapper);
+					return;
+				}
+				// 未实现或未知路由保持原有 403 deny-all，不能因认证功能扩大路由面。
+				response.sendError(403);
+			})
+			.accessDeniedHandler((request, response, exception) ->
+				AuthenticationProblemResponses.permissionDenied(request, response, objectMapper)));
 		return http.build();
 	}
 
-	private void writeAuthenticationProblem(
-		HttpServletRequest request,
-		HttpServletResponse response,
-		ObjectMapper objectMapper) throws IOException {
-		ProblemDetail problem = ProblemDetail.forStatusAndDetail(
-			HttpStatus.UNAUTHORIZED, "需要认证");
-		problem.setType(URI.create("https://ziji.app/problems/authentication-required"));
-		problem.setTitle(HttpStatus.UNAUTHORIZED.getReasonPhrase());
-		problem.setInstance(URI.create(request.getRequestURI()));
-		problem.setProperty("code", "AUTHENTICATION_REQUIRED");
-		String requestId = response.getHeader("X-Request-ID");
-		problem.setProperty("requestId", requestId == null ? "unknown" : requestId);
-		response.setStatus(HttpStatus.UNAUTHORIZED.value());
-		response.setContentType("application/problem+json");
-		response.getWriter().write(objectMapper.writeValueAsString(problem));
+	private static boolean unsafeWithRefreshCookie(jakarta.servlet.http.HttpServletRequest request) {
+		if (Set.of("GET", "HEAD", "TRACE", "OPTIONS").contains(request.getMethod())) {
+			return false;
+		}
+		jakarta.servlet.http.Cookie[] cookies = request.getCookies();
+		if (cookies == null) {
+			return false;
+		}
+		for (jakarta.servlet.http.Cookie cookie : cookies) {
+			if ("ziji_refresh".equals(cookie.getName())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean isImplementedAuthenticatedOperation(HttpServletRequest request) {
+		String method = request.getMethod();
+		String path = request.getRequestURI();
+		if ("GET".equals(method)) {
+			return "/api/v1/users/me".equals(path) || "/api/v1/users/me/sessions".equals(path);
+		}
+		if ("PATCH".equals(method)) {
+			return "/api/v1/users/me".equals(path);
+		}
+		if ("POST".equals(method)) {
+			return "/api/v1/users/me/password-change".equals(path);
+		}
+		if (!"DELETE".equals(method)) {
+			return false;
+		}
+		return "/api/v1/auth/sessions/current".equals(path)
+			|| "/api/v1/users/me/sessions".equals(path)
+			|| path.matches("/api/v1/users/me/sessions/[^/]+");
+	}
+
+	/** 仅接受唯一的 CSRF Cookie 与 Header，重复传输值不能由 Servlet 容器任选一个继续校验。 */
+	private static final class StrictCsrfTokenRequestHandler implements CsrfTokenRequestHandler {
+
+		private final CsrfTokenRequestAttributeHandler delegate = new CsrfTokenRequestAttributeHandler();
+
+		@Override
+		public void handle(
+			HttpServletRequest request,
+			jakarta.servlet.http.HttpServletResponse response,
+			Supplier<CsrfToken> csrfToken) {
+			delegate.handle(request, response, csrfToken);
+		}
+
+		@Override
+		public String resolveCsrfTokenValue(HttpServletRequest request, CsrfToken csrfToken) {
+			Enumeration<String> headers = request.getHeaders(csrfToken.getHeaderName());
+			if (headers == null || !headers.hasMoreElements()) {
+				return null;
+			}
+			String value = headers.nextElement();
+			if (headers.hasMoreElements() || value == null || !hasSingleCsrfCookie(request)) {
+				return null;
+			}
+			return value;
+		}
+
+		private static boolean hasSingleCsrfCookie(HttpServletRequest request) {
+			Cookie[] cookies = request.getCookies();
+			if (cookies == null) {
+				return false;
+			}
+			boolean found = false;
+			for (Cookie cookie : cookies) {
+				if ("ziji_csrf".equals(cookie.getName())) {
+					if (found || cookie.getValue() == null || cookie.getValue().isBlank()) {
+						return false;
+					}
+					found = true;
+				}
+			}
+			return found;
+		}
 	}
 }

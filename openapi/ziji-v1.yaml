@@ -54,6 +54,7 @@ paths:
         '201': { $ref: '#/components/responses/UserCreated' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /auth/web/sessions:
     post:
       tags: [Auth]
@@ -64,6 +65,7 @@ paths:
       requestBody: { $ref: '#/components/requestBodies/LoginRequest' }
       responses:
         '201': { $ref: '#/components/responses/WebSessionCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/InvalidCredentials' }
         '429': { $ref: '#/components/responses/RateLimited' }
   /auth/web/sessions/refresh:
@@ -89,6 +91,7 @@ paths:
       requestBody: { $ref: '#/components/requestBodies/LoginRequest' }
       responses:
         '201': { $ref: '#/components/responses/MobileSessionCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/InvalidCredentials' }
         '429': { $ref: '#/components/responses/RateLimited' }
   /auth/mobile/sessions/refresh:
@@ -104,6 +107,7 @@ paths:
           application/json: { schema: { $ref: '#/components/schemas/MobileRefreshRequest' } }
       responses:
         '200': { $ref: '#/components/responses/MobileSessionRefreshed' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
   /auth/sessions/current:
     delete:
@@ -125,6 +129,7 @@ paths:
       requestBody: { $ref: '#/components/requestBodies/EmailChallengeRequest' }
       responses:
         '202': { $ref: '#/components/responses/ChallengeAccepted' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/RateLimited' }
   /auth/password-reset:
     post:
@@ -142,6 +147,7 @@ paths:
         '204': { description: 密码已重置 }
         '400': { $ref: '#/components/responses/BadRequest' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /users/me:
     get:
       tags: [Users]
@@ -180,7 +186,7 @@ paths:
       responses:
         '204': { description: 密码已修改 }
         '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '401': { description: 未认证或会话失效返回 AUTHENTICATION_REQUIRED；当前密码错误、Hash 不支持或用户状态不允许改密返回 INVALID_CREDENTIALS；两者均不得泄露内部状态, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
   /users/me/sessions:
     get:
@@ -191,6 +197,7 @@ paths:
       parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
       responses:
         '200': { $ref: '#/components/responses/SessionListOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
     delete:
@@ -211,6 +218,7 @@ paths:
       x-requirement-ids: [AUTH-004]
       responses:
         '204': { description: 设备会话已撤销 }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -3092,10 +3100,11 @@ components:
                 required: [expiresIn]
                 properties: { expiresIn: { type: integer, minimum: 1 } }
               meta: { $ref: '#/components/schemas/ResponseMeta' }
-    UserCreated: { description: 用户已创建, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/UserEnvelope' } } } }
+    UserCreated: { description: 用户已创建, headers: { ETag: { schema: { type: string } }, Location: { schema: { type: string, pattern: '^/(?!/)[^\\s]*$' } } }, content: { application/json: { schema: { $ref: '#/components/schemas/UserEnvelope' } } } }
     UserOk: { description: 用户资料, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/UserEnvelope' } } } }
-    WebSessionCreated: { description: Web 会话已创建；刷新 Token 仅在 HttpOnly Cookie 中返回, content: { application/json: { schema: { $ref: '#/components/schemas/WebSessionEnvelope' } } } }
-    WebSessionRefreshed: { description: Web 会话已轮换, content: { application/json: { schema: { $ref: '#/components/schemas/WebSessionEnvelope' } } } }
+    InternalError: { description: 服务端无法安全完成或重放请求；不得暴露 SQL、堆栈、密码、验证码或 Token；仅已确认无业务事实的 FAILED_RETRYABLE 返回 Retry-After 5 秒, headers: { Retry-After: { description: 仅 FAILED_RETRYABLE 返回的固定重试等待秒数, schema: { type: integer, const: 5 } } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    WebSessionCreated: { description: "Web 会话已创建；响应以重复 Set-Cookie 设置 host-only 的 ziji_refresh（Secure、HttpOnly、SameSite=Strict、Path=/api/v1）与 ziji_csrf（Secure、非 HttpOnly、SameSite=Strict、Path=/api/v1），并设置 Cache-Control: no-store；刷新 Token 不出现在 JSON", content: { application/json: { schema: { $ref: '#/components/schemas/WebSessionEnvelope' } } } }
+    WebSessionRefreshed: { description: "Web 会话已轮换；响应以重复 Set-Cookie 轮换同属性的 ziji_refresh 与 ziji_csrf，并设置 Cache-Control: no-store；刷新 Token 不出现在 JSON", content: { application/json: { schema: { $ref: '#/components/schemas/WebSessionEnvelope' } } } }
     MobileSessionCreated: { description: Mobile 会话与刷新 Token 已创建, content: { application/json: { schema: { $ref: '#/components/schemas/MobileSessionEnvelope' } } } }
     MobileSessionRefreshed: { description: Mobile 刷新 Token 已轮换, content: { application/json: { schema: { $ref: '#/components/schemas/MobileSessionEnvelope' } } } }
     SessionListOk: { description: 设备会话列表, content: { application/json: { schema: { $ref: '#/components/schemas/SessionListEnvelope' } } } }

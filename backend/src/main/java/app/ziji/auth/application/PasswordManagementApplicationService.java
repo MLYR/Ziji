@@ -46,7 +46,8 @@ public final class PasswordManagementApplicationService {
 
 	public void resetPassword(PasswordResetCommand command) {
 		ResetDetails details = validateReset(command);
-		boolean valid = transactionRunner.required(() -> {
+		boolean valid = transactionRunner.nested(() -> {
+			// 在统一幂等事务内时使用 savepoint，业务失败不遗留挑战消费、用户或会话事实。
 			// 无效挑战正常返回，让错误次数/过期状态提交后再抛统一校验异常。
 			if (challengeService.verify(new EmailChallengeVerificationCommand(
 				EmailChallengePurpose.RESET_PASSWORD, details.emailNormalized(), details.verificationCode()))

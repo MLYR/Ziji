@@ -4,9 +4,14 @@ import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -14,18 +19,30 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
+import app.ziji.auth.application.AccessTokenService;
 import app.ziji.auth.application.AuthRateLimitSubjects;
+import app.ziji.auth.application.DeviceSessionQueryService;
+import app.ziji.auth.application.DeviceSessionReadPort;
 import app.ziji.auth.application.EncryptedCodeEnvelope;
+import app.ziji.auth.application.IssuedAccessToken;
 import app.ziji.auth.application.PasswordHasher;
+import app.ziji.auth.application.VerifiedAccessToken;
 import app.ziji.auth.domain.EmailChallengePurpose;
 import app.ziji.auth.domain.RateLimitDimension;
 import app.ziji.auth.domain.SourceAddress;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.security.core.context.SecurityContextHolder;
+import tools.jackson.databind.ObjectMapper;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -201,6 +218,66 @@ class AuthSecurityTests {
 
 		assertEquals(3, hmacKey.secretCopy()[0]);
 		assertEquals(3, envelopeKey.secretCopy()[0]);
+	}
+
+	@Test
+	void bearerFilterDoesNotRewriteAuthenticatedDownstreamRuntimeException() {
+		Instant now = Instant.parse("2026-08-15T00:00:00Z");
+		UUID userId = UUID.randomUUID();
+		UUID sessionId = UUID.randomUUID();
+		VerifiedAccessToken verified = new VerifiedAccessToken(
+			userId, sessionId, UUID.randomUUID(), now, now, now.plusSeconds(60), "test-key");
+		AccessTokenAuthenticationFilter filter = new AccessTokenAuthenticationFilter(
+			accessTokenService(verified),
+			new DeviceSessionQueryService(currentSessionReadPort(), Clock.fixed(now, ZoneOffset.UTC)),
+			Clock.fixed(now, ZoneOffset.UTC),
+			new ObjectMapper());
+		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/users/me");
+		request.addHeader(HttpHeaders.AUTHORIZATION, "Bearer valid-token");
+		MockHttpServletResponse response = new MockHttpServletResponse();
+		IllegalStateException downstream = new IllegalStateException("downstream failure");
+
+		// 下游异常必须保持原类型向 MVC 传播，同时过滤器仍需清理认证上下文。
+		IllegalStateException thrown = assertThrows(IllegalStateException.class,
+			() -> filter.doFilter(request, response, (ignoredRequest, ignoredResponse) -> {
+				throw downstream;
+			}));
+
+		assertSame(downstream, thrown);
+		assertNull(SecurityContextHolder.getContext().getAuthentication());
+	}
+
+	private static AccessTokenService accessTokenService(VerifiedAccessToken verified) {
+		return new AccessTokenService() {
+			@Override
+			public IssuedAccessToken issue(UUID userId, UUID sessionId, Instant issuedAt, Instant sessionExpiresAt) {
+				throw new UnsupportedOperationException();
+			}
+
+			@Override
+			public VerifiedAccessToken verify(String encodedToken, Instant now) {
+				return verified;
+			}
+		};
+	}
+
+	private static DeviceSessionReadPort currentSessionReadPort() {
+		return new DeviceSessionReadPort() {
+			@Override
+			public boolean hasCurrentSession(UUID userId, UUID sessionId, Instant now) {
+				return true;
+			}
+
+			@Override
+			public Optional<Position> findPositionForUser(UUID userId, UUID sessionId) {
+				throw new UnsupportedOperationException();
+			}
+
+			@Override
+			public List<Snapshot> listForUser(UUID userId, Position after, int maximumRecords) {
+				throw new UnsupportedOperationException();
+			}
+		};
 	}
 
 	private static String decrypt(

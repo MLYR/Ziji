@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import app.ziji.auth.application.DeviceSessionReadPort;
 import app.ziji.auth.application.DeviceSessionStore;
 import app.ziji.auth.application.RefreshTokenSessionState;
 import app.ziji.auth.domain.DeviceSession;
@@ -21,7 +22,7 @@ import org.springframework.stereotype.Repository;
 
 /** PostgreSQL 会话适配器；所有状态转换依赖同一 REQUIRED 事务和行锁，而非 JVM 内存锁。 */
 @Repository
-public class PostgresDeviceSessionStore implements DeviceSessionStore {
+public class PostgresDeviceSessionStore implements DeviceSessionStore, DeviceSessionReadPort {
 
 	private static final String FIND_ACTIVE_SESSION_IDS_FOR_UPDATE_SQL = """
 		SELECT id
@@ -121,6 +122,35 @@ public class PostgresDeviceSessionStore implements DeviceSessionStore {
 		WHERE id = ? AND revoked_at IS NULL
 			AND expires_at > CAST(? AS timestamptz)
 			AND last_seen_at <= CAST(? AS timestamptz)
+		""";
+
+	private static final String HAS_CURRENT_SESSION_SQL = """
+		SELECT 1
+		FROM user_sessions
+		WHERE id = ? AND user_id = ? AND security_baseline_version = 1
+			AND revoked_at IS NULL AND expires_at > CAST(? AS timestamptz)
+		""";
+
+	private static final String FIND_POSITION_FOR_USER_SQL = """
+		SELECT id, issued_at
+		FROM user_sessions
+		WHERE id = ? AND user_id = ?
+		""";
+
+	private static final String LIST_USER_SESSIONS_FIRST_SQL = """
+		SELECT id, device_id, device_name, issued_at, expires_at, revoked_at, last_seen_at
+		FROM user_sessions
+		WHERE user_id = ?
+		ORDER BY issued_at DESC, id DESC
+		LIMIT ?
+		""";
+
+	private static final String LIST_USER_SESSIONS_AFTER_SQL = """
+		SELECT id, device_id, device_name, issued_at, expires_at, revoked_at, last_seen_at
+		FROM user_sessions
+		WHERE user_id = ? AND (issued_at, id) < (CAST(? AS timestamptz), ?)
+		ORDER BY issued_at DESC, id DESC
+		LIMIT ?
 		""";
 
 	private final DSLContext dsl;
@@ -254,6 +284,49 @@ public class PostgresDeviceSessionStore implements DeviceSessionStore {
 			return dsl.execute(UPDATE_LAST_SEEN_SQL, utc(lastSeenAt), sessionId, utc(lastSeenAt), utc(lastSeenAt)) == 1;
 		} catch (DataAccessException exception) {
 			throw new AuthInfrastructureException("会话最后活动时间更新失败。", exception);
+		}
+	}
+
+	@Override
+	public boolean hasCurrentSession(UUID userId, UUID sessionId, Instant now) {
+		try {
+			// 普通 Bearer 请求只读验证当前会话，绝不更新 lastSeenAt 或获取行锁。
+			return dsl.resultQuery(HAS_CURRENT_SESSION_SQL, sessionId, userId, utc(now)).fetchOne() != null;
+		} catch (DataAccessException exception) {
+			throw new AuthInfrastructureException("当前会话校验失败。", exception);
+		}
+	}
+
+	@Override
+	public Optional<Position> findPositionForUser(UUID userId, UUID sessionId) {
+		try {
+			Record record = dsl.resultQuery(FIND_POSITION_FOR_USER_SQL, sessionId, userId).fetchOne();
+			return record == null ? Optional.empty() : Optional.of(new Position(
+				record.get("id", UUID.class), instant(record.get("issued_at", OffsetDateTime.class))));
+		} catch (DataAccessException exception) {
+			throw new AuthInfrastructureException("设备会话游标查询失败。", exception);
+		}
+	}
+
+	@Override
+	public List<Snapshot> listForUser(UUID userId, Position after, int maximumRecords) {
+		try {
+			List<Record> records = after == null
+				? dsl.resultQuery(LIST_USER_SESSIONS_FIRST_SQL, userId, maximumRecords).fetch()
+				: dsl.resultQuery(LIST_USER_SESSIONS_AFTER_SQL, userId, utc(after.issuedAt()), after.sessionId(), maximumRecords)
+					.fetch();
+			List<Snapshot> sessions = new ArrayList<>(records.size());
+			for (Record record : records) {
+				sessions.add(new Snapshot(
+					record.get("id", UUID.class), record.get("device_name", String.class),
+					record.get("device_id", String.class), instant(record.get("issued_at", OffsetDateTime.class)),
+					instant(record.get("expires_at", OffsetDateTime.class)),
+					instantNullable(record.get("revoked_at", OffsetDateTime.class)),
+					instant(record.get("last_seen_at", OffsetDateTime.class))));
+			}
+			return List.copyOf(sessions);
+		} catch (DataAccessException exception) {
+			throw new AuthInfrastructureException("设备会话列表查询失败。", exception);
 		}
 	}
 

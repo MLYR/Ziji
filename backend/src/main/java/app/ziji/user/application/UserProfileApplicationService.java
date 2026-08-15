@@ -11,7 +11,7 @@ import org.springframework.stereotype.Service;
 
 /** 用户资料用例；只更新 users 设置列，不修改历史账务或认证敏感字段。 */
 @Service
-public class UserProfileApplicationService implements UserProfileUseCase {
+public class UserProfileApplicationService implements UserProfileUseCase, UserRegistrationReplayPort {
 
 	private final UserProfileStore store;
 	private final TransactionRunner transactionRunner;
@@ -32,6 +32,18 @@ public class UserProfileApplicationService implements UserProfileUseCase {
 			throw new UserAuthenticationException();
 		}
 		return store.findById(userId).orElseThrow(UserAuthenticationException::new);
+	}
+
+	@Override
+	public java.util.Optional<RegisteredUserProfile> findRegisteredUserForReplay(UUID userId) {
+		if (userId == null) {
+			return java.util.Optional.empty();
+		}
+		// 只映射公开 UserEnvelope 字段，注册幂等重放不会接触密码 Hash 或内部持久化类型。
+		return store.findById(userId).map(profile -> new RegisteredUserProfile(
+			profile.id(), profile.email(), profile.nickname(), profile.timezone().getId(),
+			profile.baseCurrency().name(), profile.locale(), profile.amountFormat().name(),
+			profile.status().name(), profile.version()));
 	}
 
 	@Override

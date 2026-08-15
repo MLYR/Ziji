@@ -57,7 +57,8 @@ public final class EmailRegistrationApplicationService {
 	public EmailRegistrationResult register(EmailRegistrationCommand command) {
 		RegistrationDetails details = validate(command);
 
-		Optional<EmailRegistrationResult> result = transactionRunner.required(() -> {
+		Optional<EmailRegistrationResult> result = transactionRunner.nested(() -> {
+			// 在统一幂等事务内时使用 savepoint，唯一冲突会回滚已消费挑战而让 FAILED_FINAL 安全提交。
 			// 验证码服务的 REQUIRED 调用加入当前最外层事务；用户写入失败会一并回滚消费。
 			if (challengeService.verify(new EmailChallengeVerificationCommand(
 				EmailChallengePurpose.REGISTER, details.displayEmail(), command.verificationCode()))
