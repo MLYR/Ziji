@@ -61,5 +61,8 @@ public final class PostingService {
 		if (entry.amount().amount().signum() <= 0) {
 			throw new LedgerDomainException("分录金额必须大于零。");
 		}
+		if (!entry.amount().hasPostingPrecision()) {
+			throw new LedgerDomainException("分录金额超出币种入账精度，必须先明确使用 HALF_UP 舍入。");
+		}
 	}
 }

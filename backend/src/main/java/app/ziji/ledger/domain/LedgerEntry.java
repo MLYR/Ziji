@@ -37,6 +37,10 @@ public final class LedgerEntry {
 		if (amount.amount().signum() <= 0) {
 			throw new LedgerDomainException("分录金额必须大于零。");
 		}
+		// V007 在数据库边界拒绝超出币种最小单位的金额，领域边界提前拒绝同一事实。
+		if (!amount.hasPostingPrecision()) {
+			throw new LedgerDomainException("分录金额超出币种入账精度，必须先明确使用 HALF_UP 舍入。");
+		}
 		if (businessDate == null) {
 			throw new LedgerDomainException("分录业务日期不能为空。");
 		}

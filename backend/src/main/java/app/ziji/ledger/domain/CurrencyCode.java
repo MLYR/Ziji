@@ -8,6 +8,14 @@ public enum CurrencyCode {
 	JPY,
 	EUR;
 
+	/** V007 currency_minor_units 的领域镜像：JPY 为 0 位，其余 V1 币种为 2 位。 */
+	public int minorUnits() {
+		return switch (this) {
+			case CNY, USD, HKD, EUR -> 2;
+			case JPY -> 0;
+		};
+	}
+
 	/** 将外部代码严格转换为 V1 允许的币种，不做静默降级。 */
 	public static CurrencyCode fromCode(String code) {
 		if (code == null || code.isBlank()) {

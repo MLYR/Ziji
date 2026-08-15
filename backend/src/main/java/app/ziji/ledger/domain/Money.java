@@ -1,6 +1,7 @@
 package app.ziji.ledger.domain;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 
 /** 带币种的精确金额值对象；不在构造或加法时静默舍入，分录方向由 LedgerEntry 负责表达。 */
 public final class Money implements Comparable<Money> {
@@ -25,6 +26,20 @@ public final class Money implements Comparable<Money> {
 
 	public CurrencyCode currency() {
 		return currency;
+	}
+
+	public boolean hasPostingPrecision() {
+		try {
+			amount.setScale(currency.minorUnits(), RoundingMode.UNNECESSARY);
+			return true;
+		} catch (ArithmeticException exception) {
+			return false;
+		}
+	}
+
+	/** 唯一的显式入账归一化入口；普通构造和加法不会自动舍入。 */
+	public Money roundHalfUpForPosting() {
+		return new Money(amount.setScale(currency.minorUnits(), RoundingMode.HALF_UP), currency);
 	}
 
 	/** 仅允许同币种相加，保留 BigDecimal 的原始精度。 */

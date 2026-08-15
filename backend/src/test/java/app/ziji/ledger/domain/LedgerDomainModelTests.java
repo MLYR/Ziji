@@ -39,6 +39,32 @@ class LedgerDomainModelTests {
 	}
 
 	@Test
+	void moneyExposesFrozenMinorUnitsWithoutFloatingPointEntry() {
+		assertEquals(2, CurrencyCode.CNY.minorUnits());
+		assertEquals(2, CurrencyCode.USD.minorUnits());
+		assertEquals(2, CurrencyCode.HKD.minorUnits());
+		assertEquals(2, CurrencyCode.EUR.minorUnits());
+		assertEquals(0, CurrencyCode.JPY.minorUnits());
+		assertFalse(Arrays.stream(Money.class.getDeclaredMethods())
+			.anyMatch(LedgerDomainModelTests::hasPrimitiveFloatingPointParameter));
+	}
+
+	@Test
+	void moneyKeepsRawPrecisionUntilExplicitHalfUpPostingRounding() {
+		Money cny = money("1.005", CurrencyCode.CNY);
+		Money jpy = money("1.5", CurrencyCode.JPY);
+
+		assertFalse(cny.hasPostingPrecision());
+		assertFalse(jpy.hasPostingPrecision());
+		assertEquals(new BigDecimal("1.005"), cny.amount());
+		assertEquals(new BigDecimal("1.01"), cny.roundHalfUpForPosting().amount());
+		assertEquals(new BigDecimal("1.00"), money("1.004", CurrencyCode.CNY).roundHalfUpForPosting().amount());
+		assertEquals(new BigDecimal("1"), money("1.4", CurrencyCode.JPY).roundHalfUpForPosting().amount());
+		assertEquals(new BigDecimal("2"), jpy.roundHalfUpForPosting().amount());
+		assertEquals(new BigDecimal("1.005"), cny.add(money("0", CurrencyCode.CNY)).amount());
+	}
+
+	@Test
 	void ledgerEntryRejectsNonPositiveAmountNullIdsAndInvalidSequence() {
 		UUID transactionId = UUID.randomUUID();
 		Money zero = money("0", CurrencyCode.CNY);
@@ -59,6 +85,22 @@ class LedgerDomainModelTests {
 		assertThrows(LedgerDomainException.class,
 			() -> entry(UUID.randomUUID(), transactionId, LEDGER_ACCOUNT_ID, 1,
 				LedgerDirection.DEBIT, negative, BUSINESS_DATE));
+	}
+
+	@Test
+	void ledgerEntryRejectsUnnormalizedCurrencyPrecisionAndAcceptsExplicitHalfUpResult() {
+		UUID transactionId = UUID.randomUUID();
+
+		assertThrows(LedgerDomainException.class,
+			() -> entry(UUID.randomUUID(), transactionId, LEDGER_ACCOUNT_ID, 1,
+				LedgerDirection.DEBIT, money("10.001", CurrencyCode.CNY), BUSINESS_DATE));
+		assertDoesNotThrow(() -> entry(UUID.randomUUID(), transactionId, LEDGER_ACCOUNT_ID, 1,
+			LedgerDirection.DEBIT, money("10.001", CurrencyCode.CNY).roundHalfUpForPosting(), BUSINESS_DATE));
+		assertThrows(LedgerDomainException.class,
+			() -> entry(UUID.randomUUID(), transactionId, LEDGER_ACCOUNT_ID, 1,
+				LedgerDirection.DEBIT, money("10.1", CurrencyCode.JPY), BUSINESS_DATE));
+		assertDoesNotThrow(() -> entry(UUID.randomUUID(), transactionId, LEDGER_ACCOUNT_ID, 1,
+			LedgerDirection.DEBIT, money("10.1", CurrencyCode.JPY).roundHalfUpForPosting(), BUSINESS_DATE));
 	}
 
 	@Test
@@ -201,15 +243,15 @@ class LedgerDomainModelTests {
 	@Test
 	void postingServiceAcceptsEachBalancedCurrencyIndependently() {
 		UUID transactionId = UUID.randomUUID();
-		Transaction transaction = draft(transactionId, List.of(
-			entry(UUID.randomUUID(), transactionId, LEDGER_ACCOUNT_ID, 1, LedgerDirection.DEBIT,
-				money("10.00", CurrencyCode.CNY), BUSINESS_DATE),
-			entry(UUID.randomUUID(), transactionId, LEDGER_ACCOUNT_ID, 2, LedgerDirection.CREDIT,
-				money("10.00", CurrencyCode.CNY), BUSINESS_DATE),
-			entry(UUID.randomUUID(), transactionId, LEDGER_ACCOUNT_ID, 3, LedgerDirection.DEBIT,
-				money("5.00", CurrencyCode.USD), BUSINESS_DATE),
-			entry(UUID.randomUUID(), transactionId, LEDGER_ACCOUNT_ID, 4, LedgerDirection.CREDIT,
-				money("5.00", CurrencyCode.USD), BUSINESS_DATE)));
+		List<LedgerEntry> entries = new ArrayList<>();
+		int sequenceNo = 1;
+		for (CurrencyCode currency : CurrencyCode.values()) {
+			entries.add(entry(UUID.randomUUID(), transactionId, LEDGER_ACCOUNT_ID, sequenceNo++,
+				LedgerDirection.DEBIT, money(currency == CurrencyCode.JPY ? "5" : "5.00", currency), BUSINESS_DATE));
+			entries.add(entry(UUID.randomUUID(), transactionId, LEDGER_ACCOUNT_ID, sequenceNo++,
+				LedgerDirection.CREDIT, money(currency == CurrencyCode.JPY ? "5" : "5.00", currency), BUSINESS_DATE));
+		}
+		Transaction transaction = draft(transactionId, entries);
 
 		assertDoesNotThrow(() -> new PostingService().validate(transaction));
 	}
@@ -259,6 +301,13 @@ class LedgerDomainModelTests {
 	private static boolean hasPrimitiveFloatingPointParameter(Constructor<?> constructor) {
 		return Arrays.stream(constructor.getParameterTypes())
 			.anyMatch(type -> type == double.class || type == float.class);
+	}
+
+	private static boolean hasPrimitiveFloatingPointParameter(java.lang.reflect.Method method) {
+		return Arrays.stream(method.getParameterTypes())
+			.anyMatch(type -> type == double.class || type == float.class)
+			|| method.getReturnType() == double.class
+			|| method.getReturnType() == float.class;
 	}
 
 	private static Money money(String value, CurrencyCode currency) {
