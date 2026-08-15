@@ -13,7 +13,7 @@ import app.ziji.user.application.UserCredentialLookupPort;
 import app.ziji.user.application.UserCredentialStatus;
 
 /**
- * 邮箱密码凭据认证用例；只负责凭据校验、登录限流和统一失败语义，不创建任何会话、Token、Cookie 或审计事实。
+ * 邮箱密码凭据认证用例；负责凭据校验、登录限流和统一失败语义，并为登录编排提供事务内会话创建入口。
  *
  * <p>固定处理顺序：先做请求格式校验（不进入限流和 Argon2），再在 REQUIRED 事务内消费四个登录限流桶；
  * 限流拒绝时事务先提交计数，再由应用层抛出带最长 Retry-After 的异常。通过限流后才查询凭据，
@@ -29,6 +29,7 @@ public final class PasswordLoginApplicationService {
 	private final AuthRateLimitStore rateLimitStore;
 	private final UserCredentialLookupPort credentialLookupPort;
 	private final PasswordHasher passwordHasher;
+	private final DeviceSessionApplicationService deviceSessionService;
 	/** 进程生命周期内只生成一次的 dummy Argon2id 编码，用于不存在或不支持账号的等时校验。 */
 	private final String loginTimingDummyHash;
 
@@ -37,10 +38,20 @@ public final class PasswordLoginApplicationService {
 		AuthRateLimitStore rateLimitStore,
 		UserCredentialLookupPort credentialLookupPort,
 		PasswordHasher passwordHasher) {
+		this(transactionRunner, rateLimitStore, credentialLookupPort, passwordHasher, null);
+	}
+
+	public PasswordLoginApplicationService(
+		TransactionRunner transactionRunner,
+		AuthRateLimitStore rateLimitStore,
+		UserCredentialLookupPort credentialLookupPort,
+		PasswordHasher passwordHasher,
+		DeviceSessionApplicationService deviceSessionService) {
 		this.transactionRunner = require(transactionRunner, "事务入口");
 		this.rateLimitStore = require(rateLimitStore, "登录限流存储");
 		this.credentialLookupPort = require(credentialLookupPort, "凭据查询端口");
 		this.passwordHasher = require(passwordHasher, "密码 Hash 服务");
+		this.deviceSessionService = deviceSessionService;
 		this.loginTimingDummyHash = generateLoginTimingDummyHash(passwordHasher);
 	}
 
@@ -48,30 +59,61 @@ public final class PasswordLoginApplicationService {
 		EmailAddress email = validate(command);
 		String normalizedEmail = email.value();
 
-		// 登录限流必须在 REQUIRED 事务内完成；拒绝时事务正常返回以提交全部桶计数，再由应用层抛出。
-		RateLimitDecision decision = transactionRunner.required(() ->
-			rateLimitStore.consumeLogin(normalizedEmail, command.sourceAddress(), command.now()));
-		if (!decision.allowed()) {
-			throw new LoginRateLimitedException(decision.retryAfterSeconds());
+		consumeLoginRateLimit(command, normalizedEmail);
+
+		// 通过限流后，users 行锁、凭据校验和认证结果提交处于同一最外层事务。
+		return transactionRunner.required(() -> authenticateWithinTransaction(command, normalizedEmail));
+	}
+
+	/**
+	 * 登录成功后在同一最外层事务创建设备会话；调用方不得先调用 login() 再另起会话事务。
+	 */
+	public SessionTokenResult loginAndCreateSession(
+		PasswordLoginCommand command,
+		String deviceName,
+		String deviceId) {
+		EmailAddress email = validate(command);
+		String normalizedEmail = email.value();
+		consumeLoginRateLimit(command, normalizedEmail);
+		if (deviceSessionService == null) {
+			throw new AuthDomainException("登录会话服务未配置。");
 		}
 
-		Optional<UserCredential> credential = credentialLookupPort.findByNormalizedEmail(normalizedEmail);
+		return transactionRunner.required(() -> {
+			PasswordLoginResult authenticated = authenticateWithinTransaction(command, normalizedEmail);
+			return deviceSessionService.createForAuthenticatedUserWithinCurrentTransaction(
+				new CreateDeviceSessionCommand(authenticated.userId(), deviceName, deviceId));
+		});
+	}
+
+	private PasswordLoginResult authenticateWithinTransaction(
+		PasswordLoginCommand command,
+		String normalizedEmail) {
+		Optional<UserCredential> credential = credentialLookupPort.findByNormalizedEmailForUpdate(normalizedEmail);
 		boolean userExists = credential.isPresent();
 
-		// 选择本次唯一的校验目标：存在且支持的账号校验存储 Hash，其余（不存在、版本不支持、格式损坏）校验 dummy Hash。
+		// 每次请求只选择一个校验目标：未知、损坏或不支持 Hash 的账号统一使用生命周期 dummy。
 		String targetHash = (userExists && passwordHasher.supports(
 			credential.get().passwordHashVersion(), credential.get().passwordHash()))
 			? credential.get().passwordHash()
 			: loginTimingDummyHash;
 		boolean passwordMatches = matchesOnce(command.password(), targetHash);
 
-		// 已存在用户无论状态都执行了一次密码校验，这里再合并状态资格与密码结果。
+		// ACTIVE/CLOSING 之外的状态与密码错误共享同一失败结果。
 		boolean authenticatable = userExists && AUTHENTICATABLE_STATUSES.contains(credential.get().status());
 		if (!authenticatable || !passwordMatches) {
 			throw new InvalidCredentialsException();
 		}
-
 		return new PasswordLoginResult(credential.get().userId(), credential.get().status());
+	}
+
+	private void consumeLoginRateLimit(PasswordLoginCommand command, String normalizedEmail) {
+		// 限流事务独立提交；后续认证或会话失败不能回滚请求计数。
+		RateLimitDecision decision = transactionRunner.required(() ->
+			rateLimitStore.consumeLogin(normalizedEmail, command.sourceAddress(), command.now()));
+		if (!decision.allowed()) {
+			throw new LoginRateLimitedException(decision.retryAfterSeconds());
+		}
 	}
 
 	private static EmailAddress validate(PasswordLoginCommand command) {

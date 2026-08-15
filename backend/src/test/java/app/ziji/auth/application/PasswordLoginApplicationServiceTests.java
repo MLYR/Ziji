@@ -309,6 +309,12 @@ class PasswordLoginApplicationServiceTests {
 			calls++;
 			return Optional.ofNullable(byEmail.get(emailNormalized));
 		}
+
+		@Override
+		public Optional<UserCredential> findByNormalizedEmailForUpdate(String emailNormalized) {
+			calls++;
+			return Optional.ofNullable(byEmail.get(emailNormalized));
+		}
 	}
 
 	private static final class FakePasswordHasher implements PasswordHasher {

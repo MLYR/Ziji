@@ -17,11 +17,13 @@ import app.ziji.auth.application.EmailRegistrationApplicationService;
 import app.ziji.auth.application.EnvelopeEncryptor;
 import app.ziji.auth.application.PasswordHasher;
 import app.ziji.auth.application.PasswordLoginApplicationService;
+import app.ziji.auth.application.PasswordManagementApplicationService;
 import app.ziji.auth.application.SourceAddressResolver;
 import app.ziji.auth.application.VerificationCodeGenerator;
 import app.ziji.auth.domain.SourceAddress;
 import app.ziji.shared.application.TransactionRunner;
 import app.ziji.user.application.UserCredentialLookupPort;
+import app.ziji.user.application.UserPasswordManagementPort;
 import app.ziji.user.application.UserRegistrationPort;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -126,10 +128,11 @@ class AuthSecurityConfiguration {
 		TransactionRunner transactionRunner,
 		AuthRateLimitStore rateLimitStore,
 		UserCredentialLookupPort credentialLookupPort,
-		PasswordHasher passwordHasher) {
+		PasswordHasher passwordHasher,
+		DeviceSessionApplicationService deviceSessionService) {
 		// Spring 装配留在 infrastructure，application 用例保持对框架无依赖。
 		return new PasswordLoginApplicationService(
-			transactionRunner, rateLimitStore, credentialLookupPort, passwordHasher);
+			transactionRunner, rateLimitStore, credentialLookupPort, passwordHasher, deviceSessionService);
 	}
 
 	@Bean
@@ -142,6 +145,19 @@ class AuthSecurityConfiguration {
 		// Spring 装配留在 infrastructure，application 用例保持对框架无依赖。
 		return new DeviceSessionApplicationService(
 			transactionRunner, sessionStore, accessTokenService, secureRandom, clock);
+	}
+
+	@Bean
+	PasswordManagementApplicationService passwordManagementApplicationService(
+		TransactionRunner transactionRunner,
+		EmailChallengeApplicationService challengeService,
+		PasswordHasher passwordHasher,
+		UserPasswordManagementPort userPasswordPort,
+		DeviceSessionApplicationService deviceSessionService,
+		Clock clock) {
+		// Spring 装配留在 infrastructure，密码事务顺序和安全语义保持在 application。
+		return new PasswordManagementApplicationService(
+			transactionRunner, challengeService, passwordHasher, userPasswordPort, deviceSessionService, clock);
 	}
 
 	private static boolean configured(String value) {

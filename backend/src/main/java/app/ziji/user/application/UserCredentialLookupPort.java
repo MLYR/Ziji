@@ -9,4 +9,7 @@ import java.util.Optional;
 public interface UserCredentialLookupPort {
 
 	Optional<UserCredential> findByNormalizedEmail(String emailNormalized);
+
+	/** 登录会话事务必须先锁定 users 行，避免密码重置提交后继续使用旧凭据创建会话。 */
+	Optional<UserCredential> findByNormalizedEmailForUpdate(String emailNormalized);
 }

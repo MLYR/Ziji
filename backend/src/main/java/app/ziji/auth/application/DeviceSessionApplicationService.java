@@ -54,25 +54,33 @@ public final class DeviceSessionApplicationService {
 
 	public SessionTokenResult createForAuthenticatedUser(CreateDeviceSessionCommand command) {
 		SessionInput input = validateCreate(command);
+		return transactionRunner.required(() -> createForAuthenticatedUserWithinCurrentTransaction(input));
+	}
+
+	/**
+	 * 在已经锁定 users 的最外层登录事务中创建会话；不自行开启事务，保证登录凭据与会话写入原子提交。
+	 */
+	SessionTokenResult createForAuthenticatedUserWithinCurrentTransaction(CreateDeviceSessionCommand command) {
+		return createForAuthenticatedUserWithinCurrentTransaction(validateCreate(command));
+	}
+
+	private SessionTokenResult createForAuthenticatedUserWithinCurrentTransaction(SessionInput input) {
 		Instant now = clock.instant();
+		// 固定 users → user_sessions → session_refresh_tokens 锁序；同一非空 deviceId 先锁旧会话及其 Token。
+		if (input.deviceId() != null) {
+			sessionStore.revokeActiveSessionForReplacement(input.userId(), input.deviceId().value(), now);
+		}
+		DeviceSession session = DeviceSession.create(nextUuid(), input.userId(), input.deviceId(), input.deviceName(), now);
+		RefreshToken refreshToken = RefreshToken.generate(secureRandom);
+		StoredRefreshToken storedToken = StoredRefreshToken.issue(
+			nextUuid(), session.id(), RefreshTokenHash.from(refreshToken), now, session.expiresAt());
 
-		return transactionRunner.required(() -> {
-			// 同一非空 deviceId 必须先锁定并撤销旧活动会话及当前 Token，避免跨实例并发保留两个活动会话。
-			if (input.deviceId() != null) {
-				sessionStore.revokeActiveSessionForReplacement(input.userId(), input.deviceId().value(), now);
-			}
-			DeviceSession session = DeviceSession.create(nextUuid(), input.userId(), input.deviceId(), input.deviceName(), now);
-			RefreshToken refreshToken = RefreshToken.generate(secureRandom);
-			StoredRefreshToken storedToken = StoredRefreshToken.issue(
-				nextUuid(), session.id(), RefreshTokenHash.from(refreshToken), now, session.expiresAt());
-
-			// 会话、唯一的当前刷新凭据与 Access Token 签发同处最外层事务；任一步失败都回滚旧会话替换。
-			sessionStore.insertSession(session);
-			sessionStore.insertRefreshToken(storedToken);
-			IssuedAccessToken accessToken = accessTokenService.issue(
-				session.userId(), session.id(), now, session.expiresAt());
-			return result(session, accessToken, refreshToken);
-		});
+		// 会话、唯一的当前刷新凭据与 Access Token 签发同处最外层事务；任一失败均回滚全部写入。
+		sessionStore.insertSession(session);
+		sessionStore.insertRefreshToken(storedToken);
+		IssuedAccessToken accessToken = accessTokenService.issue(
+			session.userId(), session.id(), now, session.expiresAt());
+		return result(session, accessToken, refreshToken);
 	}
 
 	public SessionTokenResult rotate(RotateRefreshTokenCommand command) {
@@ -150,6 +158,17 @@ public final class DeviceSessionApplicationService {
 
 	/** 按数据库锁定顺序撤销当前用户的所有未撤销会话及其当前 Refresh Token。 */
 	public SessionRevocationResult revokeAllDevices(UUID authenticatedUserId) {
+		return revokeAllDevices(authenticatedUserId, SessionRevocationReason.ALL_DEVICES);
+	}
+
+	/** 密码重置成功后复用同一 session→Token 锁序撤销全部会话。 */
+	public SessionRevocationResult revokeAllDevicesForPasswordReset(UUID authenticatedUserId) {
+		return revokeAllDevices(authenticatedUserId, SessionRevocationReason.PASSWORD_RESET);
+	}
+
+	private SessionRevocationResult revokeAllDevices(
+		UUID authenticatedUserId,
+		SessionRevocationReason requestedReason) {
 		Instant now = clock.instant();
 		return transactionRunner.required(() -> {
 			if (authenticatedUserId == null) {
@@ -158,7 +177,7 @@ public final class DeviceSessionApplicationService {
 			int revokedCount = 0;
 			for (DeviceSession session : sessionStore.findActiveSessionsForUserForUpdate(authenticatedUserId)) {
 				if (sessionStore.revokeSession(
-					session.id(), now, effectiveReason(session, SessionRevocationReason.ALL_DEVICES))) {
+					session.id(), now, effectiveReason(session, requestedReason))) {
 					sessionStore.revokeCurrentRefreshTokens(session.id(), now);
 					revokedCount++;
 				}

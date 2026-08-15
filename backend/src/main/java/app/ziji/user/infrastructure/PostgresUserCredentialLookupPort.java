@@ -25,6 +25,13 @@ public class PostgresUserCredentialLookupPort implements UserCredentialLookupPor
 		WHERE email_normalized = ?
 		""";
 
+	private static final String SELECT_FOR_UPDATE_SQL = """
+		SELECT id, password_hash, password_hash_version, status
+		FROM users
+		WHERE email_normalized = ?
+		FOR UPDATE
+		""";
+
 	private final DSLContext dsl;
 
 	public PostgresUserCredentialLookupPort(DSLContext dsl) {
@@ -36,11 +43,20 @@ public class PostgresUserCredentialLookupPort implements UserCredentialLookupPor
 
 	@Override
 	public Optional<UserCredential> findByNormalizedEmail(String emailNormalized) {
+		return find(emailNormalized, SELECT_SQL);
+	}
+
+	@Override
+	public Optional<UserCredential> findByNormalizedEmailForUpdate(String emailNormalized) {
+		return find(emailNormalized, SELECT_FOR_UPDATE_SQL);
+	}
+
+	private Optional<UserCredential> find(String emailNormalized, String sql) {
 		if (emailNormalized == null || emailNormalized.isBlank()) {
 			throw new UserPersistenceException(new IllegalArgumentException("凭据查询邮箱不能为空。"));
 		}
 		try {
-			Record record = dsl.resultQuery(SELECT_SQL, emailNormalized).fetchOne();
+			Record record = dsl.resultQuery(sql, emailNormalized).fetchOne();
 			return record == null ? Optional.empty() : Optional.of(toCredential(record));
 		} catch (DataAccessException exception) {
 			throw new UserPersistenceException(exception);
