@@ -118,6 +118,10 @@ frame("ZIJI-IDEMPOTENCY-REQUEST-V1")
 
 V1 客户端最大重试窗口为 24 小时，幂等记录最短保留 7 天。`expires_at` 是最早清理候选时间和重放保护下限，不是业务资源失效时间；到期且未被交易或同步操作引用的终态记录才可删除。清理后相同 Key 视为新请求，客户端不得依赖旧响应重放。
 
+LiquidityHold 的四个公开 operation 继续复用上述统一幂等服务。创建、修订和释放的 request Hash 必须包含路由实际解析后的 `accountId`，修订/释放还必须包含实际 `holdId`；请求体按类型化载荷规范化，修订和释放把 `If-Match` 放入 Hash，创建使用显式的 If-Match 缺失标记。格式校验、未认证、权限失败和资源不可见在幂等服务之前结束，不创建幂等记录。
+
+公共人工 API 不接收 `source`。服务端为这三个写 operation 固定写入 `MANUAL`，客户端不能伪造 `IMPORT` 或 `SYSTEM`；后两者只保留给未来受控的内部导入或系统任务。API 的 `reason` 逐字映射数据库 `liquidity_holds.note`。修订没有独立持久化的 `revisionReason` 字段，因此公共修订载荷不接收该字段；修订理由使用新版本的 `reason`/`note`，并由追加式审计 action `LIQUIDITY_HOLD_REVISED` 表示修订行为，禁止接收后静默丢弃。
+
 ### 2.5 乐观锁
 
 可修改资源响应包含 `version`，并返回：
@@ -126,8 +130,7 @@ V1 客户端最大重试窗口为 24 小时，幂等记录最短保留 7 天。`
 ETag: "7"
 ```
 
-更新时必须携带 `If-Match: "7"`。版本不一致返回 `409 VERSION_CONFLICT`，响应通过有界的版本冲突字段指向当前可见资源；不得直接携带当前资源对象。
-缺失或格式不是双引号包围的正整数时按 `400 VALIDATION_ERROR` 处理；格式正确但版本已过期或不一致时返回 `409 VERSION_CONFLICT`。
+更新时必须携带强 `If-Match: "7"`。其唯一合法形态是双引号包围的正整数；缺失、重复 header、弱 ETag（`W/`）、`*`、未加双引号、零、负数、非数字或溢出（超出服务端整数范围）均按 `400 VALIDATION_ERROR` 处理。格式正确但版本已过期或不一致时返回 `409 VERSION_CONFLICT`。修订和释放都必须执行这一校验，不能用最后写入覆盖冲突。
 
 `VERSION_CONFLICT` 的 Problem Details 必须包含有界的 `versionConflict`，且只包含以下字段：
 
@@ -143,6 +146,8 @@ ETag: "7"
 - `limit` 默认 50，最大 200
 - 默认排序必须稳定，并包含 ID 作为最终排序键
 - 客户端不得解析游标内容
+
+`GET /accounts/{accountId}/liquidity-holds` 返回完整修订历史，而不是每条根链只返回当前版本；结果包含 `PENDING`、`ACTIVE`、`RELEASED`、`SUPERSEDED` 和 `EXPIRED`。固定排序为 `created_at DESC, id DESC`。cursor 是服务端生成并认证的不透明 keyset 游标，绑定实际 `accountId`、全部过滤条件、排序定义和 API 主版本；篡改、边界错误、排序不匹配或条件不匹配均返回 `400 VALIDATION_ERROR`，错误内容不得包含 SQL、表名或资源内部信息。
 
 示例：
 
@@ -387,7 +392,35 @@ availableBalance = ledgerBalance - unavailableAmount
 
 没有有效流动性占用时 `unavailableAmount=0`。若占用金额超过账面余额，返回负数 availableBalance 和 `liquidityStatus=HOLDS_EXCEED_BALANCE`，不得静默截断为 0。
 
-修改已生效的 LiquidityHold 时必须携带 `If-Match`，服务端在同一事务关闭旧记录并创建修正版；释放只设置 `releasedAt`。新增、修正和释放都不产生 LedgerEntry，并保留操作者、时间、来源及版本关系。
+修订或释放当前未结束且尚未逻辑过期的 LiquidityHold 必须携带 `If-Match`。修订在同一事务关闭旧记录并创建修正版；释放同时写入 `releasedAt`、`endedAt` 和 `endReason=RELEASED`。新增、修订和释放都不产生 LedgerEntry，并保留操作者、时间、来源及版本关系。
+
+LiquidityHold 的公共机器字段和数据库事实映射如下：
+
+| API 字段 | 数据库事实 | 规则 |
+| --- | --- | --- |
+| `type` | `hold_type` | `FROZEN`、`IN_TRANSIT`、`RESERVED`；创建和修订均必填，修订允许改变类型 |
+| `amount` / `currency` | `amount` / `currency` | 金额为十进制字符串，币种必须匹配账户 |
+| `reason` | `note` | 创建/修订请求必填；响应可为 null 以容纳内部历史记录 |
+| `source` | `source` | 响应返回；公共人工写入固定为 `MANUAL` |
+| `supersedesId` | `previous_revision_id` | 当前版本关闭并替代的上一版本 ID |
+| `createdBy`、`createdAt`、`updatedAt` | `created_by`、`created_at`、`updated_at` | 只读审计字段，响应返回 |
+| `releasedAt`、`endedAt`、`endReason` | `released_at`、`ended_at`、`end_reason` | 只读生命周期事实，响应返回；`endReason` 为 `RELEASED`、`SUPERSEDED` 或 `EXPIRED` |
+
+生命周期按每次请求的 `asOf` 时点计算，不把“存在当前修订”误当作“当前时点有效”：
+
+```text
+effective_at <= asOf
+AND (ended_at IS NULL OR ended_at > asOf)
+AND (expires_at IS NULL OR expires_at > asOf)
+```
+
+状态映射固定为：`PENDING` 表示 `effectiveAt > asOf` 且尚未终止；`ACTIVE` 表示已生效且满足上述有效条件；`RELEASED`、`SUPERSEDED` 分别由 `endReason` 映射；`EXPIRED` 表示已写入 `endReason=EXPIRED`，或尚未最终化但 `expiresAt <= asOf`。到达 `expiresAt` 即逻辑过期，查询和任何写入前置校验都必须先按时点判断。过期最终化写入 `endedAt=expiresAt`、`endReason=EXPIRED` 并递增版本；最终化尚未运行时，不能释放或修订该记录。
+
+自动过期使用现有 PostgreSQL advisory-lock 调度机制执行任务 `LIQUIDITY_HOLD_EXPIRY_FINALIZER`；任务按可重试批次扫描到期且未结束版本，幂等地物化过期事实并写入审计。手工释放/修订与最终化在同一事务按当前版本串行化：先成功关闭当前版本的一方获胜；另一方使用旧 ETag 返回 `VERSION_CONFLICT`，重新读取后发现已过期则返回 `BUSINESS_RULE_VIOLATION`。本任务不新增调度器、迁移或任务实现；若 BE-ACC-006 需要扩展现有调度架构，必须另登记任务后实施。
+
+权限和不可枚举语义固定为：OWNER、EDITOR、VIEWER 的 ACTIVE membership 均可查询；OWNER、EDITOR 可创建、修订和释放；VIEWER 写入返回 `403 PERMISSION_DENIED`。LEFT、REMOVED、已结束 membership 周期和无关用户不能访问，账户不存在、账户不可见或 hold 不属于该账户统一返回 `404 RESOURCE_NOT_FOUND`，不得以 `accounts.created_by` 替代 membership 授权。
+
+四个 LiquidityHold operation 的错误契约为：列表允许 `400 VALIDATION_ERROR`、`401 AUTHENTICATION_REQUIRED`、`403 PERMISSION_DENIED`、`404 RESOURCE_NOT_FOUND`；创建额外允许 `409 IDEMPOTENCY_KEY_REUSED`/`IDEMPOTENCY_REQUEST_IN_PROGRESS` 和必要的 `422 BUSINESS_RULE_VIOLATION`；修订、释放额外允许严格 If-Match 下的 `409 VERSION_CONFLICT`、两类幂等冲突和必要的 `422 BUSINESS_RULE_VIOLATION`。资源不可见永远优先按 404 返回，不能创建幂等记录，也不能通过 versionConflict 泄露资源存在性。
 
 ### 4.4 交易与流水
 

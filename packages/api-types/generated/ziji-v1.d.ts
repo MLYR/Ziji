@@ -333,10 +333,16 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** 查询流动性占用 */
+        /**
+         * 查询流动性占用
+         * @description 仅 ACTIVE AccountMember 可查询；返回该账户的完整 LiquidityHold 修订历史，包含未来待生效、当前有效、已释放、已替代和已过期记录。结果按 created_at DESC、id DESC 稳定排序，cursor 为绑定 accountId、过滤条件和排序定义的不透明 keyset 游标，客户端不得解析。
+         */
         get: operations["listLiquidityHolds"];
         put?: never;
-        /** 创建流动性占用 */
+        /**
+         * 创建流动性占用
+         * @description 仅 ACTIVE OWNER 或 EDITOR 可创建。公共人工 API 不接收 source，服务端固定写入 MANUAL；客户端不得伪造 IMPORT 或 SYSTEM。reason 持久化到 liquidity_holds.note。
+         */
         post: operations["createLiquidityHold"];
         delete?: never;
         options?: never;
@@ -356,7 +362,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 关闭旧占用并创建修订 */
+        /**
+         * 关闭旧占用并创建修订
+         * @description 仅 ACTIVE OWNER 或 EDITOR 可修订。修订允许改变 type，且 type 必须显式提交；旧版本以 SUPERSEDED 结束，新版本的 reason 写入 liquidity_holds.note；revisionReason 不属于公共请求契约。已过期、已释放或已替代版本不得修订。
+         */
         post: operations["reviseLiquidityHold"];
         delete?: never;
         options?: never;
@@ -376,7 +385,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 释放流动性占用 */
+        /**
+         * 释放流动性占用
+         * @description 仅 ACTIVE OWNER 或 EDITOR 可释放。释放必须使用强 If-Match；仅当前未结束且尚未逻辑过期的版本可释放，释放写入 releasedAt、endedAt 和 endReason=RELEASED。已过期、已释放或已替代版本不得释放。
+         */
         post: operations["releaseLiquidityHold"];
         delete?: never;
         options?: never;
@@ -1638,6 +1650,8 @@ export interface components {
             reason: string;
         };
         CreateLiquidityHoldRequest: {
+            /** @enum {string} */
+            type: "FROZEN" | "IN_TRANSIT" | "RESERVED";
             amount: components["schemas"]["PositiveMoney"];
             /** Format: date-time */
             effectiveAt: string;
@@ -1646,13 +1660,14 @@ export interface components {
             reason: string;
         };
         ReviseLiquidityHoldRequest: {
+            /** @enum {string} */
+            type: "FROZEN" | "IN_TRANSIT" | "RESERVED";
             amount: components["schemas"]["PositiveMoney"];
             /** Format: date-time */
             effectiveAt: string;
             /** Format: date-time */
             expiresAt?: string | null;
             reason: string;
-            revisionReason: string;
         };
         MoneyAmount: components["schemas"]["CnyMoneyAmount"] | components["schemas"]["UsdMoneyAmount"] | components["schemas"]["HkdMoneyAmount"] | components["schemas"]["EurMoneyAmount"] | components["schemas"]["JpyMoneyAmount"];
         PositiveMoneyAmount: components["schemas"]["MoneyAmount"] & {
@@ -2068,6 +2083,7 @@ export interface components {
             balance: components["schemas"]["Money"];
             currency: components["schemas"]["Currency"];
         };
+        /** @description 公共响应同时暴露可审计的 LiquidityHold 事实；source、createdBy、createdAt、updatedAt、releasedAt、endedAt 和 endReason 均来自不可变/追加式业务事实，不允许客户端写入。 */
         LiquidityHold: {
             /** Format: uuid */
             id: string;
@@ -2076,16 +2092,33 @@ export interface components {
             /** Format: uuid */
             rootHoldId: string;
             /** Format: uuid */
-            supersedesId?: string | null;
+            supersedesId: string | null;
             revisionNo: number;
-            amount: components["schemas"]["PositiveMoney"];
             /** @enum {string} */
-            status: "ACTIVE" | "RELEASED" | "SUPERSEDED" | "EXPIRED";
+            type: "FROZEN" | "IN_TRANSIT" | "RESERVED";
+            amount: components["schemas"]["PositiveMoney"];
+            currency: components["schemas"]["Currency"];
+            /** @enum {string} */
+            status: "PENDING" | "ACTIVE" | "RELEASED" | "SUPERSEDED" | "EXPIRED";
             /** Format: date-time */
             effectiveAt: string;
             /** Format: date-time */
-            expiresAt?: string | null;
-            reason: string;
+            expiresAt: string | null;
+            /** @enum {string} */
+            source: "MANUAL" | "IMPORT" | "SYSTEM";
+            reason: string | null;
+            /** Format: uuid */
+            createdBy: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: date-time */
+            releasedAt: string | null;
+            /** Format: date-time */
+            endedAt: string | null;
+            /** @enum {string|null} */
+            endReason: "RELEASED" | "SUPERSEDED" | "EXPIRED" | null;
             version: number;
         };
         LedgerEntry: {
@@ -3108,7 +3141,7 @@ export interface components {
                 "application/json": components["schemas"]["BalanceHistoryEnvelope"];
             };
         };
-        /** @description 流动性占用修订已创建 */
+        /** @description 首版或修订版 LiquidityHold 已创建；响应包含完整审计字段和新的强 ETag */
         LiquidityHoldCreated: {
             headers: {
                 ETag?: string;
@@ -3118,7 +3151,7 @@ export interface components {
                 "application/json": components["schemas"]["LiquidityHoldEnvelope"];
             };
         };
-        /** @description 流动性占用 */
+        /** @description LiquidityHold 已释放；响应包含完整审计字段和新的强 ETag */
         LiquidityHoldOk: {
             headers: {
                 ETag?: string;
@@ -3128,7 +3161,7 @@ export interface components {
                 "application/json": components["schemas"]["LiquidityHoldEnvelope"];
             };
         };
-        /** @description 流动性占用列表 */
+        /** @description 完整 LiquidityHold 修订历史，按 created_at DESC、id DESC 返回并使用不透明 keyset cursor */
         LiquidityHoldListOk: {
             headers: {
                 [name: string]: unknown;
@@ -3620,10 +3653,12 @@ export interface components {
         };
     };
     parameters: {
-        /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+        /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
         IdempotencyKey: string;
-        /** @description 资源 ETag，例如双引号包围的实体版本。 */
+        /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
         IfMatch: string;
+        /** @description LiquidityHold 修订和释放使用强 ETag，必须是双引号包围的正整数，例如 "7"；缺失、重复、弱 ETag、*、未加双引号、非正整数或溢出（超出服务端整数范围）均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。 */
+        LiquidityHoldIfMatch: string;
         CsrfToken: string;
         Limit: number;
         Cursor: string;
@@ -3696,7 +3731,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -3816,7 +3851,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -3858,7 +3893,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path?: never;
@@ -3992,7 +4027,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -4032,7 +4067,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -4056,9 +4091,9 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -4132,15 +4167,17 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["LiquidityHoldListOk"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     createLiquidityHold: {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4158,17 +4195,19 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["BusinessRuleViolation"];
         };
     };
     reviseLiquidityHold: {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
-                "If-Match": components["parameters"]["IfMatch"];
+                /** @description LiquidityHold 修订和释放使用强 ETag，必须是双引号包围的正整数，例如 "7"；缺失、重复、弱 ETag、*、未加双引号、非正整数或溢出（超出服务端整数范围）均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。 */
+                "If-Match": components["parameters"]["LiquidityHoldIfMatch"];
             };
             path: {
                 accountId: components["parameters"]["AccountId"];
@@ -4183,19 +4222,22 @@ export interface operations {
         };
         responses: {
             201: components["responses"]["LiquidityHoldCreated"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["BusinessRuleViolation"];
         };
     };
     releaseLiquidityHold: {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
-                "If-Match": components["parameters"]["IfMatch"];
+                /** @description LiquidityHold 修订和释放使用强 ETag，必须是双引号包围的正整数，例如 "7"；缺失、重复、弱 ETag、*、未加双引号、非正整数或溢出（超出服务端整数范围）均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。 */
+                "If-Match": components["parameters"]["LiquidityHoldIfMatch"];
             };
             path: {
                 accountId: components["parameters"]["AccountId"];
@@ -4206,9 +4248,12 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["LiquidityHoldOk"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["BusinessRuleViolation"];
         };
     };
     listTransactions: {
@@ -4235,7 +4280,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -4276,9 +4321,9 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -4302,9 +4347,9 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -4328,7 +4373,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4371,7 +4416,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -4393,7 +4438,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -4417,9 +4462,9 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -4460,7 +4505,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -4482,7 +4527,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -4525,7 +4570,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4549,7 +4594,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4577,7 +4622,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4597,7 +4642,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4623,9 +4668,9 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -4654,7 +4699,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -4679,9 +4724,9 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -4705,7 +4750,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4747,9 +4792,9 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -4773,7 +4818,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -4797,7 +4842,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -4853,9 +4898,9 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -4879,7 +4924,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -4904,9 +4949,9 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -4926,9 +4971,9 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -4970,7 +5015,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -5030,7 +5075,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -5054,7 +5099,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -5112,7 +5157,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -5360,7 +5405,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -5382,7 +5427,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -5437,7 +5482,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -5460,7 +5505,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path: {
@@ -5501,7 +5546,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -5521,7 +5566,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -5547,7 +5592,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -5596,7 +5641,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。 */
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -5615,7 +5660,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description 资源 ETag，例如双引号包围的实体版本。 */
+                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
             path?: never;

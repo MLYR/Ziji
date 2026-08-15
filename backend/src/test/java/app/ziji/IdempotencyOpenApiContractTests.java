@@ -55,6 +55,22 @@ class IdempotencyOpenApiContractTests {
 		assertEquals(38, idempotencyOperationCount, "Idempotency-Key operation 覆盖数必须和冻结基线一致");
 	}
 
+	@Test
+	void idempotencyKeyDescriptionPreservesAuthenticatedAndAnonymousSubjects() throws IOException {
+		Map<String, Object> document = readContract();
+		Map<String, Object> components = objectMap(document.get("components"), "OpenAPI components");
+		Map<String, Object> parameters = objectMap(components.get("parameters"), "OpenAPI parameters");
+		Map<String, Object> idempotencyKey = objectMap(parameters.get("IdempotencyKey"), "Idempotency-Key parameter");
+		String description = String.valueOf(idempotencyKey.get("description"));
+
+		// 全局参数同时服务认证写操作和公开注册/重置，描述不能回归为单一当前用户主体。
+		assertTrue(description.contains("当前用户"));
+		assertTrue(description.contains("registerUser"));
+		assertTrue(description.contains("resetPassword"));
+		assertTrue(description.contains("匿名主体"));
+		assertTrue(description.contains("IDEMPOTENCY_KEY_REUSED"));
+	}
+
 	private static Map<String, Object> readContract() throws IOException {
 		Path contract = locateContract();
 		try (InputStream input = Files.newInputStream(contract)) {

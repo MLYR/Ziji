@@ -323,17 +323,33 @@ paths:
       tags: [Accounts]
       operationId: listLiquidityHolds
       summary: 查询流动性占用
+      description: 仅 ACTIVE AccountMember 可查询；返回该账户的完整 LiquidityHold 修订历史，包含未来待生效、当前有效、已释放、已替代和已过期记录。结果按 created_at DESC、id DESC 稳定排序，cursor 为绑定 accountId、过滤条件和排序定义的不透明 keyset 游标，客户端不得解析。
       x-requirement-ids: [ACC-009]
+      x-permission-matrix: { read: [OWNER, EDITOR, VIEWER], write: [] }
+      x-pagination:
+        dataset: FULL_REVISION_HISTORY
+        order: [created_at DESC, id DESC]
+        cursor: OPAQUE_KEYSET_BOUND_TO_ACCOUNT_FILTER_AND_ORDER
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND]
       parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
       responses:
         '200': { $ref: '#/components/responses/LiquidityHoldListOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
     post:
       tags: [Accounts]
       operationId: createLiquidityHold
       summary: 创建流动性占用
+      description: 仅 ACTIVE OWNER 或 EDITOR 可创建。公共人工 API 不接收 source，服务端固定写入 MANUAL；客户端不得伪造 IMPORT 或 SYSTEM。reason 持久化到 liquidity_holds.note。
       x-requirement-ids: [ACC-009]
+      x-permission-matrix: { read: [OWNER, EDITOR, VIEWER], write: [OWNER, EDITOR] }
+      x-idempotency:
+        scope: CURRENT_USER_API_VERSION_OPERATION_ID_KEY
+        requestHash: ACTUAL_ACCOUNT_ID_TYPED_PAYLOAD_EXPLICIT_ABSENT_IF_MATCH
+        rejectedBeforeRecord: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND]
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_REQUEST_IN_PROGRESS, BUSINESS_RULE_VIOLATION]
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
       requestBody:
         required: true
@@ -345,14 +361,23 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
   /accounts/{accountId}/liquidity-holds/{holdId}/revisions:
     parameters: [{ $ref: '#/components/parameters/AccountId' }, { $ref: '#/components/parameters/HoldId' }]
     post:
       tags: [Accounts]
       operationId: reviseLiquidityHold
       summary: 关闭旧占用并创建修订
+      description: 仅 ACTIVE OWNER 或 EDITOR 可修订。修订允许改变 type，且 type 必须显式提交；旧版本以 SUPERSEDED 结束，新版本的 reason 写入 liquidity_holds.note；revisionReason 不属于公共请求契约。已过期、已释放或已替代版本不得修订。
       x-requirement-ids: [ACC-009]
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      x-permission-matrix: { read: [OWNER, EDITOR, VIEWER], write: [OWNER, EDITOR] }
+      x-idempotency:
+        scope: CURRENT_USER_API_VERSION_OPERATION_ID_KEY
+        requestHash: ACTUAL_ACCOUNT_ID_AND_HOLD_ID_TYPED_PAYLOAD_IF_MATCH
+        rejectedBeforeRecord: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND]
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND, VERSION_CONFLICT, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_REQUEST_IN_PROGRESS, BUSINESS_RULE_VIOLATION]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/LiquidityHoldIfMatch' }]
       requestBody:
         required: true
         content:
@@ -360,21 +385,34 @@ paths:
       responses:
         '201': { $ref: '#/components/responses/LiquidityHoldCreated' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
   /accounts/{accountId}/liquidity-holds/{holdId}/release:
     parameters: [{ $ref: '#/components/parameters/AccountId' }, { $ref: '#/components/parameters/HoldId' }]
     post:
       tags: [Accounts]
       operationId: releaseLiquidityHold
       summary: 释放流动性占用
+      description: 仅 ACTIVE OWNER 或 EDITOR 可释放。释放必须使用强 If-Match；仅当前未结束且尚未逻辑过期的版本可释放，释放写入 releasedAt、endedAt 和 endReason=RELEASED。已过期、已释放或已替代版本不得释放。
       x-requirement-ids: [ACC-009]
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      x-permission-matrix: { read: [OWNER, EDITOR, VIEWER], write: [OWNER, EDITOR] }
+      x-idempotency:
+        scope: CURRENT_USER_API_VERSION_OPERATION_ID_KEY
+        requestHash: ACTUAL_ACCOUNT_ID_AND_HOLD_ID_TYPED_EMPTY_PAYLOAD_IF_MATCH
+        rejectedBeforeRecord: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND]
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND, VERSION_CONFLICT, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_REQUEST_IN_PROGRESS, BUSINESS_RULE_VIOLATION]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/LiquidityHoldIfMatch' }]
       responses:
         '200': { $ref: '#/components/responses/LiquidityHoldOk' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
   /transactions:
     get:
       tags: [Ledger]
@@ -1390,14 +1428,20 @@ components:
       name: Idempotency-Key
       in: header
       required: true
-      description: 认证写操作按当前用户，公开注册/密码重置按版本化匿名主体，与 API 主版本和 operationId 共同形成作用域；同键异参返回冲突。
+      description: 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。
       schema: { type: string, minLength: 16, maxLength: 100 }
     IfMatch:
       name: If-Match
       in: header
       required: true
-      description: 资源 ETag，例如双引号包围的实体版本。
+      description: 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。
       schema: { type: string, minLength: 3, maxLength: 80 }
+    LiquidityHoldIfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: LiquidityHold 修订和释放使用强 ETag，必须是双引号包围的正整数，例如 "7"；缺失、重复、弱 ETag、*、未加双引号、非正整数或溢出（超出服务端整数范围）均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。
+      schema: { type: string, minLength: 3, maxLength: 82, pattern: '^"[1-9][0-9]*"$' }
     CsrfToken:
       name: X-CSRF-Token
       in: header
@@ -1710,8 +1754,9 @@ components:
     CreateLiquidityHoldRequest:
       type: object
       additionalProperties: false
-      required: [amount, effectiveAt, reason]
+      required: [type, amount, effectiveAt, reason]
       properties:
+        type: { type: string, enum: [FROZEN, IN_TRANSIT, RESERVED] }
         amount: { $ref: '#/components/schemas/PositiveMoney' }
         effectiveAt: { type: string, format: date-time }
         expiresAt: { type: [string, 'null'], format: date-time }
@@ -1719,13 +1764,13 @@ components:
     ReviseLiquidityHoldRequest:
       type: object
       additionalProperties: false
-      required: [amount, effectiveAt, reason, revisionReason]
+      required: [type, amount, effectiveAt, reason]
       properties:
+        type: { type: string, enum: [FROZEN, IN_TRANSIT, RESERVED] }
         amount: { $ref: '#/components/schemas/PositiveMoney' }
         effectiveAt: { type: string, format: date-time }
         expiresAt: { type: [string, 'null'], format: date-time }
         reason: { type: string, minLength: 1, maxLength: 500 }
-        revisionReason: { type: string, minLength: 1, maxLength: 500 }
     MoneyAmount:
       oneOf:
         - { $ref: '#/components/schemas/CnyMoneyAmount' }
@@ -2183,18 +2228,48 @@ components:
     LiquidityHold:
       type: object
       additionalProperties: false
-      required: [id, accountId, rootHoldId, revisionNo, amount, status, effectiveAt, reason, version]
+      description: 公共响应同时暴露可审计的 LiquidityHold 事实；source、createdBy、createdAt、updatedAt、releasedAt、endedAt 和 endReason 均来自不可变/追加式业务事实，不允许客户端写入。
+      x-audit-mapping:
+        source: { responseField: source, databaseColumn: source, publicWriteValue: MANUAL, clientWritable: false }
+        reason: { responseField: reason, databaseColumn: note, clientWritable: true }
+        createdBy: { responseField: createdBy, databaseColumn: created_by, clientWritable: false }
+        supersedesId: { responseField: supersedesId, databaseColumn: previous_revision_id, clientWritable: false }
+        releasedAt: { responseField: releasedAt, databaseColumn: released_at, clientWritable: false }
+        endedAt: { responseField: endedAt, databaseColumn: ended_at, clientWritable: false }
+        endReason: { responseField: endReason, databaseColumn: end_reason, clientWritable: false }
+        revisionAudit: { action: LIQUIDITY_HOLD_REVISED, reasonSource: NEW_VERSION_REASON_AND_DATABASE_NOTE }
+      x-lifecycle:
+        asOf: REQUEST_EVALUATION_TIME
+        validWhen: effective_at <= asOf AND (ended_at IS NULL OR ended_at > asOf) AND (expires_at IS NULL OR expires_at > asOf)
+        statuses:
+          PENDING: effective_at > asOf and not terminally ended
+          ACTIVE: effective_at <= asOf and validWhen
+          RELEASED: end_reason = RELEASED
+          SUPERSEDED: end_reason = SUPERSEDED
+          EXPIRED: end_reason = EXPIRED or (expires_at <= asOf and no terminal end reason)
+        expiry: logical expiry wins before finalization; finalizer materializes ended_at=expires_at and end_reason=EXPIRED
+        concurrency: first serialized terminal transition wins; stale If-Match returns VERSION_CONFLICT and a current expired record returns BUSINESS_RULE_VIOLATION
+      required: [id, accountId, rootHoldId, supersedesId, revisionNo, type, amount, currency, status, effectiveAt, expiresAt, source, reason, createdBy, createdAt, updatedAt, releasedAt, endedAt, endReason, version]
       properties:
         id: { type: string, format: uuid }
         accountId: { type: string, format: uuid }
         rootHoldId: { type: string, format: uuid }
         supersedesId: { type: [string, 'null'], format: uuid }
         revisionNo: { type: integer, minimum: 1 }
+        type: { type: string, enum: [FROZEN, IN_TRANSIT, RESERVED] }
         amount: { $ref: '#/components/schemas/PositiveMoney' }
-        status: { type: string, enum: [ACTIVE, RELEASED, SUPERSEDED, EXPIRED] }
+        currency: { $ref: '#/components/schemas/Currency' }
+        status: { type: string, enum: [PENDING, ACTIVE, RELEASED, SUPERSEDED, EXPIRED] }
         effectiveAt: { type: string, format: date-time }
         expiresAt: { type: [string, 'null'], format: date-time }
-        reason: { type: string }
+        source: { type: string, enum: [MANUAL, IMPORT, SYSTEM] }
+        reason: { type: [string, 'null'], maxLength: 500 }
+        createdBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        releasedAt: { type: [string, 'null'], format: date-time }
+        endedAt: { type: [string, 'null'], format: date-time }
+        endReason: { type: [string, 'null'], enum: [RELEASED, SUPERSEDED, EXPIRED, null] }
         version: { type: integer, minimum: 1 }
     LedgerEntry:
       type: object
@@ -3113,9 +3188,9 @@ components:
     AccountListOk: { description: 账户列表, content: { application/json: { schema: { $ref: '#/components/schemas/AccountListEnvelope' } } } }
     AccountBalanceOk: { description: 账户账面及可用余额, content: { application/json: { schema: { $ref: '#/components/schemas/AccountBalanceEnvelope' } } } }
     BalanceHistoryOk: { description: 账户历史余额, content: { application/json: { schema: { $ref: '#/components/schemas/BalanceHistoryEnvelope' } } } }
-    LiquidityHoldCreated: { description: 流动性占用修订已创建, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LiquidityHoldEnvelope' } } } }
-    LiquidityHoldOk: { description: 流动性占用, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LiquidityHoldEnvelope' } } } }
-    LiquidityHoldListOk: { description: 流动性占用列表, content: { application/json: { schema: { $ref: '#/components/schemas/LiquidityHoldListEnvelope' } } } }
+    LiquidityHoldCreated: { description: 首版或修订版 LiquidityHold 已创建；响应包含完整审计字段和新的强 ETag, headers: { ETag: { schema: { type: string, pattern: '^"[1-9][0-9]*"$' } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LiquidityHoldEnvelope' } } } }
+    LiquidityHoldOk: { description: LiquidityHold 已释放；响应包含完整审计字段和新的强 ETag, headers: { ETag: { schema: { type: string, pattern: '^"[1-9][0-9]*"$' } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LiquidityHoldEnvelope' } } } }
+    LiquidityHoldListOk: { description: 完整 LiquidityHold 修订历史，按 created_at DESC、id DESC 返回并使用不透明 keyset cursor, content: { application/json: { schema: { $ref: '#/components/schemas/LiquidityHoldListEnvelope' } } } }
     TransactionCreated: { description: 交易和不可变分录已创建, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/TransactionEnvelope' } } } }
     TransactionOk: { description: 交易、分录和修订链, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/TransactionEnvelope' } } } }
     TransactionListOk: { description: 交易列表, content: { application/json: { schema: { $ref: '#/components/schemas/TransactionListEnvelope' } } } }
