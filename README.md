@@ -58,9 +58,10 @@ source .env
 set +a
 ```
 
-认证密钥不提供仓库默认值。启动 `local` 后端前，在同一终端生成三把相互独立的本地临时 32 字节密钥；不要把命令输出提交到仓库，也不要在限流 HMAC、匿名幂等 HMAC 与 KEK 之间复用：
+认证与账户游标密钥不提供仓库默认值。启动 `local` 后端前，在同一终端生成四把相互独立的本地临时 32 字节密钥；不要把命令输出提交到仓库，也不要在账户游标、限流 HMAC、匿名幂等 HMAC 与 KEK 之间复用：
 
 ```bash
+export ZIJI_ACCOUNT_CURSOR_KEY_BASE64="$(openssl rand -base64 32)"
 export ZIJI_AUTH_HMAC_CURRENT_KEY_VERSION=2
 export ZIJI_AUTH_HMAC_CURRENT_KEY_BASE64="$(openssl rand -base64 32)"
 export ZIJI_AUTH_IDEMPOTENCY_CURRENT_KEY_VERSION=2
@@ -89,7 +90,7 @@ printf '%s' "$ZIJI_AUTH_ACCESS_TOKEN_CURRENT_PUBLIC_KEY_X509_BASE64" \
   | openssl base64 -d -A | openssl pkey -pubin -inform DER -noout
 ```
 
-`local` 是默认 profile，测试使用 Testcontainers 注入连接；`staging`/`production` 必须显式设置 `SPRING_PROFILES_ACTIVE`，并由部署环境或密钥管理系统注入数据库、邮件、对象存储、既有 HMAC/KEK 变量以及 `ZIJI_AUTH_ACCESS_TOKEN_CURRENT_KID`、`ZIJI_AUTH_ACCESS_TOKEN_CURRENT_PRIVATE_KEY_PKCS8_BASE64`、`ZIJI_AUTH_ACCESS_TOKEN_CURRENT_PUBLIC_KEY_X509_BASE64`、`ZIJI_AUTH_ACCESS_TOKEN_PREVIOUS_KID`、`ZIJI_AUTH_ACCESS_TOKEN_PREVIOUS_PUBLIC_KEY_X509_BASE64`、`ZIJI_AUTH_ACCESS_TOKEN_PREVIOUS_PUBLIC_KEY_RETENTION`。RSA 测试密钥只允许 test profile 使用，不能用于 `local`、`staging` 或 `production`；BE-AUTH-004 将绑定并校验这些会话密钥配置。
+`local` 是默认 profile，测试使用 Testcontainers 注入连接；`staging`/`production` 必须显式设置 `SPRING_PROFILES_ACTIVE`，并由部署环境或密钥管理系统注入数据库、邮件、对象存储、`ZIJI_ACCOUNT_CURSOR_KEY_BASE64`、既有 HMAC/KEK 变量以及 `ZIJI_AUTH_ACCESS_TOKEN_CURRENT_KID`、`ZIJI_AUTH_ACCESS_TOKEN_CURRENT_PRIVATE_KEY_PKCS8_BASE64`、`ZIJI_AUTH_ACCESS_TOKEN_CURRENT_PUBLIC_KEY_X509_BASE64`、`ZIJI_AUTH_ACCESS_TOKEN_PREVIOUS_KID`、`ZIJI_AUTH_ACCESS_TOKEN_PREVIOUS_PUBLIC_KEY_X509_BASE64`、`ZIJI_AUTH_ACCESS_TOKEN_PREVIOUS_PUBLIC_KEY_RETENTION`。RSA 测试密钥只允许 test profile 使用，不能用于 `local`、`staging` 或 `production`；BE-AUTH-004 将绑定并校验这些会话密钥配置。
 
 ## 2. 开发入口
 

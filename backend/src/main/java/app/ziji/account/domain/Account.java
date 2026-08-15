@@ -104,6 +104,28 @@ public final class Account {
 			status, archivedAt, createdBy, createdAt, updatedAt, version);
 	}
 
+	/** 将已确认的 name/institution 部分更新应用到新快照，保留身份、状态和账务事实。 */
+	public Account apply(AccountPatch patch, Instant updatedAt) {
+		if (patch == null || patch.isEmpty()) {
+			throw new AccountDomainException("账户更新至少包含一个字段。");
+		}
+		Instant updated = require(updatedAt, "更新时间");
+		return new Account(
+			id,
+			accountClass,
+			accountType,
+			patch.hasName() ? patch.name() : name,
+			patch.hasInstitution() ? patch.institution() : institution,
+			currency,
+			note,
+			status,
+			archivedAt,
+			createdBy,
+			createdAt,
+			updated,
+			version + 1);
+	}
+
 	public UUID id() {
 		return id;
 	}
@@ -191,7 +213,7 @@ public final class Account {
 		return value;
 	}
 
-	private static int length(String value) {
+	static int length(String value) {
 		// OpenAPI maxLength 按 Unicode code point 计数，不能使用 UTF-16 code unit 数量。
 		return value.codePointCount(0, value.length());
 	}

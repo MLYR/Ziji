@@ -1,13 +1,21 @@
 package app.ziji.account.infrastructure;
 
 import java.time.Clock;
+import java.security.SecureRandom;
+import java.util.Base64;
 import java.util.UUID;
 
+import app.ziji.account.application.AccountCursorCodec;
 import app.ziji.account.application.AccountLedgerInitializationPort;
 import app.ziji.account.application.AccountCreationService;
+import app.ziji.account.application.AccountQueryReadPort;
+import app.ziji.account.application.AccountQueryService;
 import app.ziji.account.application.AccountStore;
+import app.ziji.account.application.AccountUpdatePort;
 import app.ziji.accountmember.application.AccountMemberInitPort;
+import app.ziji.accountmember.application.AccountMembershipReadPort;
 import app.ziji.shared.application.TransactionRunner;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -24,5 +32,27 @@ class AccountInfrastructureConfiguration {
 		Clock clock) {
 		// 生产路径始终由服务端生成 UUID；测试可直接替换工厂。
 		return new AccountCreationService(transactions, accounts, memberInit, ledgerInit, clock, UUID::randomUUID);
+	}
+
+	@Bean
+	AccountQueryService accountQueryService(
+		AccountQueryReadPort accounts,
+		AccountUpdatePort updates,
+		AccountMembershipReadPort memberships,
+		AccountCursorCodec cursors,
+		TransactionRunner transactions,
+		Clock clock) {
+		// 查询/更新应用服务保持纯 Java，依赖只注入公开端口。
+		return new AccountQueryService(accounts, updates, memberships, cursors, transactions, clock);
+	}
+
+	@Bean
+	AccountCursorCodec accountCursorCodec(@Value("${ziji.account.cursor-key-base64}") String cursorKeyBase64) {
+		try {
+			// 专用 AES-256 密钥保证游标不泄露账户边界，也不复用认证、幂等或 outbox 密钥。
+			return new AesGcmAccountCursorCodec(Base64.getDecoder().decode(cursorKeyBase64), new SecureRandom());
+		} catch (IllegalArgumentException exception) {
+			throw new IllegalStateException("账户游标密钥配置无效。", exception);
+		}
 	}
 }

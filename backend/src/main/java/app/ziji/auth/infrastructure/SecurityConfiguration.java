@@ -50,7 +50,7 @@ class SecurityConfiguration {
 		ObjectMapper objectMapper,
 		AccessTokenAuthenticationFilter accessTokenAuthenticationFilter,
 		CookieCsrfTokenRepository csrfTokenRepository) throws Exception {
-		// 13 个已实现 operation 精确开放或认证；其余路径继续 fail closed。
+		// 已实现 operation 精确开放或认证；其余路径继续 fail closed。
 		http.authorizeHttpRequests(authorize -> authorize
 			.requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
 			.requestMatchers(HttpMethod.POST,
@@ -59,7 +59,9 @@ class SecurityConfiguration {
 				"/api/v1/auth/mobile/sessions", "/api/v1/auth/mobile/sessions/refresh",
 				"/api/v1/auth/password-reset-challenges", "/api/v1/auth/password-reset").permitAll()
 			.requestMatchers(HttpMethod.GET, "/api/v1/users/me", "/api/v1/users/me/sessions").authenticated()
+			.requestMatchers(HttpMethod.GET, "/api/v1/accounts", "/api/v1/accounts/*").authenticated()
 			.requestMatchers(HttpMethod.PATCH, "/api/v1/users/me").authenticated()
+			.requestMatchers(HttpMethod.PATCH, "/api/v1/accounts/*").authenticated()
 			.requestMatchers(HttpMethod.POST, "/api/v1/users/me/password-change").authenticated()
 			.requestMatchers(HttpMethod.DELETE,
 				"/api/v1/auth/sessions/current", "/api/v1/users/me/sessions", "/api/v1/users/me/sessions/*").authenticated()
@@ -105,10 +107,12 @@ class SecurityConfiguration {
 		String method = request.getMethod();
 		String path = request.getRequestURI();
 		if ("GET".equals(method)) {
-			return "/api/v1/users/me".equals(path) || "/api/v1/users/me/sessions".equals(path);
+			return "/api/v1/users/me".equals(path) || "/api/v1/users/me/sessions".equals(path)
+				|| "/api/v1/accounts".equals(path)
+				|| path.matches("/api/v1/accounts/[^/]+");
 		}
 		if ("PATCH".equals(method)) {
-			return "/api/v1/users/me".equals(path);
+			return "/api/v1/users/me".equals(path) || path.matches("/api/v1/accounts/[^/]+");
 		}
 		if ("POST".equals(method)) {
 			return "/api/v1/users/me/password-change".equals(path);
