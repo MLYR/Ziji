@@ -827,6 +827,12 @@ GET /sync/changes?cursor=<opaque>&limit=200
 
 变更由服务端按当前用户定向投递。成员被移除后仍可拉取专门发给自己的 `ACCESS_REVOKED`；新成员接受邀请后收到 bootstrap 标记并拉取账户当前可见快照。
 
+失败语义：
+
+- `limit` 缺省时默认 50，合法范围为 1～200；非整数、超范围或格式非法的 `limit` 返回 `400 VALIDATION_ERROR`。
+- 空、篡改、跨用户、无法验证或不属于当前用户已投递边界的 `cursor` 返回 `400 VALIDATION_ERROR`。
+- 上述错误响应不得回显原始游标、recipient、sequence、SQL、表名或 payload。
+
 ### 5.2 上传操作
 
 ```text

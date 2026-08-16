@@ -5700,6 +5700,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["SyncChangeListOk"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
         };

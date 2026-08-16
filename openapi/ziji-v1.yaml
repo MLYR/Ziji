@@ -1386,6 +1386,7 @@ paths:
         - { $ref: '#/components/parameters/Limit' }
       responses:
         '200': { $ref: '#/components/responses/SyncChangeListOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /sync/operations:
