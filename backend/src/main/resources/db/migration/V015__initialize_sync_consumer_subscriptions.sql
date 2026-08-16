@@ -1,5 +1,7 @@
 -- Ziji V1: initialize the built-in SYNC consumer subscription facts.
 
+-- 迁移提交时刻是 SYNC 的正常消费下界；更早的历史事件只能由后续显式、可审计的 backfill 处理。
+
 INSERT INTO outbox_consumer_subscriptions (
 	consumer_name,
 	aggregate_type,
@@ -9,10 +11,8 @@ INSERT INTO outbox_consumer_subscriptions (
 	required_for_cleanup,
 	created_at)
 VALUES
-	('SYNC', 'Transaction', 'TransactionPosted', TIMESTAMPTZ '1970-01-01 00:00:00+00', NULL, TRUE,
-	 TIMESTAMPTZ '1970-01-01 00:00:00+00'),
-	('SYNC', 'Transaction', 'TransactionReversed', TIMESTAMPTZ '1970-01-01 00:00:00+00', NULL, TRUE,
-	 TIMESTAMPTZ '1970-01-01 00:00:00+00')
+	('SYNC', 'Transaction', 'TransactionPosted', CURRENT_TIMESTAMP, NULL, TRUE, CURRENT_TIMESTAMP),
+	('SYNC', 'Transaction', 'TransactionReversed', CURRENT_TIMESTAMP, NULL, TRUE, CURRENT_TIMESTAMP)
 ON CONFLICT DO NOTHING;
 
 COMMENT ON TABLE outbox_consumer_subscriptions IS

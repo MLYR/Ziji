@@ -20,11 +20,9 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-/** V014 验收：每消费者 outbox 回执与 V013 历史升级基线。 */
+/** V014/V015 验收：每消费者 outbox 回执、内置 SYNC 订阅与 V013 历史升级基线。 */
 @Testcontainers
 class OutboxConsumerReceiptMigrationTests {
-
-	private static final Instant NOW = Instant.parse("2026-08-16T00:00:00Z");
 
 	@Container
 	private static final org.testcontainers.postgresql.PostgreSQLContainer EMPTY_POSTGRES = newContainer(
@@ -37,8 +35,26 @@ class OutboxConsumerReceiptMigrationTests {
 	@Test
 	void emptyDatabaseCreatesIndependentReceiptFactsAndConstraints() throws Exception {
 		migrate(EMPTY_POSTGRES, null);
+		migrate(EMPTY_POSTGRES, null);
 		try (Connection connection = connection(EMPTY_POSTGRES)) {
-			assertEquals(14, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			Instant syncSubscriptionStart = syncSubscriptionStart(connection, "TransactionPosted");
+			assertEquals(15, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			assertEquals(1, count(connection, """
+				SELECT COUNT(*) FROM outbox_consumer_subscriptions
+				WHERE consumer_name = 'SYNC' AND aggregate_type = 'Transaction'
+				  AND event_type = 'TransactionPosted' AND subscribed_until IS NULL
+				  AND required_for_cleanup
+				"""));
+			assertEquals(1, count(connection, """
+				SELECT COUNT(*) FROM outbox_consumer_subscriptions
+				WHERE consumer_name = 'SYNC' AND aggregate_type = 'Transaction'
+				  AND event_type = 'TransactionReversed' AND subscribed_until IS NULL
+				  AND required_for_cleanup
+				"""));
+			assertEquals(syncSubscriptionStart, syncSubscriptionCreatedAt(connection, "TransactionPosted"));
+			assertEquals(syncSubscriptionStart, syncSubscriptionStart(connection, "TransactionReversed"));
+			assertEquals(syncSubscriptionStart, syncSubscriptionCreatedAt(connection, "TransactionReversed"));
+			assertFalse(Instant.EPOCH.equals(syncSubscriptionStart));
 			assertEquals(1, count(connection, """
 				SELECT COUNT(*) FROM information_schema.tables
 				WHERE table_schema = 'public' AND table_name = 'outbox_consumer_receipts'
@@ -103,39 +119,39 @@ class OutboxConsumerReceiptMigrationTests {
 
 			UUID beforeSubscriptionEventId = UUID.randomUUID();
 			UUID subscribedEventId = UUID.randomUUID();
-			insertOutboxEvent(connection, beforeSubscriptionEventId, NOW);
-			insertOutboxEvent(connection, subscribedEventId, NOW.plusSeconds(10));
-			insertSubscription(connection, "SYNC", "Transaction", "TransactionPosted",
-				NOW.plusSeconds(11), null, true);
+			Instant subscribedEventTime = syncSubscriptionStart.plusSeconds(10);
+			insertOutboxEvent(connection, beforeSubscriptionEventId, syncSubscriptionStart.minusMillis(1));
+			insertOutboxEvent(connection, subscribedEventId, subscribedEventTime);
 			insertSubscription(connection, "BALANCE", "Transaction", "TransactionPosted",
-				NOW.plusSeconds(5), null, true);
+				syncSubscriptionStart.plusSeconds(5), null, true);
 			insertSubscription(connection, "STATISTICS", "Transaction", "TransactionPosted",
-				NOW.plusSeconds(5), NOW.plusSeconds(20), true);
+				syncSubscriptionStart.plusSeconds(5), syncSubscriptionStart.plusSeconds(20), true);
 			insertSubscription(connection, "EMAIL", "Transaction", "TransactionPosted",
-				NOW.minusSeconds(10), null, false);
+				syncSubscriptionStart.minusSeconds(10), null, false);
 			assertCleanupEligibility(connection, beforeSubscriptionEventId, 0, 0, 0, true);
-			assertCleanupEligibility(connection, subscribedEventId, 2, 0, 2, false);
+			assertCleanupEligibility(connection, subscribedEventId, 3, 0, 3, false);
 			assertThrows(SQLException.class, () -> insertSubscription(connection, "STATISTICS", "Transaction",
-				"TransactionPosted", NOW.plusSeconds(7), NOW.plusSeconds(25), true));
+				"TransactionPosted", syncSubscriptionStart.plusSeconds(7), syncSubscriptionStart.plusSeconds(25), true));
 
 			insertReceipt(connection, "SYNC", subscribedEventId, "PENDING", 0, null, null, null, null, null);
 			insertReceipt(connection, "STATISTICS", subscribedEventId, "PROCESSING", 1, UUID.randomUUID(),
-				NOW.plusSeconds(30), null, null, null);
+				subscribedEventTime.plusSeconds(30), null, null, null);
 			insertReceipt(connection, "POSITION", subscribedEventId, "SUCCEEDED", 2, null, null,
-				NOW.plusSeconds(1), null, null);
+				subscribedEventTime.plusSeconds(1), null, null);
 			insertReceipt(connection, "EMAIL", subscribedEventId, "FAILED_RETRYABLE", 3, null, null,
-				null, NOW.plusSeconds(2), "EMAIL_TIMEOUT");
+				null, subscribedEventTime.plusSeconds(2), "EMAIL_TIMEOUT");
 			insertReceipt(connection, "AUDIT", subscribedEventId, "FAILED_FINAL", 1, null, null,
-				null, NOW.plusSeconds(3), "PAYLOAD_INVALID");
+				null, subscribedEventTime.plusSeconds(3), "PAYLOAD_INVALID");
 			assertEquals(5, count(connection,
 				"SELECT COUNT(*) FROM outbox_consumer_receipts WHERE outbox_event_id = '" + subscribedEventId + "'"));
-			assertCleanupEligibility(connection, subscribedEventId, 2, 0, 2, false);
+			assertCleanupEligibility(connection, subscribedEventId, 3, 0, 3, false);
 			insertReceipt(connection, "BALANCE", subscribedEventId, "SUCCEEDED", 1, null, null,
-				NOW.plusSeconds(4), null, null);
-			markReceiptFinal(connection, "STATISTICS", subscribedEventId, NOW.plusSeconds(5));
+				subscribedEventTime.plusSeconds(4), null, null);
+			markReceiptFinal(connection, "SYNC", subscribedEventId, subscribedEventTime.plusSeconds(5));
+			markReceiptFinal(connection, "STATISTICS", subscribedEventId, subscribedEventTime.plusSeconds(5));
 			assertEquals(6, count(connection,
 				"SELECT COUNT(*) FROM outbox_consumer_receipts WHERE outbox_event_id = '" + subscribedEventId + "'"));
-			assertCleanupEligibility(connection, subscribedEventId, 2, 2, 0, true);
+			assertCleanupEligibility(connection, subscribedEventId, 3, 3, 0, true);
 
 			assertThrows(SQLException.class, () -> insertReceipt(
 				connection, "BALANCE", subscribedEventId, "PENDING", 0, null, null, null, null, null));
@@ -144,14 +160,14 @@ class OutboxConsumerReceiptMigrationTests {
 			assertThrows(SQLException.class, () -> insertReceipt(
 				connection, "NEW", subscribedEventId, "PROCESSING", 1, null, null, null, null, null));
 			assertThrows(SQLException.class, () -> insertReceipt(
-				connection, "NEW", subscribedEventId, "SUCCEEDED", 1, UUID.randomUUID(), NOW.plusSeconds(30), null, null, null));
+				connection, "NEW", subscribedEventId, "SUCCEEDED", 1, UUID.randomUUID(), subscribedEventTime.plusSeconds(30), null, null, null));
 
 			assertThrows(SQLException.class, () -> deleteOutboxEvent(connection, subscribedEventId));
 		}
 	}
 
 	@Test
-	void v013DatabaseUpgradesToV014WithoutRewritingPreviousMigrations() throws Exception {
+	void v013DatabaseUpgradesToV015WithoutRewritingPreviousMigrations() throws Exception {
 		migrate(UPGRADE_POSTGRES, "13");
 		Map<String, Integer> previousChecksums;
 		try (Connection connection = connection(UPGRADE_POSTGRES)) {
@@ -161,8 +177,9 @@ class OutboxConsumerReceiptMigrationTests {
 		migrate(UPGRADE_POSTGRES, null);
 
 		try (Connection connection = connection(UPGRADE_POSTGRES)) {
-			assertEquals(14, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			assertEquals(15, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
 			assertEquals(previousChecksums, checksumsThroughV013(connection));
+			assertFalse(Instant.EPOCH.equals(syncSubscriptionStart(connection, "TransactionPosted")));
 			assertEquals(1, count(connection, """
 				SELECT COUNT(*) FROM pg_constraint
 				WHERE conrelid = 'outbox_consumer_receipts'::regclass
@@ -228,7 +245,7 @@ class OutboxConsumerReceiptMigrationTests {
 			statement.setTimestamp(4, Timestamp.from(subscribedFrom));
 			statement.setObject(5, subscribedUntil == null ? null : Timestamp.from(subscribedUntil));
 			statement.setBoolean(6, requiredForCleanup);
-			statement.setTimestamp(7, Timestamp.from(NOW));
+			statement.setTimestamp(7, Timestamp.from(Instant.now()));
 			statement.executeUpdate();
 		}
 	}
@@ -304,12 +321,13 @@ class OutboxConsumerReceiptMigrationTests {
 			statement.setObject(4, claimToken);
 			statement.setObject(5, leaseExpiresAt == null ? null : Timestamp.from(leaseExpiresAt));
 			statement.setInt(6, attemptCount);
-			statement.setTimestamp(7, Timestamp.from(NOW));
+			Instant receiptTime = Instant.now();
+			statement.setTimestamp(7, Timestamp.from(receiptTime));
 			statement.setObject(8, completedAt == null ? null : Timestamp.from(completedAt));
 			statement.setObject(9, failedAt == null ? null : Timestamp.from(failedAt));
 			statement.setString(10, errorCode);
-			statement.setTimestamp(11, Timestamp.from(NOW));
-			statement.setTimestamp(12, Timestamp.from(NOW));
+			statement.setTimestamp(11, Timestamp.from(receiptTime));
+			statement.setTimestamp(12, Timestamp.from(receiptTime));
 			statement.executeUpdate();
 		}
 	}
@@ -334,6 +352,28 @@ class OutboxConsumerReceiptMigrationTests {
 			}
 		}
 		return checksums;
+	}
+
+	private static Instant syncSubscriptionStart(Connection connection, String eventType) throws SQLException {
+		return syncSubscriptionTimestamp(connection, eventType, "subscribed_from");
+	}
+
+	private static Instant syncSubscriptionCreatedAt(Connection connection, String eventType) throws SQLException {
+		return syncSubscriptionTimestamp(connection, eventType, "created_at");
+	}
+
+	private static Instant syncSubscriptionTimestamp(Connection connection, String eventType, String column) throws SQLException {
+		try (var statement = connection.prepareStatement("""
+			SELECT %s
+			FROM outbox_consumer_subscriptions
+			WHERE consumer_name = 'SYNC' AND aggregate_type = 'Transaction' AND event_type = ?
+			""".formatted(column))) {
+			statement.setString(1, eventType);
+			try (ResultSet result = statement.executeQuery()) {
+				assertTrue(result.next());
+				return result.getTimestamp(1).toInstant();
+			}
+		}
 	}
 
 	private static int count(Connection connection, String sql) throws SQLException {

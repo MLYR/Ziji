@@ -11,6 +11,7 @@ import java.util.UUID;
 import app.ziji.ledger.application.BalanceAdjustmentWriteDetails;
 import app.ziji.ledger.application.LedgerPersistenceException;
 import app.ziji.ledger.application.LedgerTransactionStore;
+import app.ziji.ledger.application.LedgerTransactionSyncReadPort;
 import app.ziji.ledger.application.NoTransactionDetails;
 import app.ziji.ledger.application.PostedTransactionWrite;
 import app.ziji.ledger.application.RefundWriteDetails;
@@ -30,12 +31,53 @@ import org.springframework.stereotype.Repository;
 
 /** Transaction、LedgerEntry 和一对一明细的原子 PostgreSQL 适配器。 */
 @Repository
-public class PostgresLedgerTransactionStore implements LedgerTransactionStore {
+public class PostgresLedgerTransactionStore implements LedgerTransactionStore, LedgerTransactionSyncReadPort {
 
 	private final JdbcTemplate jdbc;
 
 	public PostgresLedgerTransactionStore(JdbcTemplate jdbc) {
 		this.jdbc = jdbc;
+	}
+
+	@Override
+	public Optional<LedgerTransactionSyncReadPort.Snapshot> findForSync(UUID transactionId) {
+		if (transactionId == null) {
+			return Optional.empty();
+		}
+		List<LedgerTransactionSyncReadPort.Snapshot> snapshots = jdbc.query("""
+			SELECT t.id, t.root_transaction_id, t.previous_version_id, t.reversal_of_id,
+				t.version_no, t.entity_version, t.status,
+				array_agg(DISTINCT la.visible_account_id) FILTER (WHERE la.visible_account_id IS NOT NULL) AS account_ids
+			FROM transactions t
+			JOIN ledger_entries e ON e.transaction_id = t.id
+			JOIN ledger_accounts la ON la.id = e.ledger_account_id
+			WHERE t.id = ?
+			GROUP BY t.id, t.root_transaction_id, t.previous_version_id, t.reversal_of_id,
+				t.version_no, t.entity_version, t.status
+			""", (result, rowNum) -> {
+				java.sql.Array array = result.getArray("account_ids");
+				List<UUID> accountIds = new java.util.ArrayList<>();
+				if (array != null) {
+					Object values = array.getArray();
+					if (values instanceof Object[] objects) {
+						for (Object value : objects) {
+							if (value != null) {
+								accountIds.add(UUID.fromString(value.toString()));
+							}
+						}
+					}
+				}
+				return new LedgerTransactionSyncReadPort.Snapshot(
+					result.getObject("id", UUID.class),
+					result.getObject("root_transaction_id", UUID.class),
+					result.getObject("previous_version_id", UUID.class),
+					result.getObject("reversal_of_id", UUID.class),
+					result.getInt("version_no"),
+					result.getInt("entity_version"),
+					result.getString("status"),
+					accountIds);
+			}, transactionId);
+		return snapshots.isEmpty() ? Optional.empty() : Optional.of(snapshots.getFirst());
 	}
 
 	@Override

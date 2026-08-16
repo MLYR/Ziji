@@ -36,7 +36,7 @@ class LiquidityHoldMoneyCapacityMigrationTests {
 		migrate(null);
 
 		try (Connection connection = connection()) {
-			assertEquals(14, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			assertEquals(15, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
 			assertEquals(previousChecksums, checksumsThroughV012(connection));
 			assertEquals("30/8", numericShape(connection, "liquidity_holds", "amount"));
 			assertEquals("30/8", numericShape(connection, "account_liquidity_snapshots", "ledger_balance"));

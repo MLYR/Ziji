@@ -3,14 +3,16 @@ package app.ziji.accountmember.infrastructure;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.time.Instant;
 
 import app.ziji.accountmember.application.AccountMembershipReadPort;
+import app.ziji.accountmember.application.AccountRecipientReadPort;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-/** 只读取 account_members 与 account_inclusion_settings 的当前可见成员周期。 */
+	/** 只读取 account_members 与 account_inclusion_settings 的成员周期。 */
 @Repository
-public class PostgresAccountMembershipReadPort implements AccountMembershipReadPort {
+public class PostgresAccountMembershipReadPort implements AccountMembershipReadPort, AccountRecipientReadPort {
 
 	private static final String LIST_ACTIVE_SQL = """
 		SELECT m.account_id, m.role, s.ratio
@@ -57,5 +59,26 @@ public class PostgresAccountMembershipReadPort implements AccountMembershipReadP
 			result.getString("role"),
 			result.getBigDecimal("ratio")), userId, accountId);
 		return memberships.isEmpty() ? Optional.empty() : Optional.of(memberships.getFirst());
+	}
+
+	@Override
+	public List<UUID> listRecipientUserIdsAt(UUID accountId, Instant occurredAt) {
+		if (accountId == null || occurredAt == null) {
+			return List.of();
+		}
+		return jdbc.query("""
+			SELECT DISTINCT m.user_id
+			FROM account_members m
+			JOIN account_inclusion_settings s ON s.membership_id = m.id
+			WHERE m.account_id = ?
+			  AND s.included = TRUE
+			  AND m.joined_at <= CAST(? AS timestamptz)
+			  AND (m.ended_at IS NULL OR CAST(? AS timestamptz) < m.ended_at)
+			  AND s.valid_from <= CAST(? AS timestamptz)
+			  AND (s.valid_to IS NULL OR CAST(? AS timestamptz) < s.valid_to)
+			ORDER BY m.user_id
+			""", (result, rowNum) -> result.getObject("user_id", UUID.class), accountId,
+			java.sql.Timestamp.from(occurredAt), java.sql.Timestamp.from(occurredAt),
+			java.sql.Timestamp.from(occurredAt), java.sql.Timestamp.from(occurredAt));
 	}
 }
