@@ -15,6 +15,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /** PostgreSQL 审计端口验收：事实只追加、metadata 结构化，且必须服从调用方的业务事务。 */
@@ -56,6 +57,29 @@ class AuditLogPostgresIntegrationTests extends PostgresIntegrationTestSupport {
 
 		assertThrows(DataAccessException.class, () -> jdbc.update(
 			"UPDATE audit_logs SET action = 'TAMPERED' WHERE resource_id = ?", resourceId));
+		assertThrows(DataAccessException.class, () -> jdbc.update(
+			"DELETE FROM audit_logs WHERE resource_id = ?", resourceId));
+		assertEquals(1, jdbc.queryForObject(
+			"SELECT count(*) FROM audit_logs WHERE resource_id = ?", Integer.class, resourceId));
+		assertEquals(Boolean.TRUE, hasPrivilege("INSERT"));
+		assertEquals(Boolean.TRUE, hasPrivilege("SELECT"));
+		assertEquals(Boolean.FALSE, hasPrivilege("UPDATE"));
+		assertEquals(Boolean.FALSE, hasPrivilege("DELETE"));
+	}
+
+	@Test
+	void appendsSystemFactWithoutAUserActor() {
+		UUID resourceId = UUID.randomUUID();
+		auditLogs.append(new AuditLogWritePort.AuditLogEntry(
+			NOW, null, AuditLogWritePort.ActorType.SYSTEM, "LIQUIDITY_HOLD_EXPIRED", "LIQUIDITY_HOLD",
+			resourceId, null, "req-audit-system-001", AuditLogWritePort.Result.SUCCESS, "EXPIRED",
+			Map.of("holdId", resourceId.toString(), "version", "2")));
+
+		Map<String, Object> row = jdbc.queryForMap(
+			"SELECT actor_user_id, actor_type, reason_code FROM audit_logs WHERE resource_id = ?", resourceId);
+		assertNull(row.get("actor_user_id"));
+		assertEquals("SYSTEM", row.get("actor_type"));
+		assertEquals("EXPIRED", row.get("reason_code"));
 	}
 
 	@Test
@@ -90,6 +114,12 @@ class AuditLogPostgresIntegrationTests extends PostgresIntegrationTestSupport {
 				'STANDARD', 'ACTIVE', ?, ?, 1)
 			""", userId, suffix + "@example.test", suffix + "@example.test", timestamp(), timestamp(), timestamp());
 		return userId;
+	}
+
+	private Boolean hasPrivilege(String privilege) {
+		// 直接核对 V007 为普通应用角色冻结的 audit_logs 表权限。
+		return jdbc.queryForObject(
+			"SELECT has_table_privilege('ziji_app', 'public.audit_logs', ?)", Boolean.class, privilege);
 	}
 
 	private static Timestamp timestamp() {
