@@ -38,7 +38,7 @@ class OutboxConsumerReceiptMigrationTests {
 		migrate(EMPTY_POSTGRES, null);
 		try (Connection connection = connection(EMPTY_POSTGRES)) {
 			Instant syncSubscriptionStart = syncSubscriptionStart(connection, "TransactionPosted");
-			assertEquals(15, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			assertEquals(16, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
 			assertEquals(1, count(connection, """
 				SELECT COUNT(*) FROM outbox_consumer_subscriptions
 				WHERE consumer_name = 'SYNC' AND aggregate_type = 'Transaction'
@@ -167,7 +167,7 @@ class OutboxConsumerReceiptMigrationTests {
 	}
 
 	@Test
-	void v013DatabaseUpgradesToV015WithoutRewritingPreviousMigrations() throws Exception {
+	void v013DatabaseUpgradesToCurrentWithoutRewritingPreviousMigrations() throws Exception {
 		migrate(UPGRADE_POSTGRES, "13");
 		Map<String, Integer> previousChecksums;
 		try (Connection connection = connection(UPGRADE_POSTGRES)) {
@@ -177,7 +177,7 @@ class OutboxConsumerReceiptMigrationTests {
 		migrate(UPGRADE_POSTGRES, null);
 
 		try (Connection connection = connection(UPGRADE_POSTGRES)) {
-			assertEquals(15, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			assertEquals(16, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
 			assertEquals(previousChecksums, checksumsThroughV013(connection));
 			assertFalse(Instant.EPOCH.equals(syncSubscriptionStart(connection, "TransactionPosted")));
 			assertEquals(1, count(connection, """

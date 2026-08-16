@@ -268,7 +268,7 @@ GET /transactions?accountId=...&limit=50&cursor=opaque
 
 `POST /auth/register` 与 `POST /auth/password-reset` 虽然未认证，仍必须携带 `Idempotency-Key`；它们使用 §2.4 的版本化匿名主体，而不是要求不存在的当前用户。两个端点都可能返回 `409 IDEMPOTENCY_KEY_REUSED` 或 `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`，后者带 `Retry-After: 5`；响应不得借幂等状态泄露邮箱是否存在。
 
-若同 Key 的历史幂等记录无法提供 V009 允许的安全重放引用，服务端必须 fail closed 返回 `500 INTERNAL_ERROR`，不得伪造成功、暴露内部状态或重新执行业务写入。
+若同 Key 的历史幂等记录无法提供 V009/V016 允许的安全重放引用，服务端必须 fail closed 返回 `500 INTERNAL_ERROR`，不得伪造成功、暴露内部状态或重新执行业务写入。`VERSION_CONFLICT` 不能作为普通 Problem 错误码；其同 Key/Hash 重放只返回首次已保存的 `currentVersion`、由版本派生的 `currentEtag` 与相对 `resourceLocation`，不得查询当前资源重新生成摘要。
 
 发送注册或密码重置验证码请求使用同一 `EmailChallengeRequest`：`email` 必填，`deviceId` 可选，长度 1～200。`deviceId` 只是防滥用信号，不是可信身份凭据；缺失时服务端按来源 IP 和 `MISSING_DEVICE` 域标记计算设备限流摘要。来源 IP 默认取连接对端；只有受信反向代理已显式配置并覆盖客户端转发头时才接受代理地址，客户端自行传入的 `Forwarded`/`X-Forwarded-For` 不得改变限流主体。语法合法请求不因邮箱是否存在而返回不同结果。
 

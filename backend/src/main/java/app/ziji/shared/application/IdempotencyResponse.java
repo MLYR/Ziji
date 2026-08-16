@@ -49,6 +49,10 @@ public final class IdempotencyResponse {
 				|| resourceType != null)) {
 			throw invalid();
 		}
+		if (reference instanceof VersionConflictReference
+			&& (status != Status.FAILED_FINAL || responseStatus != 409 || resourceType != null)) {
+			throw invalid();
+		}
 		this.status = status;
 		this.responseStatus = responseStatus;
 		this.reference = reference;
@@ -71,6 +75,16 @@ public final class IdempotencyResponse {
 	public static IdempotencyResponse failedFinal(int responseStatus, String errorCode) {
 		return new IdempotencyResponse(
 			Status.FAILED_FINAL, responseStatus, new ProblemReference(errorCode, false), null, null);
+	}
+
+	/** VERSION_CONFLICT 只保存首次可安全重放的版本摘要，ETag 由版本派生而非调用方输入。 */
+	public static IdempotencyResponse failedFinalVersionConflict(
+		int responseStatus,
+		long currentVersion,
+		String resourceLocation) {
+		return new IdempotencyResponse(
+			Status.FAILED_FINAL, responseStatus,
+			new VersionConflictReference(currentVersion, resourceLocation), null, null);
 	}
 
 	/** 调用方只有确认没有业务事实、审计或 outbox 时才能使用可重试终态。 */
@@ -104,7 +118,7 @@ public final class IdempotencyResponse {
 		return "IdempotencyResponse[status=" + status + ", responseStatus=" + responseStatus + "]";
 	}
 
-	public sealed interface Reference permits EmptyReference, ResourceReference, ProblemReference {
+	public sealed interface Reference permits EmptyReference, ResourceReference, ProblemReference, VersionConflictReference {
 
 		String kind();
 	}
@@ -166,7 +180,9 @@ public final class IdempotencyResponse {
 		private final boolean retryable;
 
 		private ProblemReference(String errorCode, boolean retryable) {
-			if (errorCode == null || !ERROR_CODE.matcher(errorCode).matches()) {
+			// VERSION_CONFLICT 必须携带首个安全摘要，不能退化为只有错误码的普通 Problem。
+			if (errorCode == null || !ERROR_CODE.matcher(errorCode).matches()
+				|| "VERSION_CONFLICT".equals(errorCode)) {
 				throw invalid();
 			}
 			this.errorCode = errorCode;
@@ -184,6 +200,45 @@ public final class IdempotencyResponse {
 
 		public boolean retryable() {
 			return retryable;
+		}
+	}
+
+	/** 专用冲突引用避免普通 Problem 承载版本、ETag 或资源定位字段。 */
+	public static final class VersionConflictReference implements Reference {
+
+		private final long currentVersion;
+		private final String currentEtag;
+		private final String resourceLocation;
+
+		private VersionConflictReference(long currentVersion, String resourceLocation) {
+			if (currentVersion < 1 || currentVersion > 9_999_999_999L
+				|| resourceLocation == null || invalidLocation(resourceLocation) || resourceLocation.contains("//")) {
+				throw invalid();
+			}
+			this.currentVersion = currentVersion;
+			this.currentEtag = "\"" + currentVersion + "\"";
+			this.resourceLocation = resourceLocation;
+		}
+
+		@Override
+		public String kind() {
+			return "VERSION_CONFLICT";
+		}
+
+		public String errorCode() {
+			return "VERSION_CONFLICT";
+		}
+
+		public long currentVersion() {
+			return currentVersion;
+		}
+
+		public String currentEtag() {
+			return currentEtag;
+		}
+
+		public String resourceLocation() {
+			return resourceLocation;
 		}
 	}
 

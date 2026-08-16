@@ -21,7 +21,7 @@ import org.springframework.stereotype.Repository;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
-/** PostgreSQL V009 适配器：原子 UPSERT、FOR UPDATE 和数据库锁等待是唯一的跨实例并发权威。 */
+/** PostgreSQL V009/V016 适配器：原子 UPSERT、FOR UPDATE 和数据库锁等待是唯一的跨实例并发权威。 */
 @Repository
 public class PostgresIdempotencyRecordStore implements IdempotencyRecordStore {
 
@@ -195,7 +195,7 @@ public class PostgresIdempotencyRecordStore implements IdempotencyRecordStore {
 		}
 	}
 
-	private Acquisition resolveLocked(StoredRecord record, IdempotencyRequest request, Instant now) {
+	Acquisition resolveLocked(StoredRecord record, IdempotencyRequest request, Instant now) {
 		if (!request.requestHash().equals(record.requestHash())) {
 			return new Acquisition.KeyReused();
 		}
@@ -308,6 +308,12 @@ public class PostgresIdempotencyRecordStore implements IdempotencyRecordStore {
 					node.put("retryAfterSeconds", 5);
 				}
 			}
+			if (response.reference() instanceof IdempotencyResponse.VersionConflictReference conflict) {
+				node.put("errorCode", conflict.errorCode());
+				node.put("currentVersion", conflict.currentVersion());
+				node.put("currentEtag", conflict.currentEtag());
+				node.put("resourceLocation", conflict.resourceLocation());
+			}
 			String serialized = objectMapper.writeValueAsString(node);
 			if (serialized.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 8_192) {
 				throw new IdempotencyInfrastructureException("幂等安全响应引用超过上限。");
@@ -343,6 +349,23 @@ public class PostgresIdempotencyRecordStore implements IdempotencyRecordStore {
 			if ("FAILED_FINAL".equals(record.status()) && "PROBLEM".equals(kind)
 				&& hasOnly(node, "kind", "errorCode") && text(node, "errorCode", null)) {
 				return IdempotencyResponse.failedFinal(record.responseStatus(), node.get("errorCode").textValue());
+			}
+			if ("FAILED_FINAL".equals(record.status()) && "VERSION_CONFLICT".equals(kind)
+				&& hasOnly(node, "kind", "errorCode", "currentVersion", "currentEtag", "resourceLocation")
+				&& "VERSION_CONFLICT".equals(optionalText(node, "errorCode"))
+				&& record.resourceType() == null && record.resourceId() == null) {
+				Long currentVersion = optionalLong(node, "currentVersion");
+				String currentEtag = optionalText(node, "currentEtag");
+				String resourceLocation = optionalText(node, "resourceLocation");
+				if (currentVersion == null || currentEtag == null || resourceLocation == null) {
+					return null;
+				}
+				// 只接受数据库原样保存的首次摘要，绝不查询当前资源来补齐重放结果。
+				IdempotencyResponse response = IdempotencyResponse.failedFinalVersionConflict(
+					record.responseStatus(), currentVersion, resourceLocation);
+				IdempotencyResponse.VersionConflictReference conflict =
+					(IdempotencyResponse.VersionConflictReference) response.reference();
+				return conflict.currentEtag().equals(currentEtag) ? response : null;
 			}
 			return null;
 		} catch (RuntimeException exception) {
@@ -431,7 +454,7 @@ public class PostgresIdempotencyRecordStore implements IdempotencyRecordStore {
 		return value == null ? null : value.toInstant();
 	}
 
-	private record StoredRecord(
+	record StoredRecord(
 		UUID id,
 		String requestHash,
 		String status,

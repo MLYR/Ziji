@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /** 统一幂等 application 编排测试：只有锁定成功的请求执行一次业务工作，其他状态不重写记录。 */
@@ -41,6 +42,26 @@ class UnifiedIdempotencyServiceTests {
 		assertDoesNotRun(new IdempotencyRecordStore.Acquisition.InProgress(), IdempotencyExecution.Status.REQUEST_IN_PROGRESS);
 		assertDoesNotRun(new IdempotencyRecordStore.Acquisition.SafeReplayUnavailable(),
 			IdempotencyExecution.Status.SAFE_REPLAY_UNAVAILABLE);
+	}
+
+	@Test
+	void replayKeepsTheFirstVersionConflictReferenceWithoutRunningBusinessWork() {
+		IdempotencyResponse stored = IdempotencyResponse.failedFinalVersionConflict(
+			409, 7, "/api/v1/transactions/4f6ba6c8-0a3c-4bd2-9313-d11850b3f73f");
+		FakeStore store = new FakeStore(new IdempotencyRecordStore.Acquisition.Replay(stored));
+		UnifiedIdempotencyService service = service(new FakeTransactionRunner(), store);
+
+		IdempotencyExecution<String> result = service.executeAuthenticated(
+			UUID.randomUUID(), 1, "applySyncOperations", key(), hash(),
+			() -> { throw new AssertionError("must not run"); });
+
+		assertEquals(IdempotencyExecution.Status.REPLAYED, result.status());
+		IdempotencyResponse.VersionConflictReference conflict = assertInstanceOf(
+			IdempotencyResponse.VersionConflictReference.class, result.response().reference());
+		assertEquals(7, conflict.currentVersion());
+		assertEquals("\"7\"", conflict.currentEtag());
+		assertEquals("/api/v1/transactions/4f6ba6c8-0a3c-4bd2-9313-d11850b3f73f", conflict.resourceLocation());
+		assertEquals(0, store.completes);
 	}
 
 	@Test

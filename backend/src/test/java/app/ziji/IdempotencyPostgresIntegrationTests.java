@@ -34,6 +34,7 @@ import org.springframework.test.context.ActiveProfiles;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -144,6 +145,35 @@ class IdempotencyPostgresIntegrationTests extends PostgresIntegrationTestSupport
 		assertEquals(IdempotencyExecution.Status.EXECUTED, finalFailure.status());
 		assertEquals(IdempotencyExecution.Status.REPLAYED, finalReplay.status());
 		assertEquals(IdempotencyResponse.Status.FAILED_FINAL, finalReplay.response().status());
+	}
+
+	@Test
+	void versionConflictReferenceIsPersistedAndReplayedExactlyWithoutCurrentLookup() {
+		UUID userId = seedUser("version-conflict");
+		String key = key();
+		String location = "/api/v1/transactions/4f6ba6c8-0a3c-4bd2-9313-d11850b3f73f";
+		AtomicInteger workCalls = new AtomicInteger();
+
+		IdempotencyExecution<String> initial = serviceAt(NOW).executeAuthenticated(
+			userId, 1, "applySyncOperations", key, hash('a'), () -> {
+				workCalls.incrementAndGet();
+				return IdempotencyWorkResult.completed(null,
+					IdempotencyResponse.failedFinalVersionConflict(409, 7, location));
+			});
+		IdempotencyExecution<String> replay = serviceAt(NOW.plusSeconds(1)).executeAuthenticated(
+			userId, 1, "applySyncOperations", key, hash('a'), () -> completed(workCalls));
+
+		assertEquals(IdempotencyExecution.Status.EXECUTED, initial.status());
+		assertEquals(IdempotencyExecution.Status.REPLAYED, replay.status());
+		assertEquals(1, workCalls.get());
+		IdempotencyResponse.VersionConflictReference conflict = assertInstanceOf(
+			IdempotencyResponse.VersionConflictReference.class, replay.response().reference());
+		assertEquals(7, conflict.currentVersion());
+		assertEquals("\"7\"", conflict.currentEtag());
+		assertEquals(location, conflict.resourceLocation());
+		assertEquals(IdempotencyExecution.Status.KEY_REUSED, serviceAt(NOW.plusSeconds(2)).executeAuthenticated(
+			userId, 1, "applySyncOperations", key, hash('b'), () -> completed(workCalls)).status());
+		assertEquals(1, count("SELECT COUNT(*) FROM idempotency_records WHERE idempotency_key = ?", key));
 	}
 
 	@Test

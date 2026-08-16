@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** V009 数据库基线：认证/匿名幂等主体、生命周期、安全重放引用与保留清理边界。 */
+/** V016 数据库基线：在 V009 生命周期上仅增加可安全重放的版本冲突摘要。 */
 @Testcontainers
 class IdempotencySecurityBaselineMigrationTests {
 
@@ -38,24 +38,31 @@ class IdempotencySecurityBaselineMigrationTests {
 			.withPassword("ziji-test");
 
 	@Test
-	void emptyPostgresDatabaseMigratesV001ThroughV009InOrder() throws Exception {
-		migrateTo(EMPTY_POSTGRES, "9");
+	void emptyPostgresDatabaseMigratesV001ThroughV016InOrderAndRepeatsSafely() throws Exception {
+		migrateTo(EMPTY_POSTGRES, "16");
 
 		try (Connection connection = connection(EMPTY_POSTGRES)) {
-			assertEquals("001,002,003,004,005,006,007,008,009", stringValue(connection, """
+			assertEquals("001,002,003,004,005,006,007,008,009,010,011,012,013,014,015,016", stringValue(connection, """
 				SELECT string_agg(version, ',' ORDER BY installed_rank)
 				FROM flyway_schema_history
 				WHERE success
 				"""));
 			assertEquals(1, count(connection, """
 				SELECT COUNT(*) FROM flyway_schema_history
-				WHERE version = '009' AND success
+				WHERE version = '016' AND success
+				"""));
+		}
+		migrateTo(EMPTY_POSTGRES, "16");
+		try (Connection connection = connection(EMPTY_POSTGRES)) {
+			assertEquals(1, count(connection, """
+				SELECT COUNT(*) FROM flyway_schema_history
+				WHERE version = '016' AND success
 				"""));
 		}
 	}
 
 	@Test
-	void v009PreservesLegacyRecordsAndEnforcesNewIdempotencySafetyBoundary() throws Exception {
+	void v015UpgradesToV016WithoutRewritingLegacyRowsAndEnforcesConflictReferenceBoundary() throws Exception {
 		migrateTo(UPGRADE_POSTGRES, "8");
 		UUID userId = UUID.randomUUID();
 		UUID legacyId = UUID.randomUUID();
@@ -66,11 +73,21 @@ class IdempotencySecurityBaselineMigrationTests {
 			insertLegacyRecord(connection, legacyId, userId, legacyCreatedAt);
 		}
 
-		migrateTo(UPGRADE_POSTGRES, "9");
+		migrateTo(UPGRADE_POSTGRES, "15");
+
+		try (Connection connection = connection(UPGRADE_POSTGRES)) {
+			OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC).withNano(0);
+			insertRecord(connection, new IdempotencyRecord(
+				UUID.randomUUID(), userId, null, null, "postTransaction", "v015-final-key", requestHash(100),
+				"FAILED_FINAL", 422, problemReference("BUSINESS_RULE"), null, null,
+				now, now.plusSeconds(1), null, null, null, now.plusDays(7)));
+		}
+
+		migrateTo(UPGRADE_POSTGRES, "16");
 
 		try (Connection connection = connection(UPGRADE_POSTGRES)) {
 			assertLegacyRecordWasPreserved(connection, legacyId);
-			assertV009DatabaseObjects(connection);
+			assertV016DatabaseObjects(connection);
 
 			OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC).withNano(0);
 			verifyPositiveAuthenticatedAndAnonymousStates(connection, userId, now);
@@ -92,12 +109,12 @@ class IdempotencySecurityBaselineMigrationTests {
 			""", legacyId));
 		assertEquals(2, count(connection, """
 			SELECT COUNT(*) FROM pg_constraint
-			WHERE conname IN ('ck_idempotency_lifecycle_v1', 'ck_idempotency_response_reference_safe')
+			WHERE conname IN ('ck_idempotency_lifecycle_v2', 'ck_idempotency_response_reference_safe_v2')
 				AND NOT convalidated
 			"""));
 	}
 
-	private static void assertV009DatabaseObjects(Connection connection) throws SQLException {
+	private static void assertV016DatabaseObjects(Connection connection) throws SQLException {
 		assertEquals(4, count(connection, """
 			SELECT COUNT(*) FROM pg_indexes
 			WHERE schemaname = 'public'
@@ -122,10 +139,12 @@ class IdempotencySecurityBaselineMigrationTests {
 			"""));
 		String safeResponseConstraint = stringValue(connection, """
 			SELECT pg_get_constraintdef(oid) FROM pg_constraint
-			WHERE conname = 'ck_idempotency_response_reference_safe'
+			WHERE conname = 'ck_idempotency_response_reference_safe_v2'
 			""");
 		assertTrue(safeResponseConstraint.contains("octet_length((response_reference)::text) <= 8192"));
 		assertTrue(safeResponseConstraint.contains("retryAfterSeconds"));
+		assertTrue(safeResponseConstraint.contains("currentVersion"));
+		assertTrue(safeResponseConstraint.contains("resourceLocation"));
 		assertTrue(booleanValue(connection,
 			"SELECT has_table_privilege('ziji_app', 'public.idempotency_records', 'DELETE')"));
 		assertFalse(booleanValue(connection, """
@@ -156,8 +175,12 @@ class IdempotencySecurityBaselineMigrationTests {
 			UUID.randomUUID(), userId, null, null, "postTransaction", "retryable-key", requestHash(4),
 			"FAILED_RETRYABLE", 503, retryableProblemReference(), null, null,
 			now, now.plusSeconds(1), null, null, now.plusSeconds(6), now.plusDays(7)));
+		insertRecord(connection, new IdempotencyRecord(
+			UUID.randomUUID(), userId, null, null, "applySyncOperations", "version-conflict-key", requestHash(5),
+			"FAILED_FINAL", 409, versionConflictReference(7), null, null,
+			now, now.plusSeconds(1), null, null, null, now.plusDays(7)));
 
-		assertEquals(4, count(connection, """
+		assertEquals(6, count(connection, """
 			SELECT COUNT(*) FROM idempotency_records
 			WHERE status IN ('PROCESSING', 'SUCCEEDED', 'FAILED_FINAL', 'FAILED_RETRYABLE')
 				AND id <> (SELECT id FROM idempotency_records WHERE response_reference ->> 'legacy' = 'preserved')
@@ -205,6 +228,14 @@ class IdempotencySecurityBaselineMigrationTests {
 			"FAILED_RETRYABLE", 503, retryableProblemReference(), null, null,
 			now, now.plusSeconds(1), null, null, now.plusSeconds(5), now.plusDays(7))));
 		assertRejected(() -> insertRecord(connection, new IdempotencyRecord(
+			UUID.randomUUID(), userId, null, null, "applySyncOperations", "problem-version-conflict-key", requestHash(27),
+			"FAILED_FINAL", 409, problemReference("VERSION_CONFLICT"), null, null,
+			now, now.plusSeconds(1), null, null, null, now.plusDays(7))));
+		assertRejected(() -> insertRecord(connection, new IdempotencyRecord(
+			UUID.randomUUID(), userId, null, null, "applySyncOperations", "retryable-version-conflict-key", requestHash(28),
+			"FAILED_RETRYABLE", 500, retryableProblemReference("VERSION_CONFLICT"), null, null,
+			now, now.plusSeconds(1), null, null, now.plusSeconds(6), now.plusDays(7))));
+		assertRejected(() -> insertRecord(connection, new IdempotencyRecord(
 			UUID.randomUUID(), userId, null, null, "postTransaction", "completed-before-created-key", requestHash(16),
 			"SUCCEEDED", 200, emptyReference(), null, null,
 			now, now.minusSeconds(1), null, null, null, now.plusDays(7))));
@@ -221,6 +252,35 @@ class IdempotencySecurityBaselineMigrationTests {
 		assertRejected(() -> insertRecord(connection, new IdempotencyRecord(
 			UUID.randomUUID(), userId, null, null, "postTransaction", "unsafe-response-key", requestHash(19),
 			"SUCCEEDED", 200, unsafeResponseReference(), null, null,
+			now, now.plusSeconds(1), null, null, null, now.plusDays(7))));
+		// V016 的冲突摘要字段和关系必须完整、精确，不能退化为可携带任意 JSON 的 Problem。
+		assertRejected(() -> insertRecord(connection, new IdempotencyRecord(
+			UUID.randomUUID(), userId, null, null, "applySyncOperations", "conflict-extra-key", requestHash(20),
+			"FAILED_FINAL", 409, versionConflictReference(7, ",\"requestId\":\"leak\""), null, null,
+			now, now.plusSeconds(1), null, null, null, now.plusDays(7))));
+		assertRejected(() -> insertRecord(connection, new IdempotencyRecord(
+			UUID.randomUUID(), userId, null, null, "applySyncOperations", "problem-conflict-fields-key", requestHash(21),
+			"FAILED_FINAL", 409, problemReference("BUSINESS_RULE", ",\"currentVersion\":7"), null, null,
+			now, now.plusSeconds(1), null, null, null, now.plusDays(7))));
+		assertRejected(() -> insertRecord(connection, new IdempotencyRecord(
+			UUID.randomUUID(), userId, null, null, "applySyncOperations", "conflict-etag-key", requestHash(22),
+			"FAILED_FINAL", 409, versionConflictReference(7, "", "\"8\"", null), null, null,
+			now, now.plusSeconds(1), null, null, null, now.plusDays(7))));
+		assertRejected(() -> insertRecord(connection, new IdempotencyRecord(
+			UUID.randomUUID(), userId, null, null, "applySyncOperations", "conflict-path-key", requestHash(23),
+			"FAILED_FINAL", 409, versionConflictReference(7, "", null, "//outside.example/transaction"), null, null,
+			now, now.plusSeconds(1), null, null, null, now.plusDays(7))));
+		assertRejected(() -> insertRecord(connection, new IdempotencyRecord(
+			UUID.randomUUID(), userId, null, null, "applySyncOperations", "conflict-embedded-path-key", requestHash(24),
+			"FAILED_FINAL", 409, versionConflictReference(7, "", null, "/api//v1/transactions/1"), null, null,
+			now, now.plusSeconds(1), null, null, null, now.plusDays(7))));
+		assertRejected(() -> insertRecord(connection, new IdempotencyRecord(
+			UUID.randomUUID(), userId, null, null, "applySyncOperations", "conflict-version-key", requestHash(25),
+			"FAILED_FINAL", 409, versionConflictReference(10_000_000_000L), null, null,
+			now, now.plusSeconds(1), null, null, null, now.plusDays(7))));
+		assertRejected(() -> insertRecord(connection, new IdempotencyRecord(
+			UUID.randomUUID(), userId, null, null, "applySyncOperations", "conflict-resource-key", requestHash(26),
+			"FAILED_FINAL", 409, versionConflictReference(7, ",\"currentResource\":{}"), null, null,
 			now, now.plusSeconds(1), null, null, null, now.plusDays(7))));
 	}
 
@@ -466,8 +526,37 @@ class IdempotencySecurityBaselineMigrationTests {
 		return "{\"kind\":\"PROBLEM\",\"errorCode\":\"" + errorCode + "\"}";
 	}
 
+	private static String problemReference(String errorCode, String extraFields) {
+		return "{\"kind\":\"PROBLEM\",\"errorCode\":\"" + errorCode + "\"" + extraFields + "}";
+	}
+
+	private static String versionConflictReference(long currentVersion) {
+		return versionConflictReference(currentVersion, "", null, null);
+	}
+
+	private static String versionConflictReference(long currentVersion, String extraFields) {
+		return versionConflictReference(currentVersion, extraFields, null, null);
+	}
+
+	private static String versionConflictReference(
+		long currentVersion,
+		String extraFields,
+		String currentEtag,
+		String resourceLocation) {
+		String etag = currentEtag == null ? "\"" + currentVersion + "\"" : currentEtag;
+		String location = resourceLocation == null ? "/api/v1/transactions/4f6ba6c8-0a3c-4bd2-9313-d11850b3f73f" : resourceLocation;
+		return "{\"kind\":\"VERSION_CONFLICT\",\"errorCode\":\"VERSION_CONFLICT\",\"currentVersion\":"
+			+ currentVersion + ",\"currentEtag\":\"" + etag.replace("\"", "\\\"")
+			+ "\",\"resourceLocation\":\"" + location + "\""
+			+ extraFields + "}";
+	}
+
 	private static String retryableProblemReference() {
-		return "{\"kind\":\"PROBLEM\",\"errorCode\":\"TEMPORARILY_UNAVAILABLE\",\"retryAfterSeconds\":5}";
+		return retryableProblemReference("TEMPORARILY_UNAVAILABLE");
+	}
+
+	private static String retryableProblemReference(String errorCode) {
+		return "{\"kind\":\"PROBLEM\",\"errorCode\":\"" + errorCode + "\",\"retryAfterSeconds\":5}";
 	}
 
 	private static String oversizedResourceReference() {
