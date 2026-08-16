@@ -1769,10 +1769,11 @@ export interface components {
             accountId: string;
             amount: components["schemas"]["PositivePostedMoney"];
             currency: components["schemas"]["Currency"];
-            /** Format: uuid */
-            categoryId: string;
-            /** Format: uuid */
-            originalTransactionId?: string | null;
+            /**
+             * Format: uuid
+             * @description 必须关联原支出；退款分类、支出对方科目和可退款余额均从原支出事实继承。
+             */
+            originalTransactionId: string;
         } & {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -2066,10 +2067,9 @@ export interface components {
             /** Format: date-time */
             businessAt: string;
             /** Format: date */
-            businessDate?: string;
-            timezone?: string | null;
+            businessDate: string;
+            timezone: string;
             note?: string | null;
-            tagIds?: string[];
             /** Format: uuid */
             accountId: string;
             amount: components["schemas"]["PositivePostedMoney"];
@@ -2087,10 +2087,9 @@ export interface components {
             /** Format: date-time */
             businessAt: string;
             /** Format: date */
-            businessDate?: string;
-            timezone?: string | null;
+            businessDate: string;
+            timezone: string;
             note?: string | null;
-            tagIds?: string[];
             /** Format: uuid */
             accountId: string;
             amount: components["schemas"]["PositivePostedMoney"];
@@ -2108,19 +2107,20 @@ export interface components {
             /** Format: date-time */
             businessAt: string;
             /** Format: date */
-            businessDate?: string;
-            timezone?: string | null;
+            businessDate: string;
+            timezone: string;
             note?: string | null;
-            tagIds?: string[];
             /** Format: uuid */
             accountId: string;
             amount: components["schemas"]["PositivePostedMoney"];
             currency: components["schemas"]["Currency"];
-            /** Format: uuid */
-            categoryId: string;
-            /** Format: uuid */
-            originalTransactionId?: string | null;
+            /**
+             * Format: uuid
+             * @description 必须关联原支出；退款分类、支出对方科目和可退款余额均从原支出事实继承。
+             */
+            originalTransactionId: string;
         };
+        /** @description B1 只接受同币种、同金额普通转账：fromAmount.currency、toAmount.currency 和 fee.currency 必须相同，fromAmount.amount 必须等于 toAmount.amount；fee 大于零时 feeCategoryId 必填，fee 为零时 feeCategoryId 必须为 null。跨字段规则由运行时逐项 REJECTED，不能生成 FX_TRANSFER。 */
         SyncTransferTransactionRequest: {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -2130,10 +2130,9 @@ export interface components {
             /** Format: date-time */
             businessAt: string;
             /** Format: date */
-            businessDate?: string;
-            timezone?: string | null;
+            businessDate: string;
+            timezone: string;
             note?: string | null;
-            tagIds?: string[];
             /** Format: uuid */
             fromAccountId: string;
             /** Format: uuid */
@@ -2142,8 +2141,7 @@ export interface components {
             toAmount: components["schemas"]["PositiveMoneyAmount"];
             fee: components["schemas"]["MoneyAmount"];
             /** Format: uuid */
-            feeCategoryId?: string | null;
-            exchangeRate?: string | null;
+            feeCategoryId: string | null;
         };
         SyncUpdateTransactionPayload: {
             reason: string;

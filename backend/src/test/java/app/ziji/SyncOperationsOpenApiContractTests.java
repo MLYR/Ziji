@@ -14,8 +14,9 @@ import org.yaml.snakeyaml.Yaml;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** CHG-SYNC-003 契约基线：离线上传只暴露可安全映射的 Transaction 三分支。 */
+/** CHG-SYNC-003 / CHG-LED-002 契约基线：离线上传只暴露可安全映射的 Transaction 三分支。 */
 class SyncOperationsOpenApiContractTests {
 
 	@Test
@@ -112,6 +113,59 @@ class SyncOperationsOpenApiContractTests {
 			"#/components/schemas/SyncRetryableInternalErrorProblem"), refs(retryableProblem, "oneOf"));
 		assertRetryableProblem(schemas, "SyncRetryableInProgressProblem", 409, "IDEMPOTENCY_REQUEST_IN_PROGRESS");
 		assertRetryableProblem(schemas, "SyncRetryableInternalErrorProblem", 500, "INTERNAL_ERROR");
+	}
+
+	@Test
+	void transactionPayloadsKeepLedgerDerivationAndB1SyncBoundariesMachineVisible() throws IOException {
+		Map<String, Object> schemas = schemas(readContract());
+		assertSyncIncomeOrExpense(schemas, "SyncIncomeTransactionRequest");
+		assertSyncIncomeOrExpense(schemas, "SyncExpenseTransactionRequest");
+
+		Map<String, Object> syncRefund = objectMap(schemas.get("SyncRefundTransactionRequest"), "SyncRefundTransactionRequest");
+		Map<String, Object> syncRefundProperties = objectMap(syncRefund.get("properties"), "SyncRefundTransactionRequest properties");
+		assertRequired(syncRefund, "businessAt", "businessDate", "timezone", "originalTransactionId");
+		assertFalse(syncRefundProperties.containsKey("categoryId"));
+		assertFalse(syncRefundProperties.containsKey("tagIds"));
+		assertEquals("string", objectMap(syncRefundProperties.get("originalTransactionId"), "sync refund original").get("type"));
+
+		// 普通与 Sync 退款必须共用原支出继承语义，不能让其中一个入口保留过时的可空分类写法。
+		List<?> normalRefundAllOf = list(objectMap(schemas.get("RefundTransactionRequest"), "RefundTransactionRequest")
+			.get("allOf"), "RefundTransactionRequest allOf");
+		Map<String, Object> normalRefundProperties = objectMap(objectMap(normalRefundAllOf.get(1), "normal refund branch")
+			.get("properties"), "normal refund properties");
+		assertRequired(objectMap(normalRefundAllOf.get(1), "normal refund branch"), "originalTransactionId");
+		assertFalse(normalRefundProperties.containsKey("categoryId"));
+		assertEquals("string", objectMap(normalRefundProperties.get("originalTransactionId"), "normal refund original").get("type"));
+
+		Map<String, Object> transfer = objectMap(schemas.get("SyncTransferTransactionRequest"), "SyncTransferTransactionRequest");
+		Map<String, Object> transferProperties = objectMap(transfer.get("properties"), "SyncTransferTransactionRequest properties");
+		assertRequired(transfer, "businessAt", "businessDate", "timezone", "feeCategoryId");
+		assertFalse(transferProperties.containsKey("tagIds"));
+		assertFalse(transferProperties.containsKey("exchangeRate"));
+		assertTrue(String.valueOf(transfer.get("description")).contains("同币种、同金额"));
+
+		Map<String, Object> create = objectMap(schemas.get("SyncCreateTransactionOperation"), "SyncCreateTransactionOperation");
+		Map<String, Object> update = objectMap(schemas.get("SyncUpdateTransactionOperation"), "SyncUpdateTransactionOperation");
+		Map<String, Object> reverse = objectMap(schemas.get("SyncReverseTransactionOperation"), "SyncReverseTransactionOperation");
+		assertTrue(String.valueOf(objectMap(create.get("properties"), "CREATE properties").get("entityId")).contains("最终持久化"));
+		assertTrue(String.valueOf(objectMap(update.get("properties"), "UPDATE properties").get("entityId")).contains("被修订"));
+		assertTrue(String.valueOf(objectMap(reverse.get("properties"), "REVERSE properties").get("entityId")).contains("被作废"));
+	}
+
+	private static void assertSyncIncomeOrExpense(Map<String, Object> schemas, String schemaName) {
+		Map<String, Object> schema = objectMap(schemas.get(schemaName), schemaName);
+		Map<String, Object> properties = objectMap(schema.get("properties"), schemaName + " properties");
+		assertRequired(schema, "businessAt", "businessDate", "timezone");
+		assertFalse(properties.containsKey("tagIds"));
+		assertFalse(properties.containsKey("ledgerAccountId"));
+		assertEquals("string", objectMap(properties.get("timezone"), schemaName + " timezone").get("type"));
+	}
+
+	private static void assertRequired(Map<String, Object> schema, String... fields) {
+		List<?> required = list(schema.get("required"), "required");
+		for (String field : fields) {
+			assertTrue(required.contains(field), () -> "缺少必填字段：" + field);
+		}
 	}
 
 	private static void assertRetryableProblem(Map<String, Object> schemas, String schemaName, int status, String code) {

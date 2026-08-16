@@ -1884,14 +1884,13 @@ components:
       allOf:
         - { $ref: '#/components/schemas/TransactionCommandBase' }
         - type: object
-          required: [type, accountId, amount, currency, categoryId]
+          required: [type, accountId, amount, currency, originalTransactionId]
           properties:
             type: { type: string, const: REFUND }
             accountId: { type: string, format: uuid }
             amount: { $ref: '#/components/schemas/PositivePostedMoney' }
             currency: { $ref: '#/components/schemas/Currency' }
-            categoryId: { type: string, format: uuid }
-            originalTransactionId: { type: [string, 'null'], format: uuid }
+            originalTransactionId: { type: string, format: uuid, description: 必须关联原支出；退款分类、支出对方科目和可退款余额均从原支出事实继承。 }
     TransferTransactionRequest:
       unevaluatedProperties: false
       allOf:
@@ -2189,14 +2188,13 @@ components:
     SyncIncomeTransactionRequest:
       type: object
       additionalProperties: false
-      required: [type, businessAt, accountId, amount, currency, categoryId]
+      required: [type, businessAt, businessDate, timezone, accountId, amount, currency, categoryId]
       properties:
         type: { type: string, const: INCOME }
         businessAt: { type: string, format: date-time }
         businessDate: { type: string, format: date }
-        timezone: { type: [string, 'null'], minLength: 1, maxLength: 64 }
+        timezone: { type: string, minLength: 1, maxLength: 64 }
         note: { type: [string, 'null'], maxLength: 2000 }
-        tagIds: { type: array, uniqueItems: true, maxItems: 20, items: { type: string, format: uuid } }
         accountId: { type: string, format: uuid }
         amount: { $ref: '#/components/schemas/PositivePostedMoney' }
         currency: { $ref: '#/components/schemas/Currency' }
@@ -2205,14 +2203,13 @@ components:
     SyncExpenseTransactionRequest:
       type: object
       additionalProperties: false
-      required: [type, businessAt, accountId, amount, currency, categoryId]
+      required: [type, businessAt, businessDate, timezone, accountId, amount, currency, categoryId]
       properties:
         type: { type: string, const: EXPENSE }
         businessAt: { type: string, format: date-time }
         businessDate: { type: string, format: date }
-        timezone: { type: [string, 'null'], minLength: 1, maxLength: 64 }
+        timezone: { type: string, minLength: 1, maxLength: 64 }
         note: { type: [string, 'null'], maxLength: 2000 }
-        tagIds: { type: array, uniqueItems: true, maxItems: 20, items: { type: string, format: uuid } }
         accountId: { type: string, format: uuid }
         amount: { $ref: '#/components/schemas/PositivePostedMoney' }
         currency: { $ref: '#/components/schemas/Currency' }
@@ -2221,37 +2218,34 @@ components:
     SyncRefundTransactionRequest:
       type: object
       additionalProperties: false
-      required: [type, businessAt, accountId, amount, currency, categoryId]
+      required: [type, businessAt, businessDate, timezone, accountId, amount, currency, originalTransactionId]
       properties:
         type: { type: string, const: REFUND }
         businessAt: { type: string, format: date-time }
         businessDate: { type: string, format: date }
-        timezone: { type: [string, 'null'], minLength: 1, maxLength: 64 }
+        timezone: { type: string, minLength: 1, maxLength: 64 }
         note: { type: [string, 'null'], maxLength: 2000 }
-        tagIds: { type: array, uniqueItems: true, maxItems: 20, items: { type: string, format: uuid } }
         accountId: { type: string, format: uuid }
         amount: { $ref: '#/components/schemas/PositivePostedMoney' }
         currency: { $ref: '#/components/schemas/Currency' }
-        categoryId: { type: string, format: uuid }
-        originalTransactionId: { type: [string, 'null'], format: uuid }
+        originalTransactionId: { type: string, format: uuid, description: 必须关联原支出；退款分类、支出对方科目和可退款余额均从原支出事实继承。 }
     SyncTransferTransactionRequest:
       type: object
       additionalProperties: false
-      required: [type, businessAt, fromAccountId, toAccountId, fromAmount, toAmount, fee]
+      description: B1 只接受同币种、同金额普通转账：fromAmount.currency、toAmount.currency 和 fee.currency 必须相同，fromAmount.amount 必须等于 toAmount.amount；fee 大于零时 feeCategoryId 必填，fee 为零时 feeCategoryId 必须为 null。跨字段规则由运行时逐项 REJECTED，不能生成 FX_TRANSFER。
+      required: [type, businessAt, businessDate, timezone, fromAccountId, toAccountId, fromAmount, toAmount, fee, feeCategoryId]
       properties:
         type: { type: string, const: TRANSFER }
         businessAt: { type: string, format: date-time }
         businessDate: { type: string, format: date }
-        timezone: { type: [string, 'null'], minLength: 1, maxLength: 64 }
+        timezone: { type: string, minLength: 1, maxLength: 64 }
         note: { type: [string, 'null'], maxLength: 2000 }
-        tagIds: { type: array, uniqueItems: true, maxItems: 20, items: { type: string, format: uuid } }
         fromAccountId: { type: string, format: uuid }
         toAccountId: { type: string, format: uuid }
         fromAmount: { $ref: '#/components/schemas/PositiveMoneyAmount' }
         toAmount: { $ref: '#/components/schemas/PositiveMoneyAmount' }
         fee: { $ref: '#/components/schemas/MoneyAmount' }
         feeCategoryId: { type: [string, 'null'], format: uuid }
-        exchangeRate: { type: [string, 'null'], pattern: '^(0*[1-9][0-9]{0,27})(\.[0-9]{1,12})?$|^0\.[0-9]*[1-9][0-9]{0,11}$' }
     SyncUpdateTransactionPayload:
       type: object
       additionalProperties: false

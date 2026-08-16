@@ -453,6 +453,8 @@ AND (expires_at IS NULL OR expires_at > asOf)
 }
 ```
 
+退款必须提交非空 `originalTransactionId`，且服务端从该原支出继承分类、支出对方科目和可退款余额；请求不得提交 `categoryId`。客户端和普通 HTTP 均不得提交 `LedgerAccountId`、`LedgerEntry`、借贷方向或系统科目 code。收入/支出及有手续费转账的系统对方科目由 Ledger 在同一账务事务内按当前用户、分类 UUID、科目性质和币种惰性读取或确保，code 固定为 `INCOME_CATEGORY_<categoryUuid>` / `EXPENSE_CATEGORY_<categoryUuid>`。
+
 转账：
 
 ```json
@@ -872,6 +874,8 @@ V1 此接口只接受 `entityType=TRANSACTION`，且操作矩阵固定为：
 
 `ACCOUNT`、`CATEGORY`、`TAG`、`RECURRING_RULE` 和 `ARCHIVE` 不属于 V1 `applySyncOperations` 的机器契约。未来离线上传必须先具备对应 application port、账务/审计/outbox 事实链和独立任务，不得由 Sync 直接写表或构造分录。
 
+Sync CREATE 和 UPDATE replacement 的 `businessAt`、`businessDate`、`timezone` 均为必填非空：它们是客户端入队时已确认的历史业务归属，服务端仅校验时区和日期规则，不能在稍后上传时按用户当前时区重新划分。Sync 在 BE-CAT-003 闭合交易标签事实链前不接受 `tagIds`，避免静默丢弃。退款必须提交非空 `originalTransactionId`，不接受 `categoryId`；分类、原支出费用对方科目和可退款余额从原支出事实继承。B1 Sync 转账只接受同币种、同金额普通转账：`fromAmount.currency`、`toAmount.currency`、`fee.currency` 必须一致，`fromAmount.amount=toAmount.amount`，且不接受 `exchangeRate`；`fee=0` 时 `feeCategoryId=null`，`fee>0` 时必须提供费用分类。上述跨字段条件由运行时逐项 `REJECTED`，不得转换为 FX_TRANSFER。
+
 ```json
 {
   "data": {
@@ -901,11 +905,11 @@ V1 此接口只接受 `entityType=TRANSACTION`，且操作矩阵固定为：
 ### 5.3 同步安全
 
 - 同步 payload 使用冻结的 Transaction 语义命令 schema 和校验规则；外层 `entityId` 是唯一业务实体 ID，payload 不得再携带第二个 ID
-- 客户端不能通过同步接口提交任意 LedgerEntry
+- 客户端不能通过同步接口提交 LedgerAccountId、任意 LedgerEntry、借贷方向或系统科目 code；系统对方科目只由 Ledger 在单项账务事务内派生
 - 每个操作重新校验当前成员权限
 - 相同 idempotencyKey 不同 Hash 返回 `REJECTED`，其中 `error.code=IDEMPOTENCY_KEY_REUSED`
 - `CONFLICT` 只使用 §2.5 的安全 `versionConflict` 摘要；资源不可见时改为 `REJECTED`，不得通过结果泄漏资源存在性
-- 每个操作独立复用 `UnifiedIdempotencyService`。作用域固定为当前用户 + API v1 + 实际 OpenAPI operationId `applySyncOperations` + 该操作 `idempotencyKey`；客户端 `operationId`、`entityType`、`operationType`、实际 `entityId`、`baseVersion` 的显式值或 `NULL`、`payloadVersion` 和规范化 payload 进入 requestHash。`deviceId` 和 `createdAt` 不进入 Hash，不另造派生 operationId。
+- 每个操作独立复用 `UnifiedIdempotencyService`。作用域固定为当前用户 + API v1 + 实际 OpenAPI operationId `applySyncOperations` + 该操作 `idempotencyKey`；客户端 `operationId`、`entityType`、`operationType`、实际 `entityId`、`baseVersion` 的显式值或 `NULL`、`payloadVersion` 和规范化 payload 进入 requestHash。故退款的 `originalTransactionId`、Sync 的 `businessAt/businessDate/timezone`、转账金额/币种/手续费分类等冻结字段均由规范化 payload 覆盖；`deviceId` 和 `createdAt` 不进入 Hash，不另造派生 operationId。
 - 同 Key 同 Hash 只安全重放首次结果并返回 `DUPLICATE`；同 Key 异 Hash 不改写既有幂等记录。单个 Transaction、LedgerEntry、audit、outbox 和幂等终态仍必须在既有事务中原子提交；批内其他操作不随该操作失败回滚。
 - `deviceId` 只用于经 schema 校验的客户端设备标识，不参与身份、权限或 requestHash；`createdAt` 是本地队列元数据，不替代 payload 内业务时间，也不参与 requestHash。
 - `REJECTED` 是终态，客户端不得自动重试。`RETRYABLE` 必须保留同一 `operationId`、`idempotencyKey` 和 requestHash，等待 5 秒后串行重试；后续 Mobile 编排将其回到 `PENDING`，不得误标为 `REJECTED`。
