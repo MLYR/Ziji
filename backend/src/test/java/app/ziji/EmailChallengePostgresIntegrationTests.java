@@ -91,8 +91,8 @@ class EmailChallengePostgresIntegrationTests extends PostgresIntegrationTestSupp
 
 	@BeforeEach
 	void clearAuthFacts() {
-		// TRUNCATE 不触发 V008 的七天 DELETE 保留触发器，只清理本测试写入的认证事实。
-		jdbc.update("TRUNCATE TABLE outbox_events, email_challenges, auth_rate_limit_buckets");
+		// receipt 外键依赖 outbox_events，清理本测试写入的认证、outbox 与 receipt 事实。
+		jdbc.update("TRUNCATE TABLE outbox_consumer_receipts, outbox_events, email_challenges, auth_rate_limit_buckets");
 	}
 
 	@Test
