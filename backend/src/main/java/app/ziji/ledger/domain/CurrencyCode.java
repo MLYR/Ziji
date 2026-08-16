@@ -1,6 +1,7 @@
 package app.ziji.ledger.domain;
 
 /** V1 账务允许使用的币种代码，与数据库 CHECK 保持一致。 */
+@org.springframework.modulith.NamedInterface("sync-command")
 public enum CurrencyCode {
 	CNY,
 	USD,

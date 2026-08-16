@@ -68,7 +68,8 @@ class SecurityConfiguration {
 			.requestMatchers(HttpMethod.POST,
 				"/api/v1/accounts/*/liquidity-holds",
 				"/api/v1/accounts/*/liquidity-holds/*/revisions",
-				"/api/v1/accounts/*/liquidity-holds/*/release").authenticated()
+				"/api/v1/accounts/*/liquidity-holds/*/release",
+				"/api/v1/sync/operations").authenticated()
 			.requestMatchers(HttpMethod.DELETE,
 				"/api/v1/auth/sessions/current", "/api/v1/users/me/sessions", "/api/v1/users/me/sessions/*").authenticated()
 			.anyRequest().denyAll());
@@ -124,6 +125,7 @@ class SecurityConfiguration {
 		}
 		if ("POST".equals(method)) {
 			return "/api/v1/users/me/password-change".equals(path)
+				|| "/api/v1/sync/operations".equals(path)
 				|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds")
 				|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds/[^/]+/(revisions|release)");
 		}

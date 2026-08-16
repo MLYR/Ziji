@@ -70,5 +70,4 @@ getDataExport
 getAccountClosure
 createAccountClosure
 cancelAccountClosure
-applySyncOperations
 getAsyncJob

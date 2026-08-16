@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 
 /** 带币种的精确金额值对象；不在构造或加法时静默舍入，分录方向由 LedgerEntry 负责表达。 */
+@org.springframework.modulith.NamedInterface("sync-command")
 public final class Money implements Comparable<Money> {
 
 	private final BigDecimal amount;

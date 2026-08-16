@@ -63,6 +63,35 @@ public class PostgresLedgerAccountStore implements LedgerAccountStore {
 	}
 
 	@Override
+	public LedgerAccountReference ensureCategorySystemAccount(
+		UUID ownerUserId, UUID categoryId, LedgerAccountNature nature, CurrencyCode currency) {
+		if (ownerUserId == null || categoryId == null || currency == null
+			|| nature != LedgerAccountNature.INCOME && nature != LedgerAccountNature.EXPENSE) {
+			throw new LedgerPersistenceException(new IllegalArgumentException("分类系统科目参数无效。"));
+		}
+		String code = (nature == LedgerAccountNature.INCOME ? "INCOME_CATEGORY_" : "EXPENSE_CATEGORY_") + categoryId;
+		try {
+			// 同一账务事务以内置唯一键收敛并发创建；调用者只得到受控语义，不接触 SQL 或科目 ID。
+			jdbc.update("""
+				INSERT INTO ledger_accounts (
+					id, visible_account_id, owner_user_id, code, ledger_role, account_nature, currency, status, created_at)
+				VALUES (?, NULL, ?, ?, 'SYSTEM', ?, ?, 'ACTIVE', CURRENT_TIMESTAMP)
+				ON CONFLICT (owner_user_id, code, currency) WHERE visible_account_id IS NULL DO NOTHING
+				""", UUID.randomUUID(), ownerUserId, code, nature.name(), currency.name());
+			return jdbc.query("""
+				SELECT id, visible_account_id, owner_user_id, code, ledger_role, account_nature, currency, status
+				FROM ledger_accounts
+				WHERE owner_user_id = ? AND code = ? AND currency = ? AND ledger_role = 'SYSTEM'
+				""", result -> {
+				if (!result.next()) throw new LedgerPersistenceException(new IllegalStateException("分类系统科目未创建。"));
+				return toReference(result);
+			}, ownerUserId, code, currency.name());
+		} catch (RuntimeException exception) {
+			throw persistence(exception);
+		}
+	}
+
+	@Override
 	public Money currentBalance(UUID ledgerAccountId) {
 		if (ledgerAccountId == null) {
 			throw new LedgerPersistenceException(new IllegalArgumentException("账务科目不能为空。"));

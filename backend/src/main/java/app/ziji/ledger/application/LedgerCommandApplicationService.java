@@ -33,7 +33,7 @@ import app.ziji.ledger.domain.TransactionType;
 import app.ziji.shared.application.TransactionRunner;
 
 /** 五类账务语义命令的应用编排；不包含 HTTP、Spring、jOOQ 或余额投影。 */
-public final class LedgerCommandApplicationService {
+public final class LedgerCommandApplicationService implements LedgerSyncCommandPort {
 
 	private final TransactionRunner transactions;
 	private final AccountPostingReferencePort accounts;
@@ -78,152 +78,263 @@ public final class LedgerCommandApplicationService {
 	}
 
 	public Transaction postIncome(IncomeCommand command) {
-		require(command, "收入命令");
-		return transactions.required(() -> {
-			AccountPostingReference account = editableAccount(command.userId(), command.accountId(), command.businessAt());
-			LedgerAccountReference accountLedger = primary(account);
-			requireAssetAccount(account, "收入");
-			validateAmount(command.amount(), accountLedger.currency());
-			requireCategory(command.categoryId(), command.userId(), command.accountId(), CategoryType.INCOME);
-			requireSystem(command.incomeLedgerAccountId(), command.userId(), accountLedger.currency(), LedgerAccountNature.INCOME);
+		return postIncome(command, UUID.randomUUID(), TransactionSource.MANUAL);
+	}
 
-			Transaction transaction = transactionFactory.createPosted(
-				UUID.randomUUID(),
-				TransactionType.INCOME,
-				TransactionSource.MANUAL,
-				command.businessAt(),
-				command.businessDate(),
-				command.timezone(),
-				clock.instant(),
-				List.of(
-					new LedgerEntrySpec(accountLedger.id(), LedgerDirection.DEBIT, command.amount()),
-					new LedgerEntrySpec(command.incomeLedgerAccountId(), LedgerDirection.CREDIT, command.amount())));
-			completeInitialPosting(new PostedTransactionWrite(
-				transaction, command.userId(), command.counterparty(), null, command.note(),
-				command.categoryId(), new NoTransactionDetails()));
-			return transaction;
-		});
+	private Transaction postIncome(IncomeCommand command, UUID transactionId, TransactionSource source) {
+		require(command, "收入命令");
+		return transactions.required(() -> postIncomeInTransaction(command, transactionId, source));
+	}
+
+	private Transaction postIncomeInTransaction(IncomeCommand command, UUID transactionId, TransactionSource source) {
+		AccountPostingReference account = editableAccount(command.userId(), command.accountId(), command.businessAt());
+		LedgerAccountReference accountLedger = primary(account);
+		requireAssetAccount(account, "收入");
+		validateAmount(command.amount(), accountLedger.currency());
+		requireCategory(command.categoryId(), command.userId(), command.accountId(), CategoryType.INCOME);
+		requireSystem(command.incomeLedgerAccountId(), command.userId(), accountLedger.currency(), LedgerAccountNature.INCOME);
+
+		Transaction transaction = transactionFactory.createPosted(
+			transactionId,
+			TransactionType.INCOME,
+			source,
+			command.businessAt(),
+			command.businessDate(),
+			command.timezone(),
+			clock.instant(),
+			List.of(
+				new LedgerEntrySpec(accountLedger.id(), LedgerDirection.DEBIT, command.amount()),
+				new LedgerEntrySpec(command.incomeLedgerAccountId(), LedgerDirection.CREDIT, command.amount())));
+		completeInitialPosting(new PostedTransactionWrite(
+			transaction, command.userId(), command.counterparty(), null, command.note(),
+			command.categoryId(), new NoTransactionDetails()));
+		return transaction;
 	}
 
 	public Transaction postExpense(ExpenseCommand command) {
-		require(command, "支出命令");
-		return transactions.required(() -> {
-			AccountPostingReference account = editableAccount(command.userId(), command.accountId(), command.businessAt());
-			LedgerAccountReference accountLedger = primary(account);
-			validateAmount(command.amount(), accountLedger.currency());
-			requireCategory(command.categoryId(), command.userId(), command.accountId(), CategoryType.EXPENSE);
-			requireSystem(command.expenseLedgerAccountId(), command.userId(), accountLedger.currency(), LedgerAccountNature.EXPENSE);
+		return postExpense(command, UUID.randomUUID(), TransactionSource.MANUAL);
+	}
 
-			Transaction transaction = transactionFactory.createPosted(
-				UUID.randomUUID(),
-				TransactionType.EXPENSE,
-				TransactionSource.MANUAL,
-				command.businessAt(),
-				command.businessDate(),
-				command.timezone(),
-				clock.instant(),
-				List.of(
-					new LedgerEntrySpec(command.expenseLedgerAccountId(), LedgerDirection.DEBIT, command.amount()),
-					new LedgerEntrySpec(accountLedger.id(), LedgerDirection.CREDIT, command.amount())));
-			completeInitialPosting(new PostedTransactionWrite(
-				transaction, command.userId(), null, command.merchant(), command.note(),
-				command.categoryId(), new NoTransactionDetails()));
-			return transaction;
-		});
+	private Transaction postExpense(ExpenseCommand command, UUID transactionId, TransactionSource source) {
+		require(command, "支出命令");
+		return transactions.required(() -> postExpenseInTransaction(command, transactionId, source));
+	}
+
+	private Transaction postExpenseInTransaction(ExpenseCommand command, UUID transactionId, TransactionSource source) {
+		AccountPostingReference account = editableAccount(command.userId(), command.accountId(), command.businessAt());
+		LedgerAccountReference accountLedger = primary(account);
+		validateAmount(command.amount(), accountLedger.currency());
+		requireCategory(command.categoryId(), command.userId(), command.accountId(), CategoryType.EXPENSE);
+		requireSystem(command.expenseLedgerAccountId(), command.userId(), accountLedger.currency(), LedgerAccountNature.EXPENSE);
+
+		Transaction transaction = transactionFactory.createPosted(
+			transactionId,
+			TransactionType.EXPENSE,
+			source,
+			command.businessAt(),
+			command.businessDate(),
+			command.timezone(),
+			clock.instant(),
+			List.of(
+				new LedgerEntrySpec(command.expenseLedgerAccountId(), LedgerDirection.DEBIT, command.amount()),
+				new LedgerEntrySpec(accountLedger.id(), LedgerDirection.CREDIT, command.amount())));
+		completeInitialPosting(new PostedTransactionWrite(
+			transaction, command.userId(), null, command.merchant(), command.note(),
+			command.categoryId(), new NoTransactionDetails()));
+		return transaction;
 	}
 
 	public Transaction postRefund(RefundCommand command) {
+		return postRefund(command, UUID.randomUUID(), TransactionSource.MANUAL);
+	}
+
+	private Transaction postRefund(RefundCommand command, UUID transactionId, TransactionSource source) {
 		require(command, "退款命令");
-		return transactions.required(() -> {
-			AccountPostingReference refundAccount = editableAccount(command.userId(), command.accountId(), command.businessAt());
-			LedgerAccountReference refundLedger = primary(refundAccount);
-			requireAssetAccount(refundAccount, "退款");
-			validateAmount(command.amount(), refundLedger.currency());
-			LedgerTransactionStore.RefundCandidate original = ledgerTransactions
-				.findRefundCandidate(command.originalTransactionId())
-				.orElseThrow(() -> invalid("原支出交易不存在或不可退款。"));
-			if (!accountAccess.mayPost(command.userId(), original.originalAccountId(), command.businessAt())) {
-				throw invalid("无权操作原支出交易。");
-			}
-			if (!original.originalAmount().currency().equals(refundLedger.currency())
-				|| !original.refundedAmount().currency().equals(refundLedger.currency())) {
-				throw invalid("退款币种必须与原支出一致。");
-			}
-			Money remaining = new Money(
-				original.originalAmount().amount().subtract(original.refundedAmount().amount()),
-				refundLedger.currency());
-			if (command.amount().compareTo(remaining) > 0) {
-				throw invalid("退款金额超过原支出可退款余额。");
-			}
-			if (original.categoryId() == null) {
-				throw invalid("原支出缺少可继承的支出分类。");
-			}
-			requireCategory(original.categoryId(), command.userId(), original.originalAccountId(), CategoryType.EXPENSE);
-			Transaction transaction = transactionFactory.createPosted(
-				UUID.randomUUID(),
-				TransactionType.REFUND,
-				TransactionSource.MANUAL,
-				command.businessAt(),
-				command.businessDate(),
-				command.timezone(),
-				clock.instant(),
-				List.of(
-					new LedgerEntrySpec(refundLedger.id(), LedgerDirection.DEBIT, command.amount()),
-					new LedgerEntrySpec(original.expenseLedgerAccountId(), LedgerDirection.CREDIT, command.amount())));
-			completeInitialPosting(new PostedTransactionWrite(
-				transaction, command.userId(), null, null, command.note(), null,
-				new RefundWriteDetails(command.originalTransactionId(), original.categoryId())));
-			return transaction;
-		});
+		return transactions.required(() -> postRefundInTransaction(command, transactionId, source));
+	}
+
+	private Transaction postRefundInTransaction(RefundCommand command, UUID transactionId, TransactionSource source) {
+		AccountPostingReference refundAccount = editableAccount(command.userId(), command.accountId(), command.businessAt());
+		LedgerAccountReference refundLedger = primary(refundAccount);
+		requireAssetAccount(refundAccount, "退款");
+		validateAmount(command.amount(), refundLedger.currency());
+		LedgerTransactionStore.RefundCandidate original = ledgerTransactions
+			.findRefundCandidate(command.originalTransactionId())
+			.orElseThrow(() -> invalid("原支出交易不存在或不可退款。"));
+		if (!accountAccess.mayPost(command.userId(), original.originalAccountId(), command.businessAt())) {
+			throw invalid("无权操作原支出交易。");
+		}
+		if (!original.originalAmount().currency().equals(refundLedger.currency())
+			|| !original.refundedAmount().currency().equals(refundLedger.currency())) {
+			throw invalid("退款币种必须与原支出一致。");
+		}
+		Money remaining = new Money(
+			original.originalAmount().amount().subtract(original.refundedAmount().amount()),
+			refundLedger.currency());
+		if (command.amount().compareTo(remaining) > 0) {
+			throw invalid("退款金额超过原支出可退款余额。");
+		}
+		if (original.categoryId() == null) {
+			throw invalid("原支出缺少可继承的支出分类。");
+		}
+		requireCategory(original.categoryId(), command.userId(), original.originalAccountId(), CategoryType.EXPENSE);
+		Transaction transaction = transactionFactory.createPosted(
+			transactionId,
+			TransactionType.REFUND,
+			source,
+			command.businessAt(),
+			command.businessDate(),
+			command.timezone(),
+			clock.instant(),
+			List.of(
+				new LedgerEntrySpec(refundLedger.id(), LedgerDirection.DEBIT, command.amount()),
+				new LedgerEntrySpec(original.expenseLedgerAccountId(), LedgerDirection.CREDIT, command.amount())));
+		completeInitialPosting(new PostedTransactionWrite(
+			transaction, command.userId(), null, null, command.note(), null,
+			new RefundWriteDetails(command.originalTransactionId(), original.categoryId())));
+		return transaction;
 	}
 
 	public Transaction postTransfer(TransferCommand command) {
+		return postTransfer(command, UUID.randomUUID(), TransactionSource.MANUAL);
+	}
+
+	private Transaction postTransfer(TransferCommand command, UUID transactionId, TransactionSource source) {
 		require(command, "转账命令");
-		return transactions.required(() -> {
-			AccountPostingReference from = editableAccount(command.userId(), command.fromAccountId(), command.businessAt());
-			AccountPostingReference to = editableAccount(command.userId(), command.toAccountId(), command.businessAt());
-			requireAssetAccount(from, "转账");
-			requireAssetAccount(to, "转账");
-			LedgerAccountReference fromLedger = primary(from);
-			LedgerAccountReference toLedger = primary(to);
-			if (fromLedger.currency() != toLedger.currency()) {
-				throw invalid("本任务只允许同币种转账。");
+		return transactions.required(() -> postTransferInTransaction(command, transactionId, source));
+	}
+
+	private Transaction postTransferInTransaction(TransferCommand command, UUID transactionId, TransactionSource source) {
+		AccountPostingReference from = editableAccount(command.userId(), command.fromAccountId(), command.businessAt());
+		AccountPostingReference to = editableAccount(command.userId(), command.toAccountId(), command.businessAt());
+		requireAssetAccount(from, "转账");
+		requireAssetAccount(to, "转账");
+		LedgerAccountReference fromLedger = primary(from);
+		LedgerAccountReference toLedger = primary(to);
+		if (fromLedger.currency() != toLedger.currency()) {
+			throw invalid("本任务只允许同币种转账。");
+		}
+		validateAmount(command.amount(), fromLedger.currency());
+		Money fee = command.feeAmount() == null
+			? new Money(BigDecimal.ZERO, fromLedger.currency()) : command.feeAmount();
+		validateFee(fee, fromLedger.currency());
+		List<LedgerEntrySpec> entries = new ArrayList<>(List.of(
+			new LedgerEntrySpec(toLedger.id(), LedgerDirection.DEBIT, command.amount()),
+			new LedgerEntrySpec(fromLedger.id(), LedgerDirection.CREDIT, command.amount())));
+		UUID categoryId = null;
+		if (fee.amount().signum() > 0) {
+			LedgerAccountReference feeLedger = requireSystem(
+				command.feeLedgerAccountId(), command.userId(), fromLedger.currency(), LedgerAccountNature.EXPENSE);
+			if (command.feeCategoryId() != null) {
+				requireCategory(command.feeCategoryId(), command.userId(), command.fromAccountId(), CategoryType.EXPENSE);
+				categoryId = command.feeCategoryId();
 			}
-			validateAmount(command.amount(), fromLedger.currency());
-			Money fee = command.feeAmount() == null
-				? new Money(BigDecimal.ZERO, fromLedger.currency()) : command.feeAmount();
-			validateFee(fee, fromLedger.currency());
-			List<LedgerEntrySpec> entries = new ArrayList<>(List.of(
-				new LedgerEntrySpec(toLedger.id(), LedgerDirection.DEBIT, command.amount()),
-				new LedgerEntrySpec(fromLedger.id(), LedgerDirection.CREDIT, command.amount())));
-			UUID categoryId = null;
-			if (fee.amount().signum() > 0) {
-				LedgerAccountReference feeLedger = requireSystem(
-					command.feeLedgerAccountId(), command.userId(), fromLedger.currency(), LedgerAccountNature.EXPENSE);
-				if (command.feeCategoryId() != null) {
-					requireCategory(command.feeCategoryId(), command.userId(), command.fromAccountId(), CategoryType.EXPENSE);
-					categoryId = command.feeCategoryId();
-				}
-				entries.add(new LedgerEntrySpec(feeLedger.id(), LedgerDirection.DEBIT, fee));
-				entries.add(new LedgerEntrySpec(fromLedger.id(), LedgerDirection.CREDIT, fee));
-			} else if (command.feeCategoryId() != null || command.feeLedgerAccountId() != null) {
-				throw invalid("无手续费时不能提供手续费科目或分类。");
+			entries.add(new LedgerEntrySpec(feeLedger.id(), LedgerDirection.DEBIT, fee));
+			entries.add(new LedgerEntrySpec(fromLedger.id(), LedgerDirection.CREDIT, fee));
+		} else if (command.feeCategoryId() != null || command.feeLedgerAccountId() != null) {
+			throw invalid("无手续费时不能提供手续费科目或分类。");
+		}
+		Transaction transaction = transactionFactory.createPosted(
+			transactionId,
+			TransactionType.TRANSFER,
+			source,
+			command.businessAt(),
+			command.businessDate(),
+			command.timezone(),
+			clock.instant(),
+			entries);
+		completeInitialPosting(new PostedTransactionWrite(
+			transaction, command.userId(), null, null, command.note(), categoryId,
+			new TransferWriteDetails(
+				command.fromAccountId(), command.toAccountId(), command.amount(), command.amount(), fee)));
+		return transaction;
+	}
+
+	/**
+	 * Sync 只能提交业务语义；系统对方科目在 Ledger 事务内按分类惰性确保，不能泄漏到接口层。
+	 */
+	public SyncLedgerResult applySync(SyncLedgerCommand command) {
+		require(command, "同步账务命令");
+		// 预期拒绝只回滚本操作 savepoint，外层统一幂等终态仍须与该拒绝原子提交。
+		return transactions.nested(() -> switch (command) {
+			case SyncLedgerCommand.Income income -> {
+				LedgerAccountReference counter = ensureCategoryCounter(
+					income.userId(), income.categoryId(), LedgerAccountNature.INCOME, income.amount().currency());
+				Transaction posted = postIncomeInTransaction(new IncomeCommand(
+					income.userId(), income.accountId(), counter.id(), income.categoryId(), income.amount(),
+					income.businessAt(), income.businessDate(), income.timezone(), income.counterparty(), income.note()),
+					income.transactionId(), TransactionSource.SYNC);
+				yield new SyncLedgerResult(posted.transactionId(), 1);
 			}
-			Transaction transaction = transactionFactory.createPosted(
-				UUID.randomUUID(),
-				TransactionType.TRANSFER,
-				TransactionSource.MANUAL,
-				command.businessAt(),
-				command.businessDate(),
-				command.timezone(),
-				clock.instant(),
-				entries);
-			completeInitialPosting(new PostedTransactionWrite(
-				transaction, command.userId(), null, null, command.note(), categoryId,
-				new TransferWriteDetails(
-					command.fromAccountId(), command.toAccountId(), command.amount(), command.amount(), fee)));
-			return transaction;
+			case SyncLedgerCommand.Expense expense -> {
+				LedgerAccountReference counter = ensureCategoryCounter(
+					expense.userId(), expense.categoryId(), LedgerAccountNature.EXPENSE, expense.amount().currency());
+				Transaction posted = postExpenseInTransaction(new ExpenseCommand(
+					expense.userId(), expense.accountId(), counter.id(), expense.categoryId(), expense.amount(),
+					expense.businessAt(), expense.businessDate(), expense.timezone(), expense.merchant(), expense.note()),
+					expense.transactionId(), TransactionSource.SYNC);
+				yield new SyncLedgerResult(posted.transactionId(), 1);
+			}
+			case SyncLedgerCommand.Refund refund -> {
+				Transaction posted = postRefundInTransaction(new RefundCommand(
+					refund.userId(), refund.accountId(), refund.originalTransactionId(), refund.amount(), refund.businessAt(),
+					refund.businessDate(), refund.timezone(), refund.note()), refund.transactionId(), TransactionSource.SYNC);
+				yield new SyncLedgerResult(posted.transactionId(), 1);
+			}
+			case SyncLedgerCommand.Transfer transfer -> {
+				UUID feeLedgerId = transfer.feeAmount().amount().signum() == 0 ? null : ensureCategoryCounter(
+					transfer.userId(), transfer.feeCategoryId(), LedgerAccountNature.EXPENSE, transfer.feeAmount().currency()).id();
+				Transaction posted = postTransferInTransaction(new TransferCommand(
+					transfer.userId(), transfer.fromAccountId(), transfer.toAccountId(), feeLedgerId, transfer.feeCategoryId(),
+					transfer.amount(), transfer.feeAmount(), transfer.businessAt(), transfer.businessDate(), transfer.timezone(), transfer.note()),
+					transfer.transactionId(), TransactionSource.SYNC);
+				yield new SyncLedgerResult(posted.transactionId(), 1);
+			}
+			case SyncLedgerCommand.Revision revision -> {
+				TransactionRevisionResult revised = revisePostedTransactionInTransaction(toSyncRevision(revision));
+				yield new SyncLedgerResult(revised.replacement().transactionId(), 1);
+			}
+			case SyncLedgerCommand.Reverse reverse -> {
+				TransactionVoidResult reversed = voidPostedTransactionInTransaction(new VoidPostedTransactionCommand(
+					reverse.userId(), reverse.transactionId(), reverse.expectedEntityVersion(), reverse.reason()));
+				yield new SyncLedgerResult(reversed.reversal().transactionId(), 1);
+			}
 		});
+	}
+
+	private RevisePostedTransactionCommand toSyncRevision(SyncLedgerCommand.Revision revision) {
+		SyncLedgerCommand.Replacement replacement = revision.replacement();
+		return switch (replacement) {
+			case SyncLedgerCommand.Replacement.Income income -> new RevisePostedTransactionCommand(
+				revision.userId(), revision.transactionId(), revision.expectedEntityVersion(), income.businessAt(), income.businessDate(),
+				income.timezone(), income.counterparty(), null, income.note(), revision.reason(),
+				new TransactionRevisionDetails.Income(income.amount(), ensureCategoryCounter(
+					revision.userId(), income.categoryId(), LedgerAccountNature.INCOME, income.amount().currency()).id(), income.categoryId()));
+			case SyncLedgerCommand.Replacement.Expense expense -> new RevisePostedTransactionCommand(
+				revision.userId(), revision.transactionId(), revision.expectedEntityVersion(), expense.businessAt(), expense.businessDate(),
+				expense.timezone(), null, expense.merchant(), expense.note(), revision.reason(),
+				new TransactionRevisionDetails.Expense(expense.amount(), ensureCategoryCounter(
+					revision.userId(), expense.categoryId(), LedgerAccountNature.EXPENSE, expense.amount().currency()).id(), expense.categoryId()));
+			case SyncLedgerCommand.Replacement.Refund refund -> new RevisePostedTransactionCommand(
+				revision.userId(), revision.transactionId(), revision.expectedEntityVersion(), refund.businessAt(), refund.businessDate(),
+				refund.timezone(), null, null, refund.note(), revision.reason(),
+				new TransactionRevisionDetails.Refund(refund.accountId(), refund.originalTransactionId(), refund.amount()));
+			case SyncLedgerCommand.Replacement.Transfer transfer -> new RevisePostedTransactionCommand(
+				revision.userId(), revision.transactionId(), revision.expectedEntityVersion(), transfer.businessAt(), transfer.businessDate(),
+				transfer.timezone(), null, null, transfer.note(), revision.reason(),
+				new TransactionRevisionDetails.Transfer(transfer.fromAccountId(), transfer.toAccountId(),
+					transfer.feeAmount().amount().signum() == 0 ? null : ensureCategoryCounter(
+						revision.userId(), transfer.feeCategoryId(), LedgerAccountNature.EXPENSE, transfer.feeAmount().currency()).id(),
+					transfer.feeCategoryId(), transfer.amount(), transfer.feeAmount()));
+		};
+	}
+
+	private LedgerAccountReference ensureCategoryCounter(
+		UUID userId, UUID categoryId, LedgerAccountNature nature, CurrencyCode currency) {
+		if (userId == null || categoryId == null || currency == null) {
+			throw invalid("分类系统科目参数无效。");
+		}
+		return ledgerAccounts.ensureCategorySystemAccount(userId, categoryId, nature, currency);
 	}
 
 	public Transaction postBalanceAdjustment(BalanceAdjustmentCommand command) {
@@ -275,46 +386,50 @@ public final class LedgerCommandApplicationService {
 	/** 按既有 B1 语义生成“冲正 + 新版本”事实链，不接受任意外部借贷分录。 */
 	public TransactionRevisionResult revisePostedTransaction(RevisePostedTransactionCommand command) {
 		require(command, "交易修订命令");
-		return transactions.required(() -> {
-			LedgerTransactionStore.PostedTransactionSnapshot snapshot = postedForMutation(command.transactionId());
-			Transaction original = snapshot.transaction();
-			requireExpectedVersion(command.expectedEntityVersion(), snapshot.entityVersion());
-			requireIndependentOriginal(snapshot);
-			validateOriginalAccess(command.userId(), original, command.businessAt());
-			RevisionBuild build = buildRevision(command, snapshot);
+		return transactions.required(() -> revisePostedTransactionInTransaction(command));
+	}
 
-			Transaction reversal = transactionFactory.createReversal(original, UUID.randomUUID(), clock.instant());
-			Transaction replacement = transactionFactory.createPostedVersion(
-				UUID.randomUUID(), original.type(), original.source(), command.businessAt(), command.businessDate(),
-				command.timezone(), clock.instant(), original.rootTransactionId(), original.transactionId(),
-				original.versionNo() + 1, build.entries());
-			LedgerTransactionStore.TransactionRevisionWrite write = new LedgerTransactionStore.TransactionRevisionWrite(
-				original.transactionId(), snapshot.entityVersion(), command.reason(), reversal,
-				new PostedTransactionWrite(replacement, command.userId(), command.counterparty(), command.merchant(),
-					command.note(), build.categoryId(), build.details()));
-			ledgerTransactions.persistRevision(write);
-			completeRevisionAuditAndOutbox(original, snapshot.entityVersion(), reversal, replacement, command.userId());
-			return new TransactionRevisionResult(original.transactionId(), reversal, replacement);
-		});
+	private TransactionRevisionResult revisePostedTransactionInTransaction(RevisePostedTransactionCommand command) {
+		LedgerTransactionStore.PostedTransactionSnapshot snapshot = postedForMutation(command.transactionId());
+		Transaction original = snapshot.transaction();
+		requireIndependentOriginal(snapshot);
+		validateOriginalAccess(command.userId(), original, command.businessAt());
+		requireExpectedVersion(command.transactionId(), command.expectedEntityVersion(), snapshot.entityVersion());
+		RevisionBuild build = buildRevision(command, snapshot);
+
+		Transaction reversal = transactionFactory.createReversal(original, UUID.randomUUID(), clock.instant());
+		Transaction replacement = transactionFactory.createPostedVersion(
+			UUID.randomUUID(), original.type(), original.source(), command.businessAt(), command.businessDate(),
+			command.timezone(), clock.instant(), original.rootTransactionId(), original.transactionId(),
+			original.versionNo() + 1, build.entries());
+		LedgerTransactionStore.TransactionRevisionWrite write = new LedgerTransactionStore.TransactionRevisionWrite(
+			original.transactionId(), snapshot.entityVersion(), command.reason(), reversal,
+			new PostedTransactionWrite(replacement, command.userId(), command.counterparty(), command.merchant(),
+				command.note(), build.categoryId(), build.details()));
+		ledgerTransactions.persistRevision(write);
+		completeRevisionAuditAndOutbox(original, snapshot.entityVersion(), reversal, replacement, command.userId());
+		return new TransactionRevisionResult(original.transactionId(), reversal, replacement);
 	}
 
 	/** 作废通过新增冲正事实完成，原 POSTED 交易只发生允许的状态迁移。 */
 	public TransactionVoidResult voidPostedTransaction(VoidPostedTransactionCommand command) {
 		require(command, "交易作废命令");
-		return transactions.required(() -> {
-			LedgerTransactionStore.PostedTransactionSnapshot snapshot = postedForMutation(command.transactionId());
-			Transaction original = snapshot.transaction();
-			requireExpectedVersion(command.expectedEntityVersion(), snapshot.entityVersion());
-			requireIndependentOriginal(snapshot);
-			validateOriginalAccess(command.userId(), original, original.businessAt());
+		return transactions.required(() -> voidPostedTransactionInTransaction(command));
+	}
 
-			Transaction reversal = transactionFactory.createReversal(original, UUID.randomUUID(), clock.instant());
-			LedgerTransactionStore.TransactionVoidWrite write = new LedgerTransactionStore.TransactionVoidWrite(
-				original.transactionId(), snapshot.entityVersion(), command.userId(), command.reason(), reversal);
-			ledgerTransactions.persistVoid(write);
-			completeVoidAuditAndOutbox(original, snapshot.entityVersion(), reversal, command.userId());
-			return new TransactionVoidResult(original.transactionId(), reversal);
-		});
+	private TransactionVoidResult voidPostedTransactionInTransaction(VoidPostedTransactionCommand command) {
+		LedgerTransactionStore.PostedTransactionSnapshot snapshot = postedForMutation(command.transactionId());
+		Transaction original = snapshot.transaction();
+		requireIndependentOriginal(snapshot);
+		validateOriginalAccess(command.userId(), original, original.businessAt());
+		requireExpectedVersion(command.transactionId(), command.expectedEntityVersion(), snapshot.entityVersion());
+
+		Transaction reversal = transactionFactory.createReversal(original, UUID.randomUUID(), clock.instant());
+		LedgerTransactionStore.TransactionVoidWrite write = new LedgerTransactionStore.TransactionVoidWrite(
+			original.transactionId(), snapshot.entityVersion(), command.userId(), command.reason(), reversal);
+		ledgerTransactions.persistVoid(write);
+		completeVoidAuditAndOutbox(original, snapshot.entityVersion(), reversal, command.userId());
+		return new TransactionVoidResult(original.transactionId(), reversal);
 	}
 
 	/** 账务、审计和最小投影定位事件均处于当前 REQUIRED 事务，任何端口异常都会向外回滚。 */
@@ -462,9 +577,9 @@ public final class LedgerCommandApplicationService {
 			.orElseThrow(() -> invalid("交易不存在或不是可修改的已确认交易。"));
 	}
 
-	private static void requireExpectedVersion(int expected, int actual) {
+	private static void requireExpectedVersion(UUID transactionId, int expected, int actual) {
 		if (expected != actual) {
-			throw invalid("交易版本已变化。");
+			throw new LedgerVersionConflictException(transactionId, actual);
 		}
 	}
 

@@ -82,6 +82,22 @@ class LedgerCommandApplicationServiceTests {
 	}
 
 	@Test
+	void syncIncomePersistsTheClientTransactionIdAndDerivesTheHiddenCategoryCounter() {
+		Fixture fixture = fixture();
+		UUID clientTransactionId = UUID.fromString("00000000-0000-0000-0000-000000001091");
+
+		SyncLedgerResult result = fixture.service.applySync(new SyncLedgerCommand.Income(
+			USER_ID, clientTransactionId, ASSET_ACCOUNT_ID, INCOME_CATEGORY_ID,
+			money("88.00", CurrencyCode.CNY), BUSINESS_AT, BUSINESS_DATE, "Asia/Shanghai", null, null));
+
+		assertEquals(clientTransactionId, result.transactionId());
+		assertEquals(clientTransactionId, fixture.store.write.transaction().transactionId());
+		assertEquals("SYNC", fixture.store.write.transaction().source().name());
+		assertTrue(fixture.ledgerAccounts.references.values().stream().anyMatch(reference ->
+			reference.code().equals("INCOME_CATEGORY_" + INCOME_CATEGORY_ID) && reference.role() == LedgerAccountRole.SYSTEM));
+	}
+
+	@Test
 	void expenseDebitsExpenseAndCreditsLiabilityAccountWithoutNegativeAmount() {
 		Fixture fixture = fixture();
 
@@ -487,6 +503,22 @@ class LedgerCommandApplicationServiceTests {
 					&& reference.visibleAccountId().equals(accountId)
 					&& reference.role() == LedgerAccountRole.PRIMARY)
 				.findFirst();
+		}
+
+		@Override
+		public LedgerAccountReference ensureCategorySystemAccount(
+			UUID ownerUserId, UUID categoryId, LedgerAccountNature nature, CurrencyCode currency) {
+			String code = (nature == LedgerAccountNature.INCOME ? "INCOME_CATEGORY_" : "EXPENSE_CATEGORY_") + categoryId;
+			return references.values().stream()
+				.filter(reference -> code.equals(reference.code()) && ownerUserId.equals(reference.ownerUserId())
+					&& nature == reference.nature() && currency == reference.currency())
+				.findFirst()
+				.orElseGet(() -> {
+					LedgerAccountReference created = reference(UUID.randomUUID(), null, ownerUserId, code,
+						LedgerAccountRole.SYSTEM, nature, currency);
+					references.put(created.id(), created);
+					return created;
+				});
 		}
 
 		@Override

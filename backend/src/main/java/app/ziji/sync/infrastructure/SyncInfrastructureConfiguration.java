@@ -6,11 +6,14 @@ import java.util.Base64;
 
 import app.ziji.accountmember.application.AccountRecipientReadPort;
 import app.ziji.ledger.application.LedgerTransactionSyncReadPort;
+import app.ziji.ledger.application.LedgerSyncCommandPort;
 import app.ziji.shared.application.TransactionRunner;
+import app.ziji.shared.application.UnifiedIdempotencyService;
 import app.ziji.sync.application.ChangeLogStore;
 import app.ziji.sync.application.SyncOutboxConsumer;
 import app.ziji.sync.application.SyncOutboxStore;
 import app.ziji.sync.application.SyncChangeQueryService;
+import app.ziji.sync.application.SyncOperationApplicationService;
 import app.ziji.sync.application.SyncChangeReadPort;
 import app.ziji.sync.application.SyncCursorCodec;
 import org.springframework.boot.ApplicationRunner;
@@ -51,5 +54,11 @@ class SyncInfrastructureConfiguration {
 	@Bean
 	SyncChangeQueryService syncChangeQueryService(SyncChangeReadPort changes, SyncCursorCodec cursors) {
 		return new SyncChangeQueryService(changes, cursors);
+	}
+
+	@Bean
+	SyncOperationApplicationService syncOperationApplicationService(
+		UnifiedIdempotencyService idempotency, LedgerSyncCommandPort ledger) {
+		return new SyncOperationApplicationService(idempotency, ledger);
 	}
 }
