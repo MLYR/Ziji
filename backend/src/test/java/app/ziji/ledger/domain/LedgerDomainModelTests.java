@@ -282,6 +282,44 @@ class LedgerDomainModelTests {
 	}
 
 	@Test
+	void reversalFactoryPreservesOriginalFactIdentityAndInvertsEveryEntry() {
+		UUID originalId = UUID.randomUUID();
+		Transaction original = new LedgerTransactionFactory(new PostingService()).createPosted(
+			originalId, TransactionType.EXPENSE, TransactionSource.MANUAL, BUSINESS_AT, BUSINESS_DATE,
+			"Asia/Shanghai", POSTED_AT, List.of(
+				new LedgerEntrySpec(LEDGER_ACCOUNT_ID, LedgerDirection.DEBIT, money("50.00", CurrencyCode.CNY)),
+				new LedgerEntrySpec(UUID.randomUUID(), LedgerDirection.CREDIT, money("50.00", CurrencyCode.CNY))));
+
+		Transaction reversal = new LedgerTransactionFactory(new PostingService()).createReversal(
+			original, UUID.randomUUID(), POSTED_AT.plusSeconds(1));
+
+		assertEquals(TransactionType.REVERSAL, reversal.type());
+		assertEquals(original.transactionId(), reversal.reversalOfId());
+		assertEquals(reversal.transactionId(), reversal.rootTransactionId());
+		assertEquals(1, reversal.versionNo());
+		assertEquals(original.entries().get(0).ledgerAccountId(), reversal.entries().get(0).ledgerAccountId());
+		assertEquals(LedgerDirection.CREDIT, reversal.entries().get(0).direction());
+		assertEquals(0, original.entries().get(0).amount().amount()
+			.compareTo(reversal.entries().get(0).amount().amount()));
+	}
+
+	@Test
+	void postedVersionRetainsRootAndPointsToTheSupersededPredecessor() {
+		UUID rootId = UUID.randomUUID();
+		UUID replacementId = UUID.randomUUID();
+
+		Transaction replacement = new LedgerTransactionFactory(new PostingService()).createPostedVersion(
+			replacementId, TransactionType.EXPENSE, TransactionSource.MANUAL, BUSINESS_AT, BUSINESS_DATE,
+			"Asia/Shanghai", POSTED_AT, rootId, UUID.randomUUID(), 2, List.of(
+				new LedgerEntrySpec(LEDGER_ACCOUNT_ID, LedgerDirection.DEBIT, money("60.00", CurrencyCode.CNY)),
+				new LedgerEntrySpec(UUID.randomUUID(), LedgerDirection.CREDIT, money("60.00", CurrencyCode.CNY))));
+
+		assertEquals(rootId, replacement.rootTransactionId());
+		assertEquals(2, replacement.versionNo());
+		assertEquals(TransactionStatus.POSTED, replacement.status());
+	}
+
+	@Test
 	void transactionEntriesAreCopiedAndExternallyImmutable() {
 		UUID transactionId = UUID.randomUUID();
 		List<LedgerEntry> sourceEntries = new ArrayList<>(List.of(

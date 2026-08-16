@@ -15,12 +15,16 @@ import app.ziji.ledger.application.NoTransactionDetails;
 import app.ziji.ledger.application.PostedTransactionWrite;
 import app.ziji.ledger.application.RefundWriteDetails;
 import app.ziji.ledger.application.TransferWriteDetails;
+import app.ziji.ledger.application.TransactionWriteDetails;
 import app.ziji.ledger.domain.CurrencyCode;
 import app.ziji.ledger.domain.LedgerAccountNature;
 import app.ziji.ledger.domain.LedgerDirection;
 import app.ziji.ledger.domain.LedgerEntry;
 import app.ziji.ledger.domain.Money;
 import app.ziji.ledger.domain.Transaction;
+import app.ziji.ledger.domain.TransactionSource;
+import app.ziji.ledger.domain.TransactionStatus;
+import app.ziji.ledger.domain.TransactionType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -173,6 +177,167 @@ public class PostgresLedgerTransactionStore implements LedgerTransactionStore {
 		}
 	}
 
+	@Override
+	public Optional<PostedTransactionSnapshot> findPostedForMutation(UUID transactionId) {
+		if (transactionId == null) {
+			return Optional.empty();
+		}
+		try {
+			List<PostedTransactionBase> bases = jdbc.query("""
+				SELECT t.id, t.transaction_type, t.business_at, t.business_date, t.timezone,
+					t.counterparty, t.merchant, t.note, t.source,
+					t.root_transaction_id, t.previous_version_id, t.reversal_of_id, t.version_no,
+					t.posted_at, t.entity_version,
+					EXISTS (
+						SELECT 1 FROM refund_details r WHERE r.original_transaction_id = t.id
+						UNION ALL
+						SELECT 1 FROM transactions related
+						WHERE related.reversal_of_id = t.id OR related.previous_version_id = t.id
+					) AS has_dependent_facts
+				FROM transactions t
+				WHERE t.id = ? AND t.status = 'POSTED'
+				FOR UPDATE
+				""",
+				(result, rowNumber) -> new PostedTransactionBase(
+					result.getObject("id", UUID.class),
+					TransactionType.valueOf(result.getString("transaction_type")),
+					result.getTimestamp("business_at").toInstant(),
+					result.getDate("business_date").toLocalDate(),
+					result.getString("timezone"),
+					result.getString("counterparty"),
+					result.getString("merchant"),
+					result.getString("note"),
+					TransactionSource.valueOf(result.getString("source")),
+					result.getObject("root_transaction_id", UUID.class),
+					result.getObject("previous_version_id", UUID.class),
+					result.getObject("reversal_of_id", UUID.class),
+					result.getInt("version_no"),
+					result.getTimestamp("posted_at").toInstant(),
+					result.getInt("entity_version"),
+					result.getBoolean("has_dependent_facts")),
+				transactionId);
+			if (bases.isEmpty()) {
+				return Optional.empty();
+			}
+			PostedTransactionBase base = bases.get(0);
+			List<LedgerEntry> entries = jdbc.query("""
+				SELECT id, transaction_id, ledger_account_id, sequence_no, direction, amount, currency, business_date
+				FROM ledger_entries
+				WHERE transaction_id = ?
+				ORDER BY sequence_no
+				""",
+				(result, rowNumber) -> new LedgerEntry(
+					result.getObject("id", UUID.class),
+					result.getObject("transaction_id", UUID.class),
+					result.getObject("ledger_account_id", UUID.class),
+					result.getInt("sequence_no"),
+					"D".equals(result.getString("direction")) ? LedgerDirection.DEBIT : LedgerDirection.CREDIT,
+					new Money(result.getBigDecimal("amount"), CurrencyCode.fromCode(result.getString("currency"))),
+					result.getDate("business_date").toLocalDate()),
+				transactionId);
+			Transaction transaction = new Transaction(
+				base.transactionId(), base.type(), TransactionStatus.POSTED, base.businessAt(), base.businessDate(),
+				base.timezone(), base.source(), base.rootTransactionId(), base.previousVersionId(), base.reversalOfId(),
+				base.versionNo(), base.postedAt(), entries);
+			CurrencyCode currency = entries.get(0).currency();
+			UUID categoryId = jdbc.query("""
+				SELECT category_id FROM transaction_categories
+				WHERE transaction_id = ? AND role = 'PRIMARY'
+				""", (org.springframework.jdbc.core.ResultSetExtractor<UUID>) result ->
+				result.next() ? result.getObject("category_id", UUID.class) : null, transactionId);
+			return Optional.of(new PostedTransactionSnapshot(
+				transaction, base.entityVersion(), base.hasDependentFacts(), base.counterparty(), base.merchant(), base.note(),
+				categoryId, findMutationDetails(base.type(), transactionId, currency)));
+		} catch (RuntimeException exception) {
+			throw persistence(exception);
+		}
+	}
+
+	@Override
+	public void persistRevision(TransactionRevisionWrite write) {
+		try {
+			PostedTransactionWrite reversalWrite = new PostedTransactionWrite(
+				write.reversal(), write.replacement().createdBy(), null, null, write.reason(), null,
+				new NoTransactionDetails());
+			persistPosted(reversalWrite);
+			transitionOriginal(write.originalTransactionId(), write.expectedEntityVersion(), "SUPERSEDED",
+				write.replacement().createdBy(), write.reversal().postedAt());
+			persistPosted(write.replacement());
+		} catch (RuntimeException exception) {
+			throw persistence(exception);
+		}
+	}
+
+	@Override
+	public void persistVoid(TransactionVoidWrite write) {
+		try {
+			persistPosted(new PostedTransactionWrite(
+				write.reversal(), write.updatedBy(), null, null, write.reason(), null,
+				new NoTransactionDetails()));
+			transitionOriginal(write.originalTransactionId(), write.expectedEntityVersion(), "REVERSED",
+				write.updatedBy(), write.reversal().postedAt());
+		} catch (RuntimeException exception) {
+			throw persistence(exception);
+		}
+	}
+
+	private void transitionOriginal(
+		UUID originalTransactionId,
+		int expectedEntityVersion,
+		String status,
+		UUID updatedBy,
+		Instant updatedAt) {
+		int updated = jdbc.update("""
+			UPDATE transactions
+			SET status = ?, entity_version = entity_version + 1, updated_by = ?, updated_at = ?
+			WHERE id = ? AND status = 'POSTED' AND entity_version = ?
+			""", status, updatedBy, timestamp(updatedAt), originalTransactionId, expectedEntityVersion);
+		if (updated != 1) {
+			throw new LedgerPersistenceException(new IllegalStateException("已确认交易状态或版本已变化。"));
+		}
+	}
+
+	private TransactionWriteDetails findMutationDetails(
+		TransactionType type,
+		UUID transactionId,
+		CurrencyCode currency) {
+		return switch (type) {
+			case TRANSFER -> jdbc.query("""
+				SELECT from_account_id, to_account_id, from_amount, to_amount, fee_amount
+				FROM transfer_details WHERE transaction_id = ?
+				""", (org.springframework.jdbc.core.ResultSetExtractor<TransactionWriteDetails>) result ->
+				result.next()
+					? new TransferWriteDetails(
+						result.getObject("from_account_id", UUID.class),
+						result.getObject("to_account_id", UUID.class),
+						new Money(result.getBigDecimal("from_amount"), currency),
+						new Money(result.getBigDecimal("to_amount"), currency),
+						new Money(result.getBigDecimal("fee_amount"), currency))
+					: new NoTransactionDetails(), transactionId);
+			case REFUND -> jdbc.query("""
+				SELECT original_transaction_id, category_id FROM refund_details WHERE transaction_id = ?
+				""", (org.springframework.jdbc.core.ResultSetExtractor<TransactionWriteDetails>) result ->
+				result.next()
+					? new RefundWriteDetails(
+						result.getObject("original_transaction_id", UUID.class),
+						result.getObject("category_id", UUID.class))
+					: new NoTransactionDetails(), transactionId);
+			case ADJUSTMENT -> jdbc.query("""
+				SELECT account_id, before_balance, actual_balance, difference_amount, reason
+				FROM balance_adjustment_details WHERE transaction_id = ?
+				""", (org.springframework.jdbc.core.ResultSetExtractor<TransactionWriteDetails>) result ->
+				result.next()
+					? new BalanceAdjustmentWriteDetails(
+						result.getObject("account_id", UUID.class),
+						new Money(result.getBigDecimal("before_balance"), currency),
+						new Money(result.getBigDecimal("actual_balance"), currency),
+						new Money(result.getBigDecimal("difference_amount"), currency),
+						result.getString("reason"))
+					: new NoTransactionDetails(), transactionId);
+			default -> new NoTransactionDetails();
+		};
+	}
+
 	private void insertDetails(PostedTransactionWrite write) {
 		switch (write.details()) {
 			case NoTransactionDetails ignored -> {
@@ -249,5 +414,24 @@ public class PostgresLedgerTransactionStore implements LedgerTransactionStore {
 		BigDecimal originalAmount,
 		UUID categoryId,
 		String currency) {
+	}
+
+	private record PostedTransactionBase(
+		UUID transactionId,
+		TransactionType type,
+		Instant businessAt,
+		java.time.LocalDate businessDate,
+		String timezone,
+		String counterparty,
+		String merchant,
+		String note,
+		TransactionSource source,
+		UUID rootTransactionId,
+		UUID previousVersionId,
+		UUID reversalOfId,
+		int versionNo,
+		Instant postedAt,
+		int entityVersion,
+		boolean hasDependentFacts) {
 	}
 }
