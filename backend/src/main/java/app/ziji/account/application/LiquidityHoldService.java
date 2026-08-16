@@ -86,13 +86,18 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 	}
 
 	@Override
-	public void preflightMutation(UUID userId, UUID accountId, UUID holdId) {
+	public void preflightMutation(UUID userId, UUID accountId, UUID holdId, int expectedVersion) {
 		requireIds(userId, accountId);
-		if (holdId == null) {
+		if (holdId == null || expectedVersion < 1) {
 			throw new LiquidityHoldException.Validation();
 		}
 		requireWritable(userId, accountId);
-		holds.findByAccountAndId(accountId, holdId).orElseThrow(AccountNotVisibleException::new);
+		LiquidityHold current = holds.findByAccountAndId(accountId, holdId)
+			.orElseThrow(AccountNotVisibleException::new);
+		if (current.version() != expectedVersion) {
+			// 版本冲突在幂等记录取得前返回，避免把失败写请求变成可重放事实。
+			throw new LiquidityHoldException.VersionConflict(current);
+		}
 	}
 
 	@Override

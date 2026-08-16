@@ -59,10 +59,15 @@ class SecurityConfiguration {
 				"/api/v1/auth/mobile/sessions", "/api/v1/auth/mobile/sessions/refresh",
 				"/api/v1/auth/password-reset-challenges", "/api/v1/auth/password-reset").permitAll()
 			.requestMatchers(HttpMethod.GET, "/api/v1/users/me", "/api/v1/users/me/sessions").authenticated()
-			.requestMatchers(HttpMethod.GET, "/api/v1/accounts", "/api/v1/accounts/*").authenticated()
+			.requestMatchers(HttpMethod.GET,
+				"/api/v1/accounts", "/api/v1/accounts/*", "/api/v1/accounts/*/liquidity-holds").authenticated()
 			.requestMatchers(HttpMethod.PATCH, "/api/v1/users/me").authenticated()
 			.requestMatchers(HttpMethod.PATCH, "/api/v1/accounts/*").authenticated()
 			.requestMatchers(HttpMethod.POST, "/api/v1/users/me/password-change").authenticated()
+			.requestMatchers(HttpMethod.POST,
+				"/api/v1/accounts/*/liquidity-holds",
+				"/api/v1/accounts/*/liquidity-holds/*/revisions",
+				"/api/v1/accounts/*/liquidity-holds/*/release").authenticated()
 			.requestMatchers(HttpMethod.DELETE,
 				"/api/v1/auth/sessions/current", "/api/v1/users/me/sessions", "/api/v1/users/me/sessions/*").authenticated()
 			.anyRequest().denyAll());

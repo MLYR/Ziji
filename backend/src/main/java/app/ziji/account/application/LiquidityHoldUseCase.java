@@ -11,7 +11,8 @@ public interface LiquidityHoldUseCase {
 
 	void preflightCreate(UUID userId, UUID accountId);
 
-	void preflightMutation(UUID userId, UUID accountId, UUID holdId);
+	/** If-Match 版本在统一幂等取得前校验，避免陈旧写入先创建幂等记录。 */
+	void preflightMutation(UUID userId, UUID accountId, UUID holdId, int expectedVersion);
 
 	LiquidityHold create(UUID userId, UUID accountId, LiquidityHoldCommand command, String requestId);
 

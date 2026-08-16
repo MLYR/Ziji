@@ -109,6 +109,27 @@ class LiquidityHoldMvcTests {
 	}
 
 	@Test
+	void futurePendingReplaySafeFailureReturnsInternalErrorWithoutSuccessEtag() throws Exception {
+		Fixture fixture = fixture(new FakeUseCase().futurePending().safeReplayUnavailable());
+		String key = "future-pending-replay-01";
+		String body = commandJson("10.00", "CNY");
+
+		fixture.mvc().perform(post(path()).principal(principal()).header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isCreated())
+			.andExpect(header().string("ETag", "\"1\""))
+			.andExpect(jsonPath("$.data.status").value("PENDING"));
+		fixture.mvc().perform(post(path()).principal(principal()).header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isInternalServerError())
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
+
+		assertEquals(1, fixture.useCase().createCalls);
+		assertEquals(1, fixture.useCase().replayCalls);
+	}
+
+	@Test
 	void reviseUsesTopLevelAmountAndCurrency() throws Exception {
 		Fixture fixture = fixture(new FakeUseCase());
 
@@ -125,6 +146,54 @@ class LiquidityHoldMvcTests {
 
 		assertEquals(AccountCurrency.CNY, fixture.useCase().lastCommand.currency());
 		assertEquals(new BigDecimal("12.50"), fixture.useCase().lastCommand.amount());
+	}
+
+	@Test
+	void reviseAndReleaseRejectMalformedIfMatchBeforeIdempotency() throws Exception {
+		Fixture fixture = fixture(new FakeUseCase());
+		for (String value : List.of("W/\"1\"", "*", "1", "\"0\"", "\"-1\"", "\"abc\"", "\"2147483648\"")) {
+			assertInvalidIfMatch(fixture, post(path() + "/{holdId}/revisions", HOLD_ID)
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson("12.50", "CNY")), value);
+			assertInvalidIfMatch(fixture, post(path() + "/{holdId}/release", HOLD_ID), value);
+		}
+		assertInvalidIfMatch(fixture, post(path() + "/{holdId}/revisions", HOLD_ID)
+			.contentType(MediaType.APPLICATION_JSON).content(commandJson("12.50", "CNY")), null);
+		assertInvalidIfMatch(fixture, post(path() + "/{holdId}/release", HOLD_ID), null);
+		assertDuplicateIfMatch(fixture, post(path() + "/{holdId}/revisions", HOLD_ID)
+			.contentType(MediaType.APPLICATION_JSON).content(commandJson("12.50", "CNY")));
+		assertDuplicateIfMatch(fixture, post(path() + "/{holdId}/release", HOLD_ID));
+
+		assertEquals(0, fixture.idempotency().acquisitions);
+		assertEquals(0, fixture.idempotency().committedRecords.size());
+	}
+
+	@Test
+	void staleMutationsMustBeRejectedBeforeIdempotencyAcquisition() throws Exception {
+		Fixture fixture = fixture(new FakeUseCase().staleRevision());
+
+		fixture.mvc().perform(post(path() + "/{holdId}/revisions", HOLD_ID)
+				.principal(principal())
+				.header("Idempotency-Key", "stale-revision-key-001")
+				.header("If-Match", "\"2\"")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(commandJson("12.50", "CNY")))
+			.andExpect(status().isConflict())
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+
+		assertEquals(0, fixture.idempotency().acquisitions);
+		assertEquals(0, fixture.idempotency().committedRecords.size());
+
+		fixture.mvc().perform(post(path() + "/{holdId}/release", HOLD_ID)
+				.principal(principal())
+				.header("Idempotency-Key", "stale-release-key-0001")
+				.header("If-Match", "\"2\""))
+			.andExpect(status().isConflict())
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+
+		assertEquals(0, fixture.idempotency().acquisitions);
+		assertEquals(0, fixture.idempotency().committedRecords.size());
 	}
 
 	@Test
@@ -292,6 +361,32 @@ class LiquidityHoldMvcTests {
 			+ "\",\"effectiveAt\":\"2026-08-15T01:02:03Z\",\"expiresAt\":null,\"reason\":\"" + reason + "\"}";
 	}
 
+	private static void assertInvalidIfMatch(
+		Fixture fixture,
+		org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request,
+		String ifMatch) throws Exception {
+		request.principal(principal()).header("Idempotency-Key", "invalid-if-match-key-001");
+		if (ifMatch != null) {
+			request.header("If-Match", ifMatch);
+		}
+		fixture.mvc().perform(request)
+			.andExpect(status().isBadRequest())
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+	}
+
+	private static void assertDuplicateIfMatch(
+		Fixture fixture,
+		org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request) throws Exception {
+		fixture.mvc().perform(request.principal(principal())
+				.header("Idempotency-Key", "duplicate-if-match-key-01")
+				.header("If-Match", "\"1\"")
+				.header("If-Match", "\"1\""))
+			.andExpect(status().isBadRequest())
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+	}
+
 	private static java.security.Principal principal() {
 		return () -> USER_ID.toString();
 	}
@@ -301,6 +396,9 @@ class LiquidityHoldMvcTests {
 	private static final class FakeUseCase implements LiquidityHoldUseCase {
 		private LiquidityHoldCommand lastCommand;
 		private boolean rejectNonCnyCurrency;
+		private boolean staleRevision;
+		private boolean futurePending;
+		private boolean safeReplayUnavailable;
 		private int replayVersion = 1;
 		private int createCalls;
 		private int replayCalls;
@@ -315,6 +413,21 @@ class LiquidityHoldMvcTests {
 			return this;
 		}
 
+		private FakeUseCase staleRevision() {
+			staleRevision = true;
+			return this;
+		}
+
+		private FakeUseCase futurePending() {
+			futurePending = true;
+			return this;
+		}
+
+		private FakeUseCase safeReplayUnavailable() {
+			safeReplayUnavailable = true;
+			return this;
+		}
+
 		@Override
 		public LiquidityHoldPage list(UUID userId, UUID accountId, Integer requestedLimit, String cursor) {
 			return new LiquidityHoldPage(List.of(hold(AccountCurrency.CNY)), null, false);
@@ -324,7 +437,11 @@ class LiquidityHoldMvcTests {
 		public void preflightCreate(UUID userId, UUID accountId) {}
 
 		@Override
-		public void preflightMutation(UUID userId, UUID accountId, UUID holdId) {}
+		public void preflightMutation(UUID userId, UUID accountId, UUID holdId, int expectedVersion) {
+			if (staleRevision) {
+				throw new LiquidityHoldException.VersionConflict(hold(AccountCurrency.CNY));
+			}
+		}
 
 		@Override
 		public LiquidityHold create(UUID userId, UUID accountId, LiquidityHoldCommand command, String requestId) {
@@ -333,7 +450,7 @@ class LiquidityHoldMvcTests {
 			if (rejectNonCnyCurrency && command.currency() != AccountCurrency.CNY) {
 				throw new LiquidityHoldException.BusinessRule();
 			}
-			return hold(command.currency());
+			return futurePending ? futureHold(command.currency()) : hold(command.currency());
 		}
 
 		@Override
@@ -351,6 +468,9 @@ class LiquidityHoldMvcTests {
 		@Override
 		public LiquidityHold replay(UUID userId, UUID accountId, UUID holdId, int expectedVersion) {
 			replayCalls++;
+			if (safeReplayUnavailable) {
+				throw new LiquidityHoldException.SafeReplayUnavailable();
+			}
 			return hold(AccountCurrency.CNY, replayVersion);
 		}
 	}
@@ -363,6 +483,12 @@ class LiquidityHoldMvcTests {
 		return LiquidityHold.restore(HOLD_ID, ACCOUNT_ID, HOLD_ID, null, 1, LiquidityHoldType.FROZEN,
 			new BigDecimal("10.00"), currency, NOW.minusSeconds(1), null, null,
 			app.ziji.account.domain.LiquidityHoldSource.MANUAL, "人工冻结", null, null, USER_ID, NOW, NOW, version);
+	}
+
+	private static LiquidityHold futureHold(AccountCurrency currency) {
+		return LiquidityHold.restore(HOLD_ID, ACCOUNT_ID, HOLD_ID, null, 1, LiquidityHoldType.FROZEN,
+			new BigDecimal("10.00"), currency, NOW.plusSeconds(60), null, null,
+			app.ziji.account.domain.LiquidityHoldSource.MANUAL, "人工冻结", null, null, USER_ID, NOW, NOW, 1);
 	}
 
 	private static final class MemoryIdempotencyStore implements IdempotencyRecordStore {

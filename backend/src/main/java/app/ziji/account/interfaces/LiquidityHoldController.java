@@ -112,7 +112,7 @@ public class LiquidityHoldController {
 		UUID parsedHoldId = parseUuid(holdId);
 		LiquidityHoldCommand command = parseCommand(body);
 		int expectedVersion = parseIfMatch(request);
-		useCase.preflightMutation(userId, parsedAccountId, parsedHoldId);
+		useCase.preflightMutation(userId, parsedAccountId, parsedHoldId, expectedVersion);
 		String key = idempotencyKey(request);
 		String resource = "/api/v1/accounts/" + parsedAccountId + "/liquidity-holds/" + parsedHoldId + "/revisions";
 		IdempotencyExecution<LiquidityHold> execution = idempotency.executeAuthenticated(
@@ -135,7 +135,7 @@ public class LiquidityHoldController {
 		UUID parsedAccountId = parseUuid(accountId);
 		UUID parsedHoldId = parseUuid(holdId);
 		int expectedVersion = parseIfMatch(request);
-		useCase.preflightMutation(userId, parsedAccountId, parsedHoldId);
+		useCase.preflightMutation(userId, parsedAccountId, parsedHoldId, expectedVersion);
 		String key = idempotencyKey(request);
 		String resource = "/api/v1/accounts/" + parsedAccountId + "/liquidity-holds/" + parsedHoldId + "/release";
 		IdempotencyExecution<LiquidityHold> execution = idempotency.executeAuthenticated(
