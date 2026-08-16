@@ -46,9 +46,43 @@ class LiquidityHoldServiceTests {
 		assertTrue(audits.isEmpty());
 	}
 
+	@Test
+	void replayVersionDriftFailsClosedInsteadOfReturningWriteConflict() {
+		UUID holdId = UUID.randomUUID();
+		LiquidityHold current = LiquidityHold.restore(
+			holdId, ACCOUNT_ID, holdId, null, 1, LiquidityHoldType.FROZEN,
+			new BigDecimal("10.00"), AccountCurrency.CNY, NOW.minusSeconds(1), null, null,
+			app.ziji.account.domain.LiquidityHoldSource.MANUAL, "原因", null, null, USER_ID, NOW, NOW, 2);
+		LiquidityHoldService service = service(new ArrayList<>(), new ArrayList<>(), Optional.of(current));
+
+		assertThrows(LiquidityHoldException.SafeReplayUnavailable.class,
+			() -> service.replay(USER_ID, ACCOUNT_ID, current.id(), 1));
+	}
+
+	@Test
+	void replayLogicalExpiryDriftFailsClosedWithoutVersionChange() {
+		UUID holdId = UUID.randomUUID();
+		LiquidityHold current = LiquidityHold.restore(
+			holdId, ACCOUNT_ID, holdId, null, 1, LiquidityHoldType.FROZEN,
+			new BigDecimal("10.00"), AccountCurrency.CNY, NOW.minusSeconds(20), NOW.minusSeconds(1), null,
+			app.ziji.account.domain.LiquidityHoldSource.MANUAL, "原因", null, null, USER_ID,
+			NOW.minusSeconds(10), NOW.minusSeconds(10), 1);
+		LiquidityHoldService service = service(new ArrayList<>(), new ArrayList<>(), Optional.of(current));
+
+		assertThrows(LiquidityHoldException.SafeReplayUnavailable.class,
+			() -> service.replay(USER_ID, ACCOUNT_ID, current.id(), 1));
+	}
+
 	private static LiquidityHoldService service(
 		List<LiquidityHold> inserted,
 		List<AuditLogWritePort.AuditLogEntry> audits) {
+		return service(inserted, audits, Optional.empty());
+	}
+
+	private static LiquidityHoldService service(
+		List<LiquidityHold> inserted,
+		List<AuditLogWritePort.AuditLogEntry> audits,
+		Optional<LiquidityHold> replayHold) {
 		AccountStore accounts = new AccountStore() {
 			@Override
 			public void insert(Account account) {}
@@ -77,7 +111,9 @@ class LiquidityHoldServiceTests {
 			}
 
 			@Override
-			public Optional<LiquidityHold> findByAccountAndId(UUID accountId, UUID holdId) { return Optional.empty(); }
+			public Optional<LiquidityHold> findByAccountAndId(UUID accountId, UUID holdId) {
+				return replayHold.filter(hold -> holdId.equals(hold.id()));
+			}
 
 			@Override
 			public Optional<LiquidityHold> lockByAccountAndId(UUID accountId, UUID holdId) { return Optional.empty(); }

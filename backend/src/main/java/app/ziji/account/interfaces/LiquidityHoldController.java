@@ -159,8 +159,8 @@ public class LiquidityHoldController {
 		if (execution.status() == IdempotencyExecution.Status.REPLAYED
 			&& execution.response() != null && execution.response().reference() instanceof IdempotencyResponse.ResourceReference reference
 			&& execution.response().resourceId() != null && reference.resourceVersion() != null) {
-			LiquidityHold hold = useCase.replay(currentUserId(request), accountId, execution.response().resourceId(), reference.resourceVersion().intValue());
-			return ResponseEntity.status(HttpStatus.CREATED).eTag(hold.etag())
+			LiquidityHold hold = useCase.replay(currentUserId(request), accountId, execution.response().resourceId(), replayVersion(reference));
+			return ResponseEntity.status(HttpStatus.CREATED).eTag(replayEtag(hold, reference))
 				.body(new LiquidityHoldEnvelope(view(hold), new ResponseMeta(requestId(response))));
 		}
 		return idempotencyProblem(execution, request, response);
@@ -180,8 +180,8 @@ public class LiquidityHoldController {
 		if (execution.status() == IdempotencyExecution.Status.REPLAYED
 			&& execution.response() != null && execution.response().reference() instanceof IdempotencyResponse.ResourceReference reference
 			&& execution.response().resourceId() != null && reference.resourceVersion() != null) {
-			LiquidityHold hold = useCase.replay(currentUserId(request), accountId, execution.response().resourceId(), reference.resourceVersion().intValue());
-			return ResponseEntity.status(successStatus).eTag(hold.etag())
+			LiquidityHold hold = useCase.replay(currentUserId(request), accountId, execution.response().resourceId(), replayVersion(reference));
+			return ResponseEntity.status(successStatus).eTag(replayEtag(hold, reference))
 				.body(new LiquidityHoldEnvelope(view(hold), new ResponseMeta(requestId(response))));
 		}
 		return idempotencyProblem(execution, request, response);
@@ -198,6 +198,25 @@ public class LiquidityHoldController {
 			return problem(HttpStatus.CONFLICT, "IDEMPOTENCY_KEY_REUSED", request, response, false);
 		}
 		return problem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", request, response, false);
+	}
+
+	private static int replayVersion(IdempotencyResponse.ResourceReference reference) {
+		try {
+			return Math.toIntExact(reference.resourceVersion());
+		} catch (ArithmeticException exception) {
+			// 幂等引用的版本超出当前领域整数范围时不能猜测或截断。
+			throw new app.ziji.account.application.LiquidityHoldException.SafeReplayUnavailable();
+		}
+	}
+
+	private static String replayEtag(
+		LiquidityHold hold,
+		IdempotencyResponse.ResourceReference reference) {
+		if (hold == null || reference.etag() == null || !reference.etag().equals(hold.etag())) {
+			// 只允许以保存的安全引用重建首次响应，禁止返回当前版本配旧 ETag。
+			throw new app.ziji.account.application.LiquidityHoldException.SafeReplayUnavailable();
+		}
+		return reference.etag();
 	}
 
 	private ResponseEntity<ProblemDetail> problem(
@@ -252,7 +271,7 @@ public class LiquidityHoldController {
 			Instant expiresAt = body.has("expiresAt") && !body.get("expiresAt").isNull()
 				? parseInstant(body.get("expiresAt").textValue()) : null;
 			String reason = body.get("reason").textValue();
-			if (reason == null || reason.isBlank() || reason.length() > 500) {
+			if (reason == null || reason.isBlank() || reason.codePointCount(0, reason.length()) > 500) {
 				throw new NumberFormatException();
 			}
 			return new LiquidityHoldCommand(

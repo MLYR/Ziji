@@ -26,9 +26,9 @@ class LiquidityHoldOpenApiContractTests {
 		"releaseLiquidityHold", "POST /accounts/{accountId}/liquidity-holds/{holdId}/release");
 
 	private static final Set<String> LIST_ERRORS = Set.of("200", "400", "401", "403", "404");
-	private static final Set<String> CREATE_ERRORS = Set.of("201", "400", "401", "403", "404", "409", "422");
-	private static final Set<String> REVISE_ERRORS = Set.of("201", "400", "401", "403", "404", "409", "422");
-	private static final Set<String> RELEASE_ERRORS = Set.of("200", "400", "401", "403", "404", "409", "422");
+	private static final Set<String> CREATE_ERRORS = Set.of("201", "400", "401", "403", "404", "409", "422", "500");
+	private static final Set<String> REVISE_ERRORS = Set.of("201", "400", "401", "403", "404", "409", "422", "500");
+	private static final Set<String> RELEASE_ERRORS = Set.of("200", "400", "401", "403", "404", "409", "422", "500");
 
 	@Test
 	void liquidityHoldOperationsFreezeRoutesHeadersErrorsAndSemantics() throws IOException {
@@ -55,10 +55,10 @@ class LiquidityHoldOpenApiContractTests {
 		assertEquals(List.of("VALIDATION_ERROR", "AUTHENTICATION_REQUIRED", "PERMISSION_DENIED", "RESOURCE_NOT_FOUND"),
 			list.get("x-error-codes"));
 		assertEquals(List.of("VALIDATION_ERROR", "AUTHENTICATION_REQUIRED", "PERMISSION_DENIED", "RESOURCE_NOT_FOUND",
-			"IDEMPOTENCY_KEY_REUSED", "IDEMPOTENCY_REQUEST_IN_PROGRESS", "BUSINESS_RULE_VIOLATION"),
+			"IDEMPOTENCY_KEY_REUSED", "IDEMPOTENCY_REQUEST_IN_PROGRESS", "BUSINESS_RULE_VIOLATION", "INTERNAL_ERROR"),
 			create.get("x-error-codes"));
 		assertEquals(List.of("VALIDATION_ERROR", "AUTHENTICATION_REQUIRED", "PERMISSION_DENIED", "RESOURCE_NOT_FOUND",
-			"VERSION_CONFLICT", "IDEMPOTENCY_KEY_REUSED", "IDEMPOTENCY_REQUEST_IN_PROGRESS", "BUSINESS_RULE_VIOLATION"),
+			"VERSION_CONFLICT", "IDEMPOTENCY_KEY_REUSED", "IDEMPOTENCY_REQUEST_IN_PROGRESS", "BUSINESS_RULE_VIOLATION", "INTERNAL_ERROR"),
 			revise.get("x-error-codes"));
 		assertEquals(revise.get("x-error-codes"), release.get("x-error-codes"));
 		assertHasParameter(create, "#/components/parameters/IdempotencyKey");

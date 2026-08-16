@@ -120,6 +120,8 @@ V1 客户端最大重试窗口为 24 小时，幂等记录最短保留 7 天。`
 
 LiquidityHold 的四个公开 operation 继续复用上述统一幂等服务。创建、修订和释放的 request Hash 必须包含路由实际解析后的 `accountId`，修订/释放还必须包含实际 `holdId`；请求体按类型化载荷规范化，修订和释放把 `If-Match` 放入 Hash，创建使用显式的 If-Match 缺失标记。格式校验、未认证、权限失败和资源不可见在幂等服务之前结束，不创建幂等记录。
 
+LiquidityHold 的 `status` 由查询时点 `asOf` 从 `effectiveAt`、`expiresAt` 和终止事实推导，不是幂等安全引用中的持久化字段；若重放时已跨过尚未物化版本的生效或过期边界，服务端无法精确重建首次响应，必须返回 `500 INTERNAL_ERROR`，不得以当前状态伪装重放或重复执行业务写入。
+
 创建和修订请求的公共机器形状固定为 `type`、`amount`、`currency`、`effectiveAt`、`expiresAt`、`reason`：`amount` 是 `PositiveMoney` 十进制字符串，`currency` 是顶层 `Currency` 字段，二者独立提交；`expiresAt` 可为 `null`，其余必填字段按 OpenAPI 的类型和长度约束校验。嵌套 `amount` 对象、缺失或非字符串 `currency`、未知币种和额外字段均返回 `400 VALIDATION_ERROR`；格式正确但与账户事实币种不一致返回 `422 BUSINESS_RULE_VIOLATION`。服务端只以账户事实和 application 层校验结果决定写入币种，不直接信任客户端值。
 
 公共人工 API 不接收 `source`。服务端为这三个写 operation 固定写入 `MANUAL`，客户端不能伪造 `IMPORT` 或 `SYSTEM`；后两者只保留给未来受控的内部导入或系统任务。API 的 `reason` 逐字映射数据库 `liquidity_holds.note`。修订没有独立持久化的 `revisionReason` 字段，因此公共修订载荷不接收该字段；修订理由使用新版本的 `reason`/`note`，并由追加式审计 action `LIQUIDITY_HOLD_REVISED` 表示修订行为，禁止接收后静默丢弃。
@@ -422,7 +424,7 @@ AND (expires_at IS NULL OR expires_at > asOf)
 
 权限和不可枚举语义固定为：OWNER、EDITOR、VIEWER 的 ACTIVE membership 均可查询；OWNER、EDITOR 可创建、修订和释放；VIEWER 写入返回 `403 PERMISSION_DENIED`。LEFT、REMOVED、已结束 membership 周期和无关用户不能访问，账户不存在、账户不可见或 hold 不属于该账户统一返回 `404 RESOURCE_NOT_FOUND`，不得以 `accounts.created_by` 替代 membership 授权。
 
-四个 LiquidityHold operation 的错误契约为：列表允许 `400 VALIDATION_ERROR`、`401 AUTHENTICATION_REQUIRED`、`403 PERMISSION_DENIED`、`404 RESOURCE_NOT_FOUND`；创建额外允许 `409 IDEMPOTENCY_KEY_REUSED`/`IDEMPOTENCY_REQUEST_IN_PROGRESS` 和必要的 `422 BUSINESS_RULE_VIOLATION`；修订、释放额外允许严格 If-Match 下的 `409 VERSION_CONFLICT`、两类幂等冲突和必要的 `422 BUSINESS_RULE_VIOLATION`。资源不可见永远优先按 404 返回，不能创建幂等记录，也不能通过 versionConflict 泄露资源存在性。
+四个 LiquidityHold operation 的错误契约为：列表允许 `400 VALIDATION_ERROR`、`401 AUTHENTICATION_REQUIRED`、`403 PERMISSION_DENIED`、`404 RESOURCE_NOT_FOUND`；创建额外允许 `409 IDEMPOTENCY_KEY_REUSED`/`IDEMPOTENCY_REQUEST_IN_PROGRESS`、必要的 `422 BUSINESS_RULE_VIOLATION` 和无法安全重建历史幂等响应时的 `500 INTERNAL_ERROR`；修订、释放额外允许严格 If-Match 下的 `409 VERSION_CONFLICT`、两类幂等冲突、必要的 `422 BUSINESS_RULE_VIOLATION` 和无法安全重建历史幂等响应时的 `500 INTERNAL_ERROR`。资源不可见永远优先按 404 返回，不能创建幂等记录，也不能通过 versionConflict 泄露资源存在性。
 
 ### 4.4 交易与流水
 

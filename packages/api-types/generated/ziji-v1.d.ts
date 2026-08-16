@@ -4200,6 +4200,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["BusinessRuleViolation"];
+            500: components["responses"]["InternalError"];
         };
     };
     reviseLiquidityHold: {
@@ -4230,6 +4231,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["BusinessRuleViolation"];
+            500: components["responses"]["InternalError"];
         };
     };
     releaseLiquidityHold: {
@@ -4256,6 +4258,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["BusinessRuleViolation"];
+            500: components["responses"]["InternalError"];
         };
     };
     listTransactions: {

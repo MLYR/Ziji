@@ -76,6 +76,11 @@ public final class AccountApiExceptionHandler {
 		return problem;
 	}
 
+	@ExceptionHandler(LiquidityHoldException.SafeReplayUnavailable.class)
+	ProblemDetail liquidityHoldSafeReplayUnavailable(HttpServletRequest request, HttpServletResponse response) {
+		return base(HttpStatus.INTERNAL_SERVER_ERROR, "服务器处理请求失败", "INTERNAL_ERROR", request, response);
+	}
+
 	@ExceptionHandler(LiquidityHoldException.Persistence.class)
 	ProblemDetail liquidityHoldPersistence(HttpServletRequest request, HttpServletResponse response) {
 		return base(HttpStatus.INTERNAL_SERVER_ERROR, "服务器处理请求失败", "INTERNAL_ERROR", request, response);

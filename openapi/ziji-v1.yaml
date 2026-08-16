@@ -349,7 +349,7 @@ paths:
         scope: CURRENT_USER_API_VERSION_OPERATION_ID_KEY
         requestHash: ACTUAL_ACCOUNT_ID_TYPED_PAYLOAD_TYPE_AMOUNT_CURRENCY_EFFECTIVE_AT_EXPIRES_AT_REASON_EXPLICIT_ABSENT_IF_MATCH
         rejectedBeforeRecord: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND]
-      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_REQUEST_IN_PROGRESS, BUSINESS_RULE_VIOLATION]
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_REQUEST_IN_PROGRESS, BUSINESS_RULE_VIOLATION, INTERNAL_ERROR]
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
       requestBody:
         required: true
@@ -363,6 +363,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /accounts/{accountId}/liquidity-holds/{holdId}/revisions:
     parameters: [{ $ref: '#/components/parameters/AccountId' }, { $ref: '#/components/parameters/HoldId' }]
     post:
@@ -376,7 +377,7 @@ paths:
         scope: CURRENT_USER_API_VERSION_OPERATION_ID_KEY
         requestHash: ACTUAL_ACCOUNT_ID_AND_HOLD_ID_TYPED_PAYLOAD_TYPE_AMOUNT_CURRENCY_EFFECTIVE_AT_EXPIRES_AT_REASON_IF_MATCH
         rejectedBeforeRecord: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND]
-      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND, VERSION_CONFLICT, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_REQUEST_IN_PROGRESS, BUSINESS_RULE_VIOLATION]
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND, VERSION_CONFLICT, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_REQUEST_IN_PROGRESS, BUSINESS_RULE_VIOLATION, INTERNAL_ERROR]
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/LiquidityHoldIfMatch' }]
       requestBody:
         required: true
@@ -390,6 +391,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /accounts/{accountId}/liquidity-holds/{holdId}/release:
     parameters: [{ $ref: '#/components/parameters/AccountId' }, { $ref: '#/components/parameters/HoldId' }]
     post:
@@ -403,7 +405,7 @@ paths:
         scope: CURRENT_USER_API_VERSION_OPERATION_ID_KEY
         requestHash: ACTUAL_ACCOUNT_ID_AND_HOLD_ID_TYPED_EMPTY_PAYLOAD_IF_MATCH
         rejectedBeforeRecord: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND]
-      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND, VERSION_CONFLICT, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_REQUEST_IN_PROGRESS, BUSINESS_RULE_VIOLATION]
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND, VERSION_CONFLICT, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_REQUEST_IN_PROGRESS, BUSINESS_RULE_VIOLATION, INTERNAL_ERROR]
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/LiquidityHoldIfMatch' }]
       responses:
         '200': { $ref: '#/components/responses/LiquidityHoldOk' }
@@ -413,6 +415,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /transactions:
     get:
       tags: [Ledger]

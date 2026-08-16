@@ -18,7 +18,7 @@ public record LiquidityHoldCommand(
 
 	public LiquidityHoldCommand {
 		if (type == null || currency == null || effectiveAt == null || reason == null || reason.isBlank()
-			|| reason.length() > 500 || (expiresAt != null && !expiresAt.isAfter(effectiveAt))) {
+			|| reason.codePointCount(0, reason.length()) > 500 || (expiresAt != null && !expiresAt.isAfter(effectiveAt))) {
 			throw new LiquidityHoldException.Validation();
 		}
 		try {

@@ -89,6 +89,26 @@ class LiquidityHoldMvcTests {
 	}
 
 	@Test
+	void replayWithChangedResourceVersionFailsClosedWithoutSuccessEtag() throws Exception {
+		Fixture fixture = fixture(new FakeUseCase().replayVersion(2));
+		String key = "create-replay-drift-01";
+		String body = commandJson("10.00", "CNY");
+
+		fixture.mvc().perform(post(path()).principal(principal()).header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isCreated())
+			.andExpect(header().string("ETag", "\"1\""));
+		fixture.mvc().perform(post(path()).principal(principal()).header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isInternalServerError())
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
+
+		assertEquals(1, fixture.useCase().createCalls);
+		assertEquals(1, fixture.useCase().replayCalls);
+	}
+
+	@Test
 	void reviseUsesTopLevelAmountAndCurrency() throws Exception {
 		Fixture fixture = fixture(new FakeUseCase());
 
@@ -154,6 +174,29 @@ class LiquidityHoldMvcTests {
 		}
 
 		assertEquals(0, fixture.idempotency().acquisitions);
+	}
+
+	@Test
+	void reasonUsesUnicodeCodePointBoundary() throws Exception {
+		Fixture fixture = fixture(new FakeUseCase());
+
+		fixture.mvc().perform(post(path())
+				.principal(principal())
+				.header("Idempotency-Key", "reason-codepoint-500")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(commandJson("10.00", "CNY", "😀".repeat(500))))
+			.andExpect(status().isCreated());
+
+		fixture.mvc().perform(post(path())
+				.principal(principal())
+				.header("Idempotency-Key", "reason-codepoint-501")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(commandJson("10.00", "CNY", "😀".repeat(501))))
+			.andExpect(status().isBadRequest())
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+		assertEquals(1, fixture.useCase().createCalls);
 	}
 
 	@Test
@@ -240,9 +283,13 @@ class LiquidityHoldMvcTests {
 	}
 
 	private static String commandJson(String amount, String currency) {
+		return commandJson(amount, currency, "人工冻结");
+	}
+
+	private static String commandJson(String amount, String currency, String reason) {
 		return "{\"type\":\"FROZEN\",\"amount\":\"" + amount
 			+ "\",\"currency\":\"" + currency
-			+ "\",\"effectiveAt\":\"2026-08-15T01:02:03Z\",\"expiresAt\":null,\"reason\":\"人工冻结\"}";
+			+ "\",\"effectiveAt\":\"2026-08-15T01:02:03Z\",\"expiresAt\":null,\"reason\":\"" + reason + "\"}";
 	}
 
 	private static java.security.Principal principal() {
@@ -254,11 +301,17 @@ class LiquidityHoldMvcTests {
 	private static final class FakeUseCase implements LiquidityHoldUseCase {
 		private LiquidityHoldCommand lastCommand;
 		private boolean rejectNonCnyCurrency;
+		private int replayVersion = 1;
 		private int createCalls;
 		private int replayCalls;
 
 		private FakeUseCase rejectNonCnyCurrency() {
 			rejectNonCnyCurrency = true;
+			return this;
+		}
+
+		private FakeUseCase replayVersion(int version) {
+			replayVersion = version;
 			return this;
 		}
 
@@ -298,13 +351,18 @@ class LiquidityHoldMvcTests {
 		@Override
 		public LiquidityHold replay(UUID userId, UUID accountId, UUID holdId, int expectedVersion) {
 			replayCalls++;
-			return hold(AccountCurrency.CNY);
+			return hold(AccountCurrency.CNY, replayVersion);
 		}
 	}
 
 	private static LiquidityHold hold(AccountCurrency currency) {
-		return LiquidityHold.createRoot(HOLD_ID, ACCOUNT_ID, LiquidityHoldType.FROZEN,
-			new BigDecimal("10.00"), currency, NOW.minusSeconds(1), null, "人工冻结", USER_ID, NOW);
+		return hold(currency, 1);
+	}
+
+	private static LiquidityHold hold(AccountCurrency currency, int version) {
+		return LiquidityHold.restore(HOLD_ID, ACCOUNT_ID, HOLD_ID, null, 1, LiquidityHoldType.FROZEN,
+			new BigDecimal("10.00"), currency, NOW.minusSeconds(1), null, null,
+			app.ziji.account.domain.LiquidityHoldSource.MANUAL, "人工冻结", null, null, USER_ID, NOW, NOW, version);
 	}
 
 	private static final class MemoryIdempotencyStore implements IdempotencyRecordStore {

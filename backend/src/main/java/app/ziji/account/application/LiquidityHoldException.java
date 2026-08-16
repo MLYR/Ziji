@@ -28,6 +28,11 @@ public abstract class LiquidityHoldException extends RuntimeException {
 		public LiquidityHold current() { return current; }
 	}
 
+	/** 幂等历史引用无法精确重建时 fail closed，不把重放失败伪装成写入版本冲突。 */
+	public static final class SafeReplayUnavailable extends LiquidityHoldException {
+		public SafeReplayUnavailable() { super("流动性占用幂等结果无法安全重放。"); }
+	}
+
 	public static final class Persistence extends LiquidityHoldException {
 		public Persistence(Throwable cause) { super("流动性占用持久化失败。"); initCause(cause); }
 	}

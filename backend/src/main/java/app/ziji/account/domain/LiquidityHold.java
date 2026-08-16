@@ -193,7 +193,7 @@ public final class LiquidityHold {
 	}
 
 	private static void requireReason(String reason) {
-		if (reason == null || reason.isBlank() || reason.length() > 500) {
+		if (reason == null || reason.isBlank() || reason.codePointCount(0, reason.length()) > 500) {
 			throw invalid();
 		}
 	}

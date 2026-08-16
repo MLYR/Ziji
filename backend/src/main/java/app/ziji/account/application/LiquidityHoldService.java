@@ -180,9 +180,26 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 		requireReadable(userId, accountId);
 		LiquidityHold hold = holds.findByAccountAndId(accountId, holdId).orElseThrow(AccountNotVisibleException::new);
 		if (hold.version() != expectedVersion) {
-			throw new LiquidityHoldException.VersionConflict(hold);
+			// 幂等重放不是新的写入；历史版本无法精确重建时必须 fail closed。
+			throw new LiquidityHoldException.SafeReplayUnavailable();
+		}
+		if (logicalStatusMayHaveChanged(hold, clock.instant())) {
+			// statusAt(asOf) 不是持久化字段；跨过 effectiveAt/expiresAt 后不能重建首次响应。
+			throw new LiquidityHoldException.SafeReplayUnavailable();
 		}
 		return hold;
+	}
+
+	private static boolean logicalStatusMayHaveChanged(LiquidityHold hold, Instant asOf) {
+		if (hold.endReason() != null) {
+			return false;
+		}
+		boolean effectiveTransitionPassed = hold.effectiveAt().isAfter(hold.createdAt())
+			&& !hold.effectiveAt().isAfter(asOf);
+		boolean expiryTransitionPassed = hold.expiresAt() != null
+			&& hold.expiresAt().isAfter(hold.createdAt())
+			&& !hold.expiresAt().isAfter(asOf);
+		return effectiveTransitionPassed || expiryTransitionPassed;
 	}
 
 	private LiquidityHoldException.VersionConflict concurrentConflict(UUID accountId, UUID holdId) {
