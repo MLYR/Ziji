@@ -14,7 +14,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** V013 升级验收：V012 历史库可升级，且 V001～V012 的 Flyway checksum 保持不变。 */
+/** 当前迁移升级验收：V012 历史库可升级，且 V001～V012 的 Flyway checksum 保持不变。 */
 @Testcontainers
 class LiquidityHoldMoneyCapacityMigrationTests {
 
@@ -26,7 +26,7 @@ class LiquidityHoldMoneyCapacityMigrationTests {
 			.withPassword("ziji-test");
 
 	@Test
-	void v012DatabaseUpgradesToV013WithoutRewritingPreviousMigrations() throws Exception {
+	void v012DatabaseUpgradesToCurrentWithoutRewritingPreviousMigrations() throws Exception {
 		migrate("12");
 		Map<String, Integer> previousChecksums;
 		try (Connection connection = connection()) {
@@ -36,7 +36,7 @@ class LiquidityHoldMoneyCapacityMigrationTests {
 		migrate(null);
 
 		try (Connection connection = connection()) {
-			assertEquals(13, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			assertEquals(14, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
 			assertEquals(previousChecksums, checksumsThroughV012(connection));
 			assertEquals("30/8", numericShape(connection, "liquidity_holds", "amount"));
 			assertEquals("30/8", numericShape(connection, "account_liquidity_snapshots", "ledger_balance"));
