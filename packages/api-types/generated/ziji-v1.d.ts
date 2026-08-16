@@ -1986,22 +1986,168 @@ export interface components {
             /** @enum {string} */
             status?: "ACTIVE" | "PAUSED" | "ENDED";
         };
-        SyncOperation: {
+        SyncOperation: components["schemas"]["SyncCreateTransactionOperation"] | components["schemas"]["SyncUpdateTransactionOperation"] | components["schemas"]["SyncReverseTransactionOperation"];
+        SyncCreateTransactionOperation: {
             /** Format: uuid */
             operationId: string;
             idempotencyKey: string;
-            /** @enum {string} */
-            entityType: "ACCOUNT" | "TRANSACTION" | "CATEGORY" | "TAG" | "RECURRING_RULE";
-            /** Format: uuid */
+            /** @constant */
+            entityType: "TRANSACTION";
+            /**
+             * Format: uuid
+             * @description 客户端生成且最终持久化的 Transaction UUID。
+             */
             entityId: string;
-            /** @enum {string} */
-            operationType: "CREATE" | "UPDATE" | "REVERSE" | "ARCHIVE";
-            baseVersion?: number | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            operationType: "CREATE";
+            baseVersion: null;
             /** @constant */
             payloadVersion: 1;
-            payload: components["schemas"]["CreateAccountRequest"] | components["schemas"]["PostTransactionRequest"] | components["schemas"]["CreateCategoryRequest"] | components["schemas"]["CreateTagRequest"] | components["schemas"]["CreateRecurringRuleRequest"] | components["schemas"]["ReasonRequest"];
+            payload: components["schemas"]["SyncCreateTransactionPayload"];
             /** Format: date-time */
             createdAt: string;
+        };
+        SyncUpdateTransactionOperation: {
+            /** Format: uuid */
+            operationId: string;
+            idempotencyKey: string;
+            /** @constant */
+            entityType: "TRANSACTION";
+            /**
+             * Format: uuid
+             * @description 被修订的已入账 Transaction UUID。
+             */
+            entityId: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            operationType: "UPDATE";
+            baseVersion: number;
+            /** @constant */
+            payloadVersion: 1;
+            payload: components["schemas"]["SyncUpdateTransactionPayload"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        SyncReverseTransactionOperation: {
+            /** Format: uuid */
+            operationId: string;
+            idempotencyKey: string;
+            /** @constant */
+            entityType: "TRANSACTION";
+            /**
+             * Format: uuid
+             * @description 被作废的已入账 Transaction UUID。
+             */
+            entityId: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            operationType: "REVERSE";
+            baseVersion: number;
+            /** @constant */
+            payloadVersion: 1;
+            payload: components["schemas"]["ReasonRequest"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        SyncCreateTransactionPayload: components["schemas"]["SyncIncomeTransactionRequest"] | components["schemas"]["SyncExpenseTransactionRequest"] | components["schemas"]["SyncRefundTransactionRequest"] | components["schemas"]["SyncTransferTransactionRequest"];
+        SyncIncomeTransactionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "INCOME";
+            /** Format: date-time */
+            businessAt: string;
+            /** Format: date */
+            businessDate?: string;
+            timezone?: string | null;
+            note?: string | null;
+            tagIds?: string[];
+            /** Format: uuid */
+            accountId: string;
+            amount: components["schemas"]["PositivePostedMoney"];
+            currency: components["schemas"]["Currency"];
+            /** Format: uuid */
+            categoryId: string;
+            counterparty?: string | null;
+        };
+        SyncExpenseTransactionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "EXPENSE";
+            /** Format: date-time */
+            businessAt: string;
+            /** Format: date */
+            businessDate?: string;
+            timezone?: string | null;
+            note?: string | null;
+            tagIds?: string[];
+            /** Format: uuid */
+            accountId: string;
+            amount: components["schemas"]["PositivePostedMoney"];
+            currency: components["schemas"]["Currency"];
+            /** Format: uuid */
+            categoryId: string;
+            merchant?: string | null;
+        };
+        SyncRefundTransactionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "REFUND";
+            /** Format: date-time */
+            businessAt: string;
+            /** Format: date */
+            businessDate?: string;
+            timezone?: string | null;
+            note?: string | null;
+            tagIds?: string[];
+            /** Format: uuid */
+            accountId: string;
+            amount: components["schemas"]["PositivePostedMoney"];
+            currency: components["schemas"]["Currency"];
+            /** Format: uuid */
+            categoryId: string;
+            /** Format: uuid */
+            originalTransactionId?: string | null;
+        };
+        SyncTransferTransactionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "TRANSFER";
+            /** Format: date-time */
+            businessAt: string;
+            /** Format: date */
+            businessDate?: string;
+            timezone?: string | null;
+            note?: string | null;
+            tagIds?: string[];
+            /** Format: uuid */
+            fromAccountId: string;
+            /** Format: uuid */
+            toAccountId: string;
+            fromAmount: components["schemas"]["PositiveMoneyAmount"];
+            toAmount: components["schemas"]["PositiveMoneyAmount"];
+            fee: components["schemas"]["MoneyAmount"];
+            /** Format: uuid */
+            feeCategoryId?: string | null;
+            exchangeRate?: string | null;
+        };
+        SyncUpdateTransactionPayload: {
+            reason: string;
+            replacement: components["schemas"]["SyncCreateTransactionPayload"];
         };
         ApplySyncOperationsRequest: {
             deviceId: string;
@@ -2646,16 +2792,109 @@ export interface components {
         SyncPayloadValue: string | number | boolean | null | components["schemas"]["SyncPayloadValue"][] | {
             [key: string]: components["schemas"]["SyncPayloadValue"];
         };
-        SyncOperationResult: {
+        SyncOperationResult: components["schemas"]["SyncAppliedOperationResult"] | components["schemas"]["SyncDuplicateOperationResult"] | components["schemas"]["SyncConflictOperationResult"] | components["schemas"]["SyncRejectedOperationResult"] | components["schemas"]["SyncRetryableOperationResult"];
+        SyncAppliedOperationResult: {
             /** Format: uuid */
             operationId: string;
-            /** @enum {string} */
-            status: "APPLIED" | "DUPLICATE" | "CONFLICT" | "REJECTED";
+            /** @constant */
+            status: "APPLIED";
             /** Format: uuid */
-            entityId?: string | null;
-            entityVersion?: number | null;
-            changeSequence?: number | null;
-            error?: null | components["schemas"]["Problem"];
+            entityId: string;
+            entityVersion: number;
+        };
+        SyncDuplicateOperationResult: components["schemas"]["SyncDuplicateAppliedOperationResult"] | components["schemas"]["SyncDuplicateFailedOperationResult"];
+        SyncDuplicateAppliedOperationResult: {
+            /** Format: uuid */
+            operationId: string;
+            /** @constant */
+            status: "DUPLICATE";
+            /**
+             * Format: uuid
+             * @description 首次安全结果包含资源时重放该 ID。
+             */
+            entityId: string;
+            /** @description 首次安全结果包含资源时重放该版本。 */
+            entityVersion: number;
+        };
+        SyncDuplicateFailedOperationResult: {
+            /** Format: uuid */
+            operationId: string;
+            /** @constant */
+            status: "DUPLICATE";
+            error: components["schemas"]["SyncConflictProblem"] | components["schemas"]["SyncRejectedProblem"];
+        };
+        SyncConflictProblem: components["schemas"]["Problem"] & {
+            /** @constant */
+            code: "VERSION_CONFLICT";
+            /** @constant */
+            status: 409;
+            versionConflict: components["schemas"]["VersionConflictDetails"];
+        };
+        SyncConflictOperationResult: {
+            /** Format: uuid */
+            operationId: string;
+            /** @constant */
+            status: "CONFLICT";
+            error: components["schemas"]["SyncConflictProblem"];
+        };
+        SyncRejectedOperationResult: {
+            /** Format: uuid */
+            operationId: string;
+            /** @constant */
+            status: "REJECTED";
+            error: components["schemas"]["SyncRejectedProblem"];
+        };
+        SyncRejectedProblem: {
+            /** Format: uri */
+            type: string;
+            title: string;
+            status: number;
+            code: string;
+            detail?: string | null;
+            instance?: string | null;
+            requestId: string;
+            fieldErrors?: {
+                field: string;
+                code: string;
+                message?: string | null;
+            }[];
+        };
+        SyncRetryableOperationResult: {
+            /** Format: uuid */
+            operationId: string;
+            /** @constant */
+            status: "RETRYABLE";
+            error: components["schemas"]["SyncRetryableProblem"];
+            /** @constant */
+            retryAfterSeconds: 5;
+        };
+        SyncRetryableProblem: components["schemas"]["SyncRetryableInProgressProblem"] | components["schemas"]["SyncRetryableInternalErrorProblem"];
+        SyncRetryableProblemBase: {
+            /** Format: uri */
+            type: string;
+            title: string;
+            status: number;
+            code: string;
+            detail?: string | null;
+            instance?: string | null;
+            requestId: string;
+            fieldErrors?: {
+                field: string;
+                code: string;
+                message?: string | null;
+            }[];
+        };
+        SyncRetryableInProgressProblem: components["schemas"]["SyncRetryableProblemBase"] & {
+            /** @constant */
+            status?: 409;
+            /** @constant */
+            code?: "IDEMPOTENCY_REQUEST_IN_PROGRESS";
+        };
+        SyncRetryableInternalErrorProblem: components["schemas"]["SyncRetryableProblemBase"] & {
+            /** @constant */
+            status?: 500;
+            /** @constant */
+            code?: "INTERNAL_ERROR";
         };
         UserEnvelope: components["schemas"]["UserDataEnvelope"];
         UserDataEnvelope: {
@@ -2905,7 +3144,6 @@ export interface components {
         SyncOperationResultsEnvelope: {
             data: {
                 results: components["schemas"]["SyncOperationResult"][];
-                serverCursor: string;
             };
             meta: components["schemas"]["ResponseMeta"];
         };

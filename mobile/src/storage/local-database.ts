@@ -21,10 +21,10 @@ export interface CachedEntity extends SyncChange {
   updatedAt: string;
 }
 
-export interface PendingSyncOperation extends SyncOperation {
+export type PendingSyncOperation = SyncOperation & {
   state: PendingOperationState;
   updatedAt: string;
-}
+};
 
 export interface SyncConflict {
   createdAt: string;
@@ -47,10 +47,10 @@ interface PendingOperationRow {
   base_version: number | null;
   created_at: string;
   entity_id: string;
-  entity_type: SyncOperation['entityType'];
+  entity_type: string;
   idempotency_key: string;
   operation_id: string;
-  operation_type: SyncOperation['operationType'];
+  operation_type: string;
   payload_json: string;
   payload_version: 1;
   state: PendingOperationState;
@@ -115,19 +115,83 @@ function toCachedEntity(row: CachedEntityRow): CachedEntity {
 }
 
 function toPendingOperation(row: PendingOperationRow): PendingSyncOperation {
-  return {
-    baseVersion: row.base_version,
+  // SQLite 行是动态数据，读取时必须恢复生成联合体的不变量，不能绕过服务器契约。
+  if (row.entity_type !== 'TRANSACTION' || row.payload_version !== 1) {
+    throw new Error('本地待上传操作不再受当前同步契约支持。');
+  }
+
+  const common = {
     createdAt: row.created_at,
     entityId: row.entity_id,
-    entityType: row.entity_type,
+    entityType: 'TRANSACTION' as const,
     idempotencyKey: row.idempotency_key,
     operationId: row.operation_id,
-    operationType: row.operation_type,
-    payload: parseJson<SyncOperation['payload']>(row.payload_json),
-    payloadVersion: row.payload_version,
+    payloadVersion: 1 as const,
     state: row.state,
     updatedAt: row.updated_at,
   };
+  const payload = parsePendingPayload(row.payload_json);
+
+  switch (row.operation_type) {
+    case 'CREATE':
+      if (row.base_version !== null || !isSyncCreatePayload(payload)) {
+        throw new Error('本地 CREATE 操作不符合当前同步契约。');
+      }
+      return { ...common, baseVersion: null, operationType: 'CREATE', payload };
+    case 'UPDATE':
+      if (!isPositiveInteger(row.base_version) || !isSyncUpdatePayload(payload)) {
+        throw new Error('本地 UPDATE 操作不符合当前同步契约。');
+      }
+      return { ...common, baseVersion: row.base_version, operationType: 'UPDATE', payload };
+    case 'REVERSE':
+      if (!isPositiveInteger(row.base_version) || !isReasonPayload(payload)) {
+        throw new Error('本地 REVERSE 操作不符合当前同步契约。');
+      }
+      return { ...common, baseVersion: row.base_version, operationType: 'REVERSE', payload };
+    default:
+      throw new Error('本地待上传操作不再受当前同步契约支持。');
+  }
+}
+
+type SyncCreateOperation = Extract<SyncOperation, { operationType: 'CREATE' }>;
+type SyncUpdateOperation = Extract<SyncOperation, { operationType: 'UPDATE' }>;
+type SyncReverseOperation = Extract<SyncOperation, { operationType: 'REVERSE' }>;
+
+function parsePendingPayload(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new Error('本地待上传操作载荷不是有效 JSON。');
+  }
+}
+
+function isSyncCreatePayload(value: unknown): value is SyncCreateOperation['payload'] {
+  return isRecord(value)
+    && !Object.hasOwn(value, 'id')
+    && isSyncCreateType(value.type);
+}
+
+function isSyncUpdatePayload(value: unknown): value is SyncUpdateOperation['payload'] {
+  return isRecord(value)
+    && typeof value.reason === 'string'
+    && isSyncCreatePayload(value.replacement);
+}
+
+function isReasonPayload(value: unknown): value is SyncReverseOperation['payload'] {
+  return isRecord(value)
+    && typeof value.reason === 'string';
+}
+
+function isSyncCreateType(value: unknown): value is 'INCOME' | 'EXPENSE' | 'REFUND' | 'TRANSFER' {
+  return value === 'INCOME' || value === 'EXPENSE' || value === 'REFUND' || value === 'TRANSFER';
+}
+
+function isPositiveInteger(value: number | null): value is number {
+  return value !== null && Number.isSafeInteger(value) && value > 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 async function createV2Schema(database: SQLite.SQLiteDatabase): Promise<void> {

@@ -167,7 +167,15 @@ describe('local sync storage', () => {
     idempotencyKey: 'key-1',
     operationId: 'operation-1',
     operationType: 'CREATE' as const,
-    payload: { accountId: 'account-1', amount: '10.00', businessDate: '2026-08-16', currency: 'CNY', type: 'EXPENSE' } as never,
+    payload: {
+      accountId: 'account-1',
+      amount: '10.00',
+      businessAt: '2026-08-16T00:00:00Z',
+      businessDate: '2026-08-16',
+      categoryId: 'category-1',
+      currency: 'CNY',
+      type: 'EXPENSE',
+    } as never,
     payloadVersion: 1 as const,
   };
 
@@ -248,6 +256,27 @@ describe('local sync storage', () => {
       await updatePendingOperationState(sqlite, 'user-a', operation.operationId, 'SENDING', '2026-08-16T00:00:01Z');
       await updatePendingOperationState(sqlite, 'user-a', operation.operationId, 'REJECTED', '2026-08-16T00:00:02Z');
       await expect(updatePendingOperationState(sqlite, 'user-a', operation.operationId, 'SENDING', '2026-08-16T00:00:03Z')).rejects.toThrow('不允许');
+    } finally {
+      database.close();
+    }
+  });
+
+  it('读取旧 ARCHIVE 行时拒绝不再受契约支持的操作', async () => {
+    const database = createDatabase();
+    const sqlite = database as unknown as SQLite.SQLiteDatabase;
+
+    try {
+      await migrateLocalDatabase(sqlite);
+      await sqlite.runAsync(
+        `INSERT INTO pending_operations (
+           user_id, operation_id, idempotency_key, entity_type, entity_id, operation_type, base_version,
+           payload_version, payload_json, state, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        ['user-a', 'legacy-archive', 'legacy-key', 'TRANSACTION', 'entity-1', 'ARCHIVE', null, 1,
+          JSON.stringify({ reason: '历史归档' }), 'PENDING', '2026-08-16T00:00:00Z', '2026-08-16T00:00:00Z'],
+      );
+
+      await expect(getPendingOperation(sqlite, 'user-a', 'legacy-archive')).rejects.toThrow('不再受当前同步契约支持');
     } finally {
       database.close();
     }

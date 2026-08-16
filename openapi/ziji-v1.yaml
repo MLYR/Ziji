@@ -1394,7 +1394,7 @@ paths:
       tags: [Sync]
       operationId: applySyncOperations
       summary: 按顺序应用离线操作
-      x-requirement-ids: [SYNC-002, SYNC-004, SYNC-010]
+      x-requirement-ids: [SYNC-001, SYNC-004, SYNC-006, SYNC-007, SYNC-009]
       requestBody:
         required: true
         content:
@@ -2119,27 +2119,146 @@ components:
         intervalValue: { type: integer, minimum: 1, maximum: 365 }
         endsOn: { type: [string, 'null'], format: date }
         status: { type: string, enum: [ACTIVE, PAUSED, ENDED] }
+    # Sync only accepts the three explicitly mapped Transaction commands; it never exposes a Cartesian product.
     SyncOperation:
+      oneOf:
+        - { $ref: '#/components/schemas/SyncCreateTransactionOperation' }
+        - { $ref: '#/components/schemas/SyncUpdateTransactionOperation' }
+        - { $ref: '#/components/schemas/SyncReverseTransactionOperation' }
+      discriminator:
+        propertyName: operationType
+        mapping:
+          CREATE: '#/components/schemas/SyncCreateTransactionOperation'
+          UPDATE: '#/components/schemas/SyncUpdateTransactionOperation'
+          REVERSE: '#/components/schemas/SyncReverseTransactionOperation'
+    SyncCreateTransactionOperation:
       type: object
       additionalProperties: false
-      required: [operationId, idempotencyKey, entityType, entityId, operationType, payloadVersion, payload, createdAt]
+      required: [operationId, idempotencyKey, entityType, entityId, operationType, baseVersion, payloadVersion, payload, createdAt]
       properties:
         operationId: { type: string, format: uuid }
         idempotencyKey: { type: string, minLength: 16, maxLength: 100 }
-        entityType: { type: string, enum: [ACCOUNT, TRANSACTION, CATEGORY, TAG, RECURRING_RULE] }
-        entityId: { type: string, format: uuid }
-        operationType: { type: string, enum: [CREATE, UPDATE, REVERSE, ARCHIVE] }
-        baseVersion: { type: [integer, 'null'], minimum: 1 }
+        entityType: { type: string, const: TRANSACTION }
+        entityId: { type: string, format: uuid, description: 客户端生成且最终持久化的 Transaction UUID。 }
+        operationType: { type: string, const: CREATE }
+        baseVersion: { type: 'null' }
         payloadVersion: { type: integer, const: 1 }
-        payload:
-          oneOf:
-            - { $ref: '#/components/schemas/CreateAccountRequest' }
-            - { $ref: '#/components/schemas/PostTransactionRequest' }
-            - { $ref: '#/components/schemas/CreateCategoryRequest' }
-            - { $ref: '#/components/schemas/CreateTagRequest' }
-            - { $ref: '#/components/schemas/CreateRecurringRuleRequest' }
-            - { $ref: '#/components/schemas/ReasonRequest' }
+        payload: { $ref: '#/components/schemas/SyncCreateTransactionPayload' }
         createdAt: { type: string, format: date-time }
+    SyncUpdateTransactionOperation:
+      type: object
+      additionalProperties: false
+      required: [operationId, idempotencyKey, entityType, entityId, operationType, baseVersion, payloadVersion, payload, createdAt]
+      properties:
+        operationId: { type: string, format: uuid }
+        idempotencyKey: { type: string, minLength: 16, maxLength: 100 }
+        entityType: { type: string, const: TRANSACTION }
+        entityId: { type: string, format: uuid, description: 被修订的已入账 Transaction UUID。 }
+        operationType: { type: string, const: UPDATE }
+        baseVersion: { type: integer, minimum: 1 }
+        payloadVersion: { type: integer, const: 1 }
+        payload: { $ref: '#/components/schemas/SyncUpdateTransactionPayload' }
+        createdAt: { type: string, format: date-time }
+    SyncReverseTransactionOperation:
+      type: object
+      additionalProperties: false
+      required: [operationId, idempotencyKey, entityType, entityId, operationType, baseVersion, payloadVersion, payload, createdAt]
+      properties:
+        operationId: { type: string, format: uuid }
+        idempotencyKey: { type: string, minLength: 16, maxLength: 100 }
+        entityType: { type: string, const: TRANSACTION }
+        entityId: { type: string, format: uuid, description: 被作废的已入账 Transaction UUID。 }
+        operationType: { type: string, const: REVERSE }
+        baseVersion: { type: integer, minimum: 1 }
+        payloadVersion: { type: integer, const: 1 }
+        payload: { $ref: '#/components/schemas/ReasonRequest' }
+        createdAt: { type: string, format: date-time }
+    SyncCreateTransactionPayload:
+      oneOf:
+        - { $ref: '#/components/schemas/SyncIncomeTransactionRequest' }
+        - { $ref: '#/components/schemas/SyncExpenseTransactionRequest' }
+        - { $ref: '#/components/schemas/SyncRefundTransactionRequest' }
+        - { $ref: '#/components/schemas/SyncTransferTransactionRequest' }
+      discriminator:
+        propertyName: type
+        mapping:
+          INCOME: '#/components/schemas/SyncIncomeTransactionRequest'
+          EXPENSE: '#/components/schemas/SyncExpenseTransactionRequest'
+          REFUND: '#/components/schemas/SyncRefundTransactionRequest'
+          TRANSFER: '#/components/schemas/SyncTransferTransactionRequest'
+    SyncIncomeTransactionRequest:
+      type: object
+      additionalProperties: false
+      required: [type, businessAt, accountId, amount, currency, categoryId]
+      properties:
+        type: { type: string, const: INCOME }
+        businessAt: { type: string, format: date-time }
+        businessDate: { type: string, format: date }
+        timezone: { type: [string, 'null'], minLength: 1, maxLength: 64 }
+        note: { type: [string, 'null'], maxLength: 2000 }
+        tagIds: { type: array, uniqueItems: true, maxItems: 20, items: { type: string, format: uuid } }
+        accountId: { type: string, format: uuid }
+        amount: { $ref: '#/components/schemas/PositivePostedMoney' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        categoryId: { type: string, format: uuid }
+        counterparty: { type: [string, 'null'], maxLength: 200 }
+    SyncExpenseTransactionRequest:
+      type: object
+      additionalProperties: false
+      required: [type, businessAt, accountId, amount, currency, categoryId]
+      properties:
+        type: { type: string, const: EXPENSE }
+        businessAt: { type: string, format: date-time }
+        businessDate: { type: string, format: date }
+        timezone: { type: [string, 'null'], minLength: 1, maxLength: 64 }
+        note: { type: [string, 'null'], maxLength: 2000 }
+        tagIds: { type: array, uniqueItems: true, maxItems: 20, items: { type: string, format: uuid } }
+        accountId: { type: string, format: uuid }
+        amount: { $ref: '#/components/schemas/PositivePostedMoney' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        categoryId: { type: string, format: uuid }
+        merchant: { type: [string, 'null'], maxLength: 200 }
+    SyncRefundTransactionRequest:
+      type: object
+      additionalProperties: false
+      required: [type, businessAt, accountId, amount, currency, categoryId]
+      properties:
+        type: { type: string, const: REFUND }
+        businessAt: { type: string, format: date-time }
+        businessDate: { type: string, format: date }
+        timezone: { type: [string, 'null'], minLength: 1, maxLength: 64 }
+        note: { type: [string, 'null'], maxLength: 2000 }
+        tagIds: { type: array, uniqueItems: true, maxItems: 20, items: { type: string, format: uuid } }
+        accountId: { type: string, format: uuid }
+        amount: { $ref: '#/components/schemas/PositivePostedMoney' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        categoryId: { type: string, format: uuid }
+        originalTransactionId: { type: [string, 'null'], format: uuid }
+    SyncTransferTransactionRequest:
+      type: object
+      additionalProperties: false
+      required: [type, businessAt, fromAccountId, toAccountId, fromAmount, toAmount, fee]
+      properties:
+        type: { type: string, const: TRANSFER }
+        businessAt: { type: string, format: date-time }
+        businessDate: { type: string, format: date }
+        timezone: { type: [string, 'null'], minLength: 1, maxLength: 64 }
+        note: { type: [string, 'null'], maxLength: 2000 }
+        tagIds: { type: array, uniqueItems: true, maxItems: 20, items: { type: string, format: uuid } }
+        fromAccountId: { type: string, format: uuid }
+        toAccountId: { type: string, format: uuid }
+        fromAmount: { $ref: '#/components/schemas/PositiveMoneyAmount' }
+        toAmount: { $ref: '#/components/schemas/PositiveMoneyAmount' }
+        fee: { $ref: '#/components/schemas/MoneyAmount' }
+        feeCategoryId: { type: [string, 'null'], format: uuid }
+        exchangeRate: { type: [string, 'null'], pattern: '^(0*[1-9][0-9]{0,27})(\.[0-9]{1,12})?$|^0\.[0-9]*[1-9][0-9]{0,11}$' }
+    SyncUpdateTransactionPayload:
+      type: object
+      additionalProperties: false
+      required: [reason, replacement]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 500 }
+        replacement: { $ref: '#/components/schemas/SyncCreateTransactionPayload' }
     ApplySyncOperationsRequest:
       type: object
       additionalProperties: false
@@ -2807,19 +2926,146 @@ components:
           maxProperties: 100
           additionalProperties: { $ref: '#/components/schemas/SyncPayloadValue' }
     SyncOperationResult:
+      oneOf:
+        - { $ref: '#/components/schemas/SyncAppliedOperationResult' }
+        - { $ref: '#/components/schemas/SyncDuplicateOperationResult' }
+        - { $ref: '#/components/schemas/SyncConflictOperationResult' }
+        - { $ref: '#/components/schemas/SyncRejectedOperationResult' }
+        - { $ref: '#/components/schemas/SyncRetryableOperationResult' }
+    SyncAppliedOperationResult:
       type: object
       additionalProperties: false
-      required: [operationId, status]
+      required: [operationId, status, entityId, entityVersion]
       properties:
         operationId: { type: string, format: uuid }
-        status: { type: string, enum: [APPLIED, DUPLICATE, CONFLICT, REJECTED] }
-        entityId: { type: [string, 'null'], format: uuid }
-        entityVersion: { type: [integer, 'null'], minimum: 1 }
-        changeSequence: { type: [integer, 'null'], minimum: 1 }
+        status: { type: string, const: APPLIED }
+        entityId: { type: string, format: uuid }
+        entityVersion: { type: integer, minimum: 1 }
+    SyncDuplicateOperationResult:
+      oneOf:
+        - { $ref: '#/components/schemas/SyncDuplicateAppliedOperationResult' }
+        - { $ref: '#/components/schemas/SyncDuplicateFailedOperationResult' }
+    SyncDuplicateAppliedOperationResult:
+      type: object
+      additionalProperties: false
+      required: [operationId, status, entityId, entityVersion]
+      properties:
+        operationId: { type: string, format: uuid }
+        status: { type: string, const: DUPLICATE }
+        entityId: { type: string, format: uuid, description: 首次安全结果包含资源时重放该 ID。 }
+        entityVersion: { type: integer, minimum: 1, description: 首次安全结果包含资源时重放该版本。 }
+    SyncDuplicateFailedOperationResult:
+      type: object
+      additionalProperties: false
+      required: [operationId, status, error]
+      properties:
+        operationId: { type: string, format: uuid }
+        status: { type: string, const: DUPLICATE }
         error:
           oneOf:
-            - type: 'null'
-            - { $ref: '#/components/schemas/Problem' }
+            - { $ref: '#/components/schemas/SyncConflictProblem' }
+            - { $ref: '#/components/schemas/SyncRejectedProblem' }
+    SyncConflictProblem:
+      allOf:
+        - { $ref: '#/components/schemas/Problem' }
+        - type: object
+          required: [code, status, versionConflict]
+          properties:
+            code: { type: string, const: VERSION_CONFLICT }
+            status: { type: integer, const: 409 }
+            versionConflict: { $ref: '#/components/schemas/VersionConflictDetails' }
+    SyncConflictOperationResult:
+      type: object
+      additionalProperties: false
+      required: [operationId, status, error]
+      properties:
+        operationId: { type: string, format: uuid }
+        status: { type: string, const: CONFLICT }
+        error: { $ref: '#/components/schemas/SyncConflictProblem' }
+    SyncRejectedOperationResult:
+      type: object
+      additionalProperties: false
+      required: [operationId, status, error]
+      properties:
+        operationId: { type: string, format: uuid }
+        status: { type: string, const: REJECTED }
+        error: { $ref: '#/components/schemas/SyncRejectedProblem' }
+    SyncRejectedProblem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code, requestId]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string, maxLength: 200 }
+        status: { type: integer, minimum: 400, maximum: 599 }
+        code:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]{1,79}$'
+          not: { const: VERSION_CONFLICT }
+        detail: { type: [string, 'null'], maxLength: 1000 }
+        instance: { type: [string, 'null'], maxLength: 500 }
+        requestId: { type: string, maxLength: 100 }
+        fieldErrors:
+          type: array
+          maxItems: 100
+          items:
+            type: object
+            additionalProperties: false
+            required: [field, code]
+            properties:
+              field: { type: string, maxLength: 200 }
+              code: { type: string, maxLength: 80 }
+              message: { type: [string, 'null'], maxLength: 500 }
+    SyncRetryableOperationResult:
+      type: object
+      additionalProperties: false
+      required: [operationId, status, error, retryAfterSeconds]
+      properties:
+        operationId: { type: string, format: uuid }
+        status: { type: string, const: RETRYABLE }
+        error: { $ref: '#/components/schemas/SyncRetryableProblem' }
+        retryAfterSeconds: { type: integer, const: 5 }
+    SyncRetryableProblem:
+      oneOf:
+        - { $ref: '#/components/schemas/SyncRetryableInProgressProblem' }
+        - { $ref: '#/components/schemas/SyncRetryableInternalErrorProblem' }
+    SyncRetryableProblemBase:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code, requestId]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string, maxLength: 200 }
+        status: { type: integer, minimum: 400, maximum: 599 }
+        code: { type: string, pattern: '^[A-Z][A-Z0-9_]{1,79}$' }
+        detail: { type: [string, 'null'], maxLength: 1000 }
+        instance: { type: [string, 'null'], maxLength: 500 }
+        requestId: { type: string, maxLength: 100 }
+        fieldErrors:
+          type: array
+          maxItems: 100
+          items:
+            type: object
+            additionalProperties: false
+            required: [field, code]
+            properties:
+              field: { type: string, maxLength: 200 }
+              code: { type: string, maxLength: 80 }
+              message: { type: [string, 'null'], maxLength: 500 }
+    SyncRetryableInProgressProblem:
+      allOf:
+        - { $ref: '#/components/schemas/SyncRetryableProblemBase' }
+        - type: object
+          properties:
+            status: { type: integer, const: 409 }
+            code: { type: string, const: IDEMPOTENCY_REQUEST_IN_PROGRESS }
+    SyncRetryableInternalErrorProblem:
+      allOf:
+        - { $ref: '#/components/schemas/SyncRetryableProblemBase' }
+        - type: object
+          properties:
+            status: { type: integer, const: 500 }
+            code: { type: string, const: INTERNAL_ERROR }
 
     # Envelope schemas keep success responses uniform and fully bounded.
     UserEnvelope: { $ref: '#/components/schemas/UserDataEnvelope' }
@@ -3149,10 +3395,9 @@ components:
         data:
           type: object
           additionalProperties: false
-          required: [results, serverCursor]
+          required: [results]
           properties:
             results: { type: array, minItems: 1, maxItems: 100, items: { $ref: '#/components/schemas/SyncOperationResult' } }
-            serverCursor: { type: string, maxLength: 500 }
         meta: { $ref: '#/components/schemas/ResponseMeta' }
 
   responses:

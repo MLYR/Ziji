@@ -862,6 +862,16 @@ POST /sync/operations
 
 批量最大 100 个操作，按数组顺序处理。每个操作独立返回结果，但一个 Transaction 及其分录只作为一个操作提交。
 
+V1 此接口只接受 `entityType=TRANSACTION`，且操作矩阵固定为：
+
+| operationType | baseVersion | entityId | payload |
+| --- | --- | --- | --- |
+| `CREATE` | 显式 `null` | 客户端生成并最终持久化的 Transaction UUID | 仅 `INCOME`、`EXPENSE`、`REFUND`、`TRANSFER` 语义交易；不得携带 `id` |
+| `UPDATE` | 必填正整数 | 被修订的已入账 Transaction UUID | `reason + replacement`；replacement 仅上述四类且不得携带 `id`，运行时必须与原交易类型一致 |
+| `REVERSE` | 必填正整数 | 被作废的已入账 Transaction UUID | `ReasonRequest` |
+
+`ACCOUNT`、`CATEGORY`、`TAG`、`RECURRING_RULE` 和 `ARCHIVE` 不属于 V1 `applySyncOperations` 的机器契约。未来离线上传必须先具备对应 application port、账务/审计/outbox 事实链和独立任务，不得由 Sync 直接写表或构造分录。
+
 ```json
 {
   "data": {
@@ -870,12 +880,9 @@ POST /sync/operations
         "operationId": "0191...",
         "status": "APPLIED",
         "entityId": "0193...",
-        "entityVersion": 1,
-        "changeSequence": 1252,
-        "error": null
+        "entityVersion": 1
       }
-    ],
-    "serverCursor": "opaque-1252"
+    ]
   },
   "meta": { "requestId": "req_01" }
 }
@@ -884,18 +891,24 @@ POST /sync/operations
 结果状态：
 
 - `APPLIED`：成功应用
-- `DUPLICATE`：幂等重复，返回首次结果
-- `CONFLICT`：版本冲突，返回当前服务端资源
-- `REJECTED`：权限或业务规则拒绝，不自动重试
+- `DUPLICATE`：幂等重复，安全重放首次的资源标识/版本或 Problem，不重新执行业务写入
+- `CONFLICT`：`error.code=VERSION_CONFLICT`，只返回 §2.5 规定的 `versionConflict` 摘要和 `resourceLocation`，不嵌入当前资源
+- `REJECTED`：权限、业务规则或同键异参等不可自动重试拒绝；不得泄漏不可见资源
+- `RETRYABLE`：`IDEMPOTENCY_REQUEST_IN_PROGRESS` 固定为 HTTP `409`，`INTERNAL_ERROR` 固定为 HTTP `500`；必须带 `retryAfterSeconds=5`，不携带 `versionConflict`
+
+上传响应不返回 `changeSequence` 或 `serverCursor`。`change_log` 由既有 outbox consumer 异步生成；客户端保留原同步游标并继续调用 `GET /sync/changes` 获取已投递变更。
 
 ### 5.3 同步安全
 
-- 同步 payload 使用与普通 API 相同的命令 schema 和校验规则
+- 同步 payload 使用冻结的 Transaction 语义命令 schema 和校验规则；外层 `entityId` 是唯一业务实体 ID，payload 不得再携带第二个 ID
 - 客户端不能通过同步接口提交任意 LedgerEntry
 - 每个操作重新校验当前成员权限
-- 相同 idempotencyKey 不同 payload 返回 REJECTED
-- 服务端返回的冲突资源只包含用户仍有权限查看的字段
-- `SyncOperation.idempotencyKey` 使用 §2.4 的认证主体、API 主版本和实际 OpenAPI `applySyncOperations`；客户端 `SyncOperation.operationId`、操作类型、实际 entityId 和规范化 payload 进入 requestHash，不另造派生 operationId；不同 entityId 即使复用 Key 也因 requestHash 不同稳定拒绝
+- 相同 idempotencyKey 不同 Hash 返回 `REJECTED`，其中 `error.code=IDEMPOTENCY_KEY_REUSED`
+- `CONFLICT` 只使用 §2.5 的安全 `versionConflict` 摘要；资源不可见时改为 `REJECTED`，不得通过结果泄漏资源存在性
+- 每个操作独立复用 `UnifiedIdempotencyService`。作用域固定为当前用户 + API v1 + 实际 OpenAPI operationId `applySyncOperations` + 该操作 `idempotencyKey`；客户端 `operationId`、`entityType`、`operationType`、实际 `entityId`、`baseVersion` 的显式值或 `NULL`、`payloadVersion` 和规范化 payload 进入 requestHash。`deviceId` 和 `createdAt` 不进入 Hash，不另造派生 operationId。
+- 同 Key 同 Hash 只安全重放首次结果并返回 `DUPLICATE`；同 Key 异 Hash 不改写既有幂等记录。单个 Transaction、LedgerEntry、audit、outbox 和幂等终态仍必须在既有事务中原子提交；批内其他操作不随该操作失败回滚。
+- `deviceId` 只用于经 schema 校验的客户端设备标识，不参与身份、权限或 requestHash；`createdAt` 是本地队列元数据，不替代 payload 内业务时间，也不参与 requestHash。
+- `REJECTED` 是终态，客户端不得自动重试。`RETRYABLE` 必须保留同一 `operationId`、`idempotencyKey` 和 requestHash，等待 5 秒后串行重试；后续 Mobile 编排将其回到 `PENDING`，不得误标为 `REJECTED`。
 
 ## 6. 异步任务契约
 
@@ -964,7 +977,11 @@ QUEUED | RUNNING | SUCCEEDED | FAILED | CANCELED
 - 为需要幂等的写操作声明稳定且不可复用的 operationId，作为数据库幂等作用域的一部分
 - 通过 OpenAPI lint 和破坏性变更检查
 
-### 8.1 财务精度
+### 8.1 预发布契约纠错
+
+只有无已发布服务端实现、无已发布客户端或外部消费者的端点，才允许在同一 API 主版本内纠错；还必须同时存在关联 `CHG-*` 任务、同步更新 OpenAPI/人类契约/生成类型/RTM/测试、保留 `oasdiff` 原始结果，且不得修改检查器、新增隐式豁免、关闭或放宽 `api:breaking`。其他删除字段、收紧输入或改变语义的变更仍按破坏性变更处理并需要新 API 版本。
+
+### 8.2 财务精度
 
 - 金额输入最多允许对应币种最小单位：CNY、USD、HKD、EUR 2 位，JPY 0 位
 - 超出精度默认返回 `VALIDATION_ERROR`；只有契约明确提供确认舍入字段的命令才可使用 HALF_UP 入账
