@@ -1653,6 +1653,7 @@ export interface components {
             /** @enum {string} */
             type: "FROZEN" | "IN_TRANSIT" | "RESERVED";
             amount: components["schemas"]["PositiveMoney"];
+            currency: components["schemas"]["Currency"];
             /** Format: date-time */
             effectiveAt: string;
             /** Format: date-time */
@@ -1663,6 +1664,7 @@ export interface components {
             /** @enum {string} */
             type: "FROZEN" | "IN_TRANSIT" | "RESERVED";
             amount: components["schemas"]["PositiveMoney"];
+            currency: components["schemas"]["Currency"];
             /** Format: date-time */
             effectiveAt: string;
             /** Format: date-time */

@@ -8,6 +8,7 @@ import app.ziji.account.application.AccountPermissionDeniedException;
 import app.ziji.account.application.AccountPersistenceException;
 import app.ziji.account.application.AccountQueryValidationException;
 import app.ziji.account.application.AccountVersionConflictException;
+import app.ziji.account.application.LiquidityHoldException;
 import app.ziji.account.domain.AccountDomainException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -23,7 +24,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public final class AccountApiExceptionHandler {
 
-	@ExceptionHandler({AccountQueryValidationException.class, AccountDomainException.class})
+	@ExceptionHandler({AccountQueryValidationException.class, AccountDomainException.class, LiquidityHoldException.Validation.class})
 	ProblemDetail validation(HttpServletRequest request, HttpServletResponse response) {
 		return base(HttpStatus.BAD_REQUEST, "请求校验失败", "VALIDATION_ERROR", request, response);
 	}
@@ -54,6 +55,29 @@ public final class AccountApiExceptionHandler {
 
 	@ExceptionHandler(AccountPersistenceException.class)
 	ProblemDetail persistence(HttpServletRequest request, HttpServletResponse response) {
+		return base(HttpStatus.INTERNAL_SERVER_ERROR, "服务器处理请求失败", "INTERNAL_ERROR", request, response);
+	}
+
+	@ExceptionHandler(LiquidityHoldException.BusinessRule.class)
+	ProblemDetail businessRule(HttpServletRequest request, HttpServletResponse response) {
+		return base(HttpStatus.UNPROCESSABLE_ENTITY, "请求违反业务规则", "BUSINESS_RULE_VIOLATION", request, response);
+	}
+
+	@ExceptionHandler(LiquidityHoldException.VersionConflict.class)
+	ProblemDetail liquidityHoldVersionConflict(
+		LiquidityHoldException.VersionConflict exception,
+		HttpServletRequest request,
+		HttpServletResponse response) {
+		ProblemDetail problem = base(HttpStatus.CONFLICT, "资源版本冲突", "VERSION_CONFLICT", request, response);
+		problem.setProperty("versionConflict", Map.of(
+			"currentVersion", exception.current().version(),
+			"currentEtag", exception.current().etag(),
+			"resourceLocation", "/api/v1/accounts/" + exception.current().accountId() + "/liquidity-holds"));
+		return problem;
+	}
+
+	@ExceptionHandler(LiquidityHoldException.Persistence.class)
+	ProblemDetail liquidityHoldPersistence(HttpServletRequest request, HttpServletResponse response) {
 		return base(HttpStatus.INTERNAL_SERVER_ERROR, "服务器处理请求失败", "INTERNAL_ERROR", request, response);
 	}
 

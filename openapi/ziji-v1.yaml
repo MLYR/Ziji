@@ -347,7 +347,7 @@ paths:
       x-permission-matrix: { read: [OWNER, EDITOR, VIEWER], write: [OWNER, EDITOR] }
       x-idempotency:
         scope: CURRENT_USER_API_VERSION_OPERATION_ID_KEY
-        requestHash: ACTUAL_ACCOUNT_ID_TYPED_PAYLOAD_EXPLICIT_ABSENT_IF_MATCH
+        requestHash: ACTUAL_ACCOUNT_ID_TYPED_PAYLOAD_TYPE_AMOUNT_CURRENCY_EFFECTIVE_AT_EXPIRES_AT_REASON_EXPLICIT_ABSENT_IF_MATCH
         rejectedBeforeRecord: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND]
       x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_REQUEST_IN_PROGRESS, BUSINESS_RULE_VIOLATION]
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
@@ -374,7 +374,7 @@ paths:
       x-permission-matrix: { read: [OWNER, EDITOR, VIEWER], write: [OWNER, EDITOR] }
       x-idempotency:
         scope: CURRENT_USER_API_VERSION_OPERATION_ID_KEY
-        requestHash: ACTUAL_ACCOUNT_ID_AND_HOLD_ID_TYPED_PAYLOAD_IF_MATCH
+        requestHash: ACTUAL_ACCOUNT_ID_AND_HOLD_ID_TYPED_PAYLOAD_TYPE_AMOUNT_CURRENCY_EFFECTIVE_AT_EXPIRES_AT_REASON_IF_MATCH
         rejectedBeforeRecord: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND]
       x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND, VERSION_CONFLICT, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_REQUEST_IN_PROGRESS, BUSINESS_RULE_VIOLATION]
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/LiquidityHoldIfMatch' }]
@@ -1754,20 +1754,22 @@ components:
     CreateLiquidityHoldRequest:
       type: object
       additionalProperties: false
-      required: [type, amount, effectiveAt, reason]
+      required: [type, amount, currency, effectiveAt, reason]
       properties:
         type: { type: string, enum: [FROZEN, IN_TRANSIT, RESERVED] }
         amount: { $ref: '#/components/schemas/PositiveMoney' }
+        currency: { $ref: '#/components/schemas/Currency' }
         effectiveAt: { type: string, format: date-time }
         expiresAt: { type: [string, 'null'], format: date-time }
         reason: { type: string, minLength: 1, maxLength: 500 }
     ReviseLiquidityHoldRequest:
       type: object
       additionalProperties: false
-      required: [type, amount, effectiveAt, reason]
+      required: [type, amount, currency, effectiveAt, reason]
       properties:
         type: { type: string, enum: [FROZEN, IN_TRANSIT, RESERVED] }
         amount: { $ref: '#/components/schemas/PositiveMoney' }
+        currency: { $ref: '#/components/schemas/Currency' }
         effectiveAt: { type: string, format: date-time }
         expiresAt: { type: [string, 'null'], format: date-time }
         reason: { type: string, minLength: 1, maxLength: 500 }

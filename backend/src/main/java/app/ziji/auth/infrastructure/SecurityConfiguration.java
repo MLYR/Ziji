@@ -109,13 +109,16 @@ class SecurityConfiguration {
 		if ("GET".equals(method)) {
 			return "/api/v1/users/me".equals(path) || "/api/v1/users/me/sessions".equals(path)
 				|| "/api/v1/accounts".equals(path)
-				|| path.matches("/api/v1/accounts/[^/]+");
+				|| path.matches("/api/v1/accounts/[^/]+")
+				|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds");
 		}
 		if ("PATCH".equals(method)) {
 			return "/api/v1/users/me".equals(path) || path.matches("/api/v1/accounts/[^/]+");
 		}
 		if ("POST".equals(method)) {
-			return "/api/v1/users/me/password-change".equals(path);
+			return "/api/v1/users/me/password-change".equals(path)
+				|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds")
+				|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds/[^/]+/(revisions|release)");
 		}
 		if (!"DELETE".equals(method)) {
 			return false;

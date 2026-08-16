@@ -69,11 +69,14 @@ class LiquidityHoldOpenApiContractTests {
 
 		Map<String, Object> createRequest = schema(schemas, "CreateLiquidityHoldRequest");
 		Map<String, Object> reviseRequest = schema(schemas, "ReviseLiquidityHoldRequest");
-		assertRequestSchema(createRequest, Set.of("type", "amount", "effectiveAt", "reason"));
-		assertRequestSchema(reviseRequest, Set.of("type", "amount", "effectiveAt", "reason"));
+		assertRequestSchema(createRequest, Set.of("type", "amount", "currency", "effectiveAt", "reason"));
+		assertRequestSchema(reviseRequest, Set.of("type", "amount", "currency", "effectiveAt", "reason"));
 		assertTypeEnum(createRequest);
 		assertTypeEnum(reviseRequest);
+		assertMoneyReferences(createRequest);
+		assertMoneyReferences(reviseRequest);
 		assertFalse(properties(createRequest).containsKey("source"));
+		assertFalse(properties(createRequest).containsKey("revisionReason"));
 		assertFalse(properties(reviseRequest).containsKey("source"));
 		assertFalse(properties(reviseRequest).containsKey("revisionReason"));
 
@@ -116,9 +119,11 @@ class LiquidityHoldOpenApiContractTests {
 			objectMap(create.get("x-permission-matrix"), "create permissions").get("write"));
 		assertActiveReadWriteMatrix(revise);
 		assertActiveReadWriteMatrix(release);
-		assertIdempotency(create, "ACTUAL_ACCOUNT_ID_TYPED_PAYLOAD_EXPLICIT_ABSENT_IF_MATCH");
-		assertIdempotency(revise, "ACTUAL_ACCOUNT_ID_AND_HOLD_ID_TYPED_PAYLOAD_IF_MATCH");
+		assertIdempotency(create, "ACTUAL_ACCOUNT_ID_TYPED_PAYLOAD_TYPE_AMOUNT_CURRENCY_EFFECTIVE_AT_EXPIRES_AT_REASON_EXPLICIT_ABSENT_IF_MATCH");
+		assertIdempotency(revise, "ACTUAL_ACCOUNT_ID_AND_HOLD_ID_TYPED_PAYLOAD_TYPE_AMOUNT_CURRENCY_EFFECTIVE_AT_EXPIRES_AT_REASON_IF_MATCH");
 		assertIdempotency(release, "ACTUAL_ACCOUNT_ID_AND_HOLD_ID_TYPED_EMPTY_PAYLOAD_IF_MATCH");
+		assertTrue(String.valueOf(objectMap(create.get("x-idempotency"), "create idempotency").get("requestHash")).contains("CURRENCY"));
+		assertTrue(String.valueOf(objectMap(revise.get("x-idempotency"), "revise idempotency").get("requestHash")).contains("CURRENCY"));
 
 		assertEnvelopeSchema(schemas, "LiquidityHoldEnvelope", false);
 		assertEnvelopeSchema(schemas, "LiquidityHoldListEnvelope", true);
@@ -155,6 +160,14 @@ class LiquidityHoldOpenApiContractTests {
 	private static void assertTypeEnum(Map<String, Object> schema) {
 		assertEquals(Set.of("FROZEN", "IN_TRANSIT", "RESERVED"),
 			newSet(properties(schema).get("type"), "enum"));
+	}
+
+	private static void assertMoneyReferences(Map<String, Object> schema) {
+		Map<String, Object> amount = objectMap(properties(schema).get("amount"), "amount schema");
+		Map<String, Object> currency = objectMap(properties(schema).get("currency"), "currency schema");
+		assertEquals("#/components/schemas/PositiveMoney", amount.get("$ref"));
+		assertFalse("object".equals(amount.get("type")));
+		assertEquals("#/components/schemas/Currency", currency.get("$ref"));
 	}
 
 	private static void assertIdempotency(Map<String, Object> operation, String requestHash) {

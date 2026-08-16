@@ -120,6 +120,8 @@ V1 客户端最大重试窗口为 24 小时，幂等记录最短保留 7 天。`
 
 LiquidityHold 的四个公开 operation 继续复用上述统一幂等服务。创建、修订和释放的 request Hash 必须包含路由实际解析后的 `accountId`，修订/释放还必须包含实际 `holdId`；请求体按类型化载荷规范化，修订和释放把 `If-Match` 放入 Hash，创建使用显式的 If-Match 缺失标记。格式校验、未认证、权限失败和资源不可见在幂等服务之前结束，不创建幂等记录。
 
+创建和修订请求的公共机器形状固定为 `type`、`amount`、`currency`、`effectiveAt`、`expiresAt`、`reason`：`amount` 是 `PositiveMoney` 十进制字符串，`currency` 是顶层 `Currency` 字段，二者独立提交；`expiresAt` 可为 `null`，其余必填字段按 OpenAPI 的类型和长度约束校验。嵌套 `amount` 对象、缺失或非字符串 `currency`、未知币种和额外字段均返回 `400 VALIDATION_ERROR`；格式正确但与账户事实币种不一致返回 `422 BUSINESS_RULE_VIOLATION`。服务端只以账户事实和 application 层校验结果决定写入币种，不直接信任客户端值。
+
 公共人工 API 不接收 `source`。服务端为这三个写 operation 固定写入 `MANUAL`，客户端不能伪造 `IMPORT` 或 `SYSTEM`；后两者只保留给未来受控的内部导入或系统任务。API 的 `reason` 逐字映射数据库 `liquidity_holds.note`。修订没有独立持久化的 `revisionReason` 字段，因此公共修订载荷不接收该字段；修订理由使用新版本的 `reason`/`note`，并由追加式审计 action `LIQUIDITY_HOLD_REVISED` 表示修订行为，禁止接收后静默丢弃。
 
 ### 2.5 乐观锁
@@ -399,7 +401,7 @@ LiquidityHold 的公共机器字段和数据库事实映射如下：
 | API 字段 | 数据库事实 | 规则 |
 | --- | --- | --- |
 | `type` | `hold_type` | `FROZEN`、`IN_TRANSIT`、`RESERVED`；创建和修订均必填，修订允许改变类型 |
-| `amount` / `currency` | `amount` / `currency` | 金额为十进制字符串，币种必须匹配账户 |
+| `amount` / `currency` | `amount` / `currency` | 请求顶层独立提交；`amount` 为 `PositiveMoney` 十进制字符串，`currency` 使用现有 `Currency` schema，币种必须匹配账户 |
 | `reason` | `note` | 创建/修订请求必填；响应可为 null 以容纳内部历史记录 |
 | `source` | `source` | 响应返回；公共人工写入固定为 `MANUAL` |
 | `supersedesId` | `previous_revision_id` | 当前版本关闭并替代的上一版本 ID |

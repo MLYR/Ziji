@@ -3,10 +3,6 @@ createAccount
 archiveAccount
 getAccountBalance
 listAccountBalanceHistory
-listLiquidityHolds
-createLiquidityHold
-reviseLiquidityHold
-releaseLiquidityHold
 listTransactions
 postTransaction
 getTransaction

@@ -12,8 +12,12 @@ import app.ziji.account.application.AccountQueryReadPort;
 import app.ziji.account.application.AccountQueryService;
 import app.ziji.account.application.AccountStore;
 import app.ziji.account.application.AccountUpdatePort;
+import app.ziji.account.application.LiquidityHoldCursorCodec;
+import app.ziji.account.application.LiquidityHoldService;
+import app.ziji.account.application.LiquidityHoldStore;
 import app.ziji.accountmember.application.AccountMemberInitPort;
 import app.ziji.accountmember.application.AccountMembershipReadPort;
+import app.ziji.audit.application.AuditLogWritePort;
 import app.ziji.shared.application.TransactionRunner;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -53,6 +57,30 @@ class AccountInfrastructureConfiguration {
 			return new AesGcmAccountCursorCodec(Base64.getDecoder().decode(cursorKeyBase64), new SecureRandom());
 		} catch (IllegalArgumentException exception) {
 			throw new IllegalStateException("账户游标密钥配置无效。", exception);
+		}
+	}
+
+	@Bean
+	LiquidityHoldService liquidityHoldService(
+		AccountStore accounts,
+		AccountMembershipReadPort memberships,
+		LiquidityHoldStore holds,
+		LiquidityHoldCursorCodec cursors,
+		AuditLogWritePort auditLogs,
+		TransactionRunner transactions,
+		Clock clock) {
+		// 事实、审计与幂等终态共享最外层 PostgreSQL 事务；服务本身不接触 jOOQ。
+		return new LiquidityHoldService(accounts, memberships, holds, cursors, auditLogs, transactions, clock, UUID::randomUUID);
+	}
+
+	@Bean
+	LiquidityHoldCursorCodec liquidityHoldCursorCodec(
+		@Value("${ziji.liquidity-hold.cursor-key-base64}") String cursorKeyBase64) {
+		try {
+			// LiquidityHold 使用独立 AES-256 密钥，不能复用认证、幂等、outbox 或账户游标密钥。
+			return new AesGcmLiquidityHoldCursorCodec(Base64.getDecoder().decode(cursorKeyBase64), new SecureRandom());
+		} catch (IllegalArgumentException exception) {
+			throw new IllegalStateException("流动性占用游标密钥配置无效。", exception);
 		}
 	}
 }
