@@ -15,6 +15,7 @@ import java.util.function.Supplier;
 import app.ziji.account.application.AccountPostingReference;
 import app.ziji.account.application.AccountPostingReferencePort;
 import app.ziji.accountmember.application.AccountPostingAccessPort;
+import app.ziji.audit.application.AuditLogWritePort;
 import app.ziji.category.application.CategoryStore;
 import app.ziji.category.application.CategoryReference;
 import app.ziji.category.application.CategoryType;
@@ -73,6 +74,11 @@ class LedgerCommandApplicationServiceTests {
 		assertEquals(INCOME_LEDGER_ID, transaction.entries().get(1).ledgerAccountId());
 		assertEquals(INCOME_CATEGORY_ID, fixture.store.write.categoryId());
 		assertEquals(1, fixture.transactions.calls);
+		assertEquals("TRANSACTION_POSTED", fixture.audits.entries.getFirst().action());
+		assertEquals(ASSET_ACCOUNT_ID, fixture.audits.entries.getFirst().accountId());
+		assertEquals("INITIAL", fixture.outbox.events.getFirst().payload().get("operationKind"));
+		assertEquals("TransactionPosted", fixture.outbox.events.getFirst().eventType().name());
+		assertNoSensitiveFields(fixture.audits.entries.getFirst(), fixture.outbox.events.getFirst());
 	}
 
 	@Test
@@ -242,6 +248,12 @@ class LedgerCommandApplicationServiceTests {
 		assertEquals(original.versionNo() + 1, result.replacement().versionNo());
 		assertEquals(result.reversal(), fixture.store.revision.reversal());
 		assertEquals(result.replacement(), fixture.store.revision.replacement().transaction());
+		assertEquals("TRANSACTION_REVISED", fixture.audits.entries.getFirst().action());
+		assertEquals("SUPERSEDED", fixture.audits.entries.getFirst().reasonCode());
+		assertEquals("TransactionReversed", fixture.outbox.events.get(0).eventType().name());
+		assertEquals("TransactionPosted", fixture.outbox.events.get(1).eventType().name());
+		assertNoSensitiveFields(fixture.audits.entries.getFirst(), fixture.outbox.events.get(0));
+		assertNoSensitiveFields(fixture.audits.entries.getFirst(), fixture.outbox.events.get(1));
 	}
 
 	@Test
@@ -256,6 +268,10 @@ class LedgerCommandApplicationServiceTests {
 		assertEquals(original.transactionId(), result.originalTransactionId());
 		assertEquals(original.transactionId(), result.reversal().reversalOfId());
 		assertEquals(result.reversal(), fixture.store.voidWrite.reversal());
+		assertEquals("TRANSACTION_VOIDED", fixture.audits.entries.getFirst().action());
+		assertEquals("REVERSED", fixture.audits.entries.getFirst().reasonCode());
+		assertEquals("VOID", fixture.outbox.events.getFirst().payload().get("operationKind"));
+		assertNoSensitiveFields(fixture.audits.entries.getFirst(), fixture.outbox.events.getFirst());
 
 		fixture.store.posted = new LedgerTransactionStore.PostedTransactionSnapshot(
 			original, 2, false, null, "原商户", "原备注", EXPENSE_CATEGORY_ID, new NoTransactionDetails());
@@ -351,8 +367,17 @@ class LedgerCommandApplicationServiceTests {
 			new CategoryReference(EXPENSE_CATEGORY_ID, null, null, CategoryType.EXPENSE, true));
 		fixture.service = new LedgerCommandApplicationService(
 			fixture.transactions, fixture.accounts, fixture.access, fixture.categories,
-			fixture.ledgerAccounts, fixture.store, new PostingService(), CLOCK);
+			fixture.ledgerAccounts, fixture.store, fixture.audits, fixture.outbox, () -> "ledger-unit-request",
+			new PostingService(), CLOCK);
 		return fixture;
+	}
+
+	private static void assertNoSensitiveFields(AuditLogWritePort.AuditLogEntry audit, LedgerOutboxEvent event) {
+		for (String key : List.of("reason", "note", "amount", "entries", "payload", "requestBody", "token", "password",
+			"sql", "idempotencyKey")) {
+			assertFalse(audit.metadata().containsKey(key));
+			assertFalse(event.payload().containsKey(key));
+		}
 	}
 
 	private static LedgerAccountReference reference(
@@ -398,6 +423,8 @@ class LedgerCommandApplicationServiceTests {
 		private final FakeCategoryStore categories = new FakeCategoryStore();
 		private final FakeLedgerAccountStore ledgerAccounts = new FakeLedgerAccountStore();
 		private final FakeLedgerTransactionStore store = new FakeLedgerTransactionStore();
+		private final FakeAudits audits = new FakeAudits();
+		private final FakeOutbox outbox = new FakeOutbox();
 		private LedgerCommandApplicationService service;
 	}
 
@@ -503,6 +530,24 @@ class LedgerCommandApplicationServiceTests {
 		public void persistVoid(LedgerTransactionStore.TransactionVoidWrite write) {
 			this.voidWrite = write;
 			this.voidWrites++;
+		}
+	}
+
+	private static final class FakeAudits implements AuditLogWritePort {
+		private final List<AuditLogEntry> entries = new java.util.ArrayList<>();
+
+		@Override
+		public void append(AuditLogEntry entry) {
+			entries.add(entry);
+		}
+	}
+
+	private static final class FakeOutbox implements LedgerOutbox {
+		private final List<LedgerOutboxEvent> events = new java.util.ArrayList<>();
+
+		@Override
+		public void append(LedgerOutboxEvent event) {
+			events.add(event);
 		}
 	}
 }

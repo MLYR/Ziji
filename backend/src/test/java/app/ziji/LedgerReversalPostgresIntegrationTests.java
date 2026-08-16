@@ -2,16 +2,24 @@ package app.ziji;
 
 import java.math.BigDecimal;
 import java.sql.Timestamp;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import app.ziji.ledger.application.ExpenseCommand;
+import app.ziji.account.application.AccountPostingReferencePort;
+import app.ziji.accountmember.application.AccountPostingAccessPort;
+import app.ziji.audit.application.AuditLogWritePort;
+import app.ziji.category.application.CategoryStore;
 import app.ziji.ledger.application.BalanceAdjustmentCommand;
+import app.ziji.ledger.application.ExpenseCommand;
+import app.ziji.ledger.application.LedgerAccountStore;
 import app.ziji.ledger.application.LedgerCommandApplicationService;
 import app.ziji.ledger.application.LedgerCommandValidationException;
+import app.ziji.ledger.application.LedgerOutbox;
 import app.ziji.ledger.application.LedgerPersistenceException;
 import app.ziji.ledger.application.LedgerTransactionStore;
 import app.ziji.ledger.application.NoTransactionDetails;
@@ -62,6 +70,24 @@ class LedgerReversalPostgresIntegrationTests extends PostgresIntegrationTestSupp
 	private LedgerTransactionStore ledgerTransactions;
 
 	@Autowired
+	private AccountPostingReferencePort accounts;
+
+	@Autowired
+	private AccountPostingAccessPort accountAccess;
+
+	@Autowired
+	private CategoryStore categories;
+
+	@Autowired
+	private LedgerAccountStore ledgerAccounts;
+
+	@Autowired
+	private AuditLogWritePort auditLogs;
+
+	@Autowired
+	private LedgerOutbox ledgerOutbox;
+
+	@Autowired
 	private TransactionRunner transactionRunner;
 
 	@Autowired
@@ -97,6 +123,7 @@ class LedgerReversalPostgresIntegrationTests extends PostgresIntegrationTestSupp
 			result.replacement().transactionId(), fixture.correctedCategoryId));
 		assertEquals(3, count("SELECT count(*) FROM transactions WHERE id IN (?, ?, ?)",
 			original.transactionId(), result.reversal().transactionId(), result.replacement().transactionId()));
+		assertRevisionAuditAndOutbox(fixture, original, result);
 
 		// 余额重建只按 posted_at 汇总，故 SUPERSEDED 原分录和冲正分录都继续参与抵消。
 		assertBalance(fixture.expenseLedgerId, "60.00");
@@ -171,6 +198,10 @@ class LedgerReversalPostgresIntegrationTests extends PostgresIntegrationTestSupp
 		assertEquals(0, new BigDecimal("0.00").compareTo((BigDecimal) details.get("fee_amount")));
 		assertEquals(2, count("SELECT count(*) FROM transfer_details WHERE transaction_id IN (?, ?)",
 			original.transactionId(), result.replacement().transactionId()));
+		assertEquals(1, count("""
+			SELECT count(*) FROM audit_logs
+			WHERE action = 'TRANSACTION_REVISED' AND resource_id = ? AND account_id IS NULL
+			""", original.rootTransactionId()));
 		assertBalance(fixture.assetLedgerId, "-55.00");
 		assertBalance(fixture.secondAssetLedgerId, "55.00");
 	}
@@ -248,6 +279,7 @@ class LedgerReversalPostgresIntegrationTests extends PostgresIntegrationTestSupp
 			"SELECT updated_by FROM transactions WHERE id = ?", UUID.class, original.transactionId()));
 		assertEquals(2, count("SELECT count(*) FROM ledger_entries WHERE transaction_id = ?", original.transactionId()));
 		assertEquals(2, count("SELECT count(*) FROM ledger_entries WHERE transaction_id = ?", result.reversal().transactionId()));
+		assertVoidAuditAndOutbox(fixture, original, result);
 		assertBalance(fixture.expenseLedgerId, "0.00");
 		assertBalance(fixture.assetLedgerId, "0.00");
 
@@ -323,6 +355,251 @@ class LedgerReversalPostgresIntegrationTests extends PostgresIntegrationTestSupp
 		assertEquals(0, count("SELECT count(*) FROM transactions WHERE id = ?", replacementId));
 		assertEquals(0, count("SELECT count(*) FROM ledger_entries WHERE transaction_id IN (?, ?)",
 			reversal.transactionId(), replacementId));
+	}
+
+	@Test
+	void revisionAndVoidPortFailuresRollBackAllFourFactKindsAndOriginalVersion() {
+		Fixture revisionFixture = fixture();
+		Transaction revisionOriginal = postExpense(revisionFixture, "50.00");
+		FactCounts revisionBefore = factCounts(revisionFixture.userId);
+		AuditLogWritePort failingAudit = entry -> { throw new IllegalStateException("测试 audit 写入失败。"); };
+		LedgerOutbox failingOutbox = event -> { throw new IllegalStateException("测试 outbox 写入失败。"); };
+
+		assertThrows(IllegalStateException.class, () -> serviceWith(ledgerTransactions, failingAudit, ledgerOutbox)
+			.revisePostedTransaction(revisionCommand(revisionFixture, revisionOriginal)));
+		assertPostedVersion(revisionOriginal.transactionId(), revisionBefore);
+		assertThrows(IllegalStateException.class, () -> serviceWith(ledgerTransactions, auditLogs, failingOutbox)
+			.revisePostedTransaction(revisionCommand(revisionFixture, revisionOriginal)));
+		assertPostedVersion(revisionOriginal.transactionId(), revisionBefore);
+		LedgerTransactionStore failingRevisionStore = failingStore(true);
+		assertThrows(LedgerPersistenceException.class, () -> serviceWith(failingRevisionStore, auditLogs, ledgerOutbox)
+			.revisePostedTransaction(revisionCommand(revisionFixture, revisionOriginal)));
+		assertPostedVersion(revisionOriginal.transactionId(), revisionBefore);
+
+		Fixture voidFixture = fixture();
+		Transaction voidOriginal = postExpense(voidFixture, "50.00");
+		FactCounts voidBefore = factCounts(voidFixture.userId);
+		VoidPostedTransactionCommand voidCommand =
+			new VoidPostedTransactionCommand(voidFixture.userId, voidOriginal.transactionId(), 1, "作废失败注入");
+
+		assertThrows(IllegalStateException.class, () -> serviceWith(ledgerTransactions, failingAudit, ledgerOutbox)
+			.voidPostedTransaction(voidCommand));
+		assertPostedVersion(voidOriginal.transactionId(), voidBefore);
+		assertThrows(IllegalStateException.class, () -> serviceWith(ledgerTransactions, auditLogs, failingOutbox)
+			.voidPostedTransaction(voidCommand));
+		assertPostedVersion(voidOriginal.transactionId(), voidBefore);
+		LedgerTransactionStore failingVoidStore = failingStore(false);
+		assertThrows(LedgerPersistenceException.class, () -> serviceWith(failingVoidStore, auditLogs, ledgerOutbox)
+			.voidPostedTransaction(voidCommand));
+		assertPostedVersion(voidOriginal.transactionId(), voidBefore);
+	}
+
+	private void assertRevisionAuditAndOutbox(
+		Fixture fixture, Transaction original, TransactionRevisionResult result) {
+		Map<String, Object> audit = jdbc.queryForMap("""
+			SELECT actor_user_id, actor_type, resource_id, account_id, request_id, result, reason_code,
+				(SELECT count(*) FROM jsonb_object_keys(metadata)) AS metadata_size,
+				metadata ->> 'rootTransactionId' AS root_transaction_id,
+				metadata ->> 'originalTransactionId' AS original_transaction_id,
+				metadata ->> 'reversalTransactionId' AS reversal_transaction_id,
+				metadata ->> 'replacementTransactionId' AS replacement_transaction_id,
+				metadata ->> 'originalVersionNo' AS original_version_no,
+				metadata ->> 'replacementVersionNo' AS replacement_version_no,
+				metadata ->> 'originalEntityVersionBefore' AS original_entity_version_before,
+				metadata ->> 'originalEntityVersionAfter' AS original_entity_version_after,
+				metadata ->> 'replacementEntityVersion' AS replacement_entity_version,
+				metadata ->> 'reversalEntityVersion' AS reversal_entity_version,
+				metadata ->> 'source' AS source
+			FROM audit_logs WHERE action = 'TRANSACTION_REVISED' AND resource_id = ?
+			""", original.rootTransactionId());
+		assertEquals(fixture.userId, audit.get("actor_user_id"));
+		assertEquals("USER", audit.get("actor_type"));
+		assertEquals(original.rootTransactionId(), audit.get("resource_id"));
+		assertEquals(fixture.assetAccountId, audit.get("account_id"));
+		assertEquals("postgres-integration-request", audit.get("request_id"));
+		assertEquals("SUCCESS", audit.get("result"));
+		assertEquals("SUPERSEDED", audit.get("reason_code"));
+		assertEquals(11, ((Number) audit.get("metadata_size")).intValue());
+		assertEquals(original.rootTransactionId().toString(), audit.get("root_transaction_id"));
+		assertEquals(original.transactionId().toString(), audit.get("original_transaction_id"));
+		assertEquals(result.reversal().transactionId().toString(), audit.get("reversal_transaction_id"));
+		assertEquals(result.replacement().transactionId().toString(), audit.get("replacement_transaction_id"));
+		assertEquals("1", audit.get("original_version_no"));
+		assertEquals("2", audit.get("replacement_version_no"));
+		assertEquals("1", audit.get("original_entity_version_before"));
+		assertEquals("2", audit.get("original_entity_version_after"));
+		assertEquals("1", audit.get("replacement_entity_version"));
+		assertEquals("1", audit.get("reversal_entity_version"));
+		assertEquals("MANUAL", audit.get("source"));
+		assertEquals(2, count("SELECT entity_version FROM transactions WHERE id = ?", original.transactionId()));
+
+		Map<String, Object> reversed = outbox(result.reversal().transactionId());
+		assertEquals("TransactionReversed", reversed.get("event_type"));
+		assertEquals(12, ((Number) reversed.get("payload_size")).intValue());
+		assertEquals(result.reversal().transactionId().toString(), reversed.get("transaction_id"));
+		assertEquals(original.rootTransactionId().toString(), reversed.get("root_transaction_id"));
+		assertEquals("1", reversed.get("entity_version"));
+		assertEquals(original.transactionId().toString(), reversed.get("reversal_of_transaction_id"));
+		assertEquals("1", reversed.get("reversal_of_version_no"));
+		assertEquals("1", reversed.get("reversal_of_entity_version_before"));
+		assertEquals("2", reversed.get("reversal_of_entity_version_after"));
+		assertEquals("REVISION", reversed.get("operation_kind"));
+		assertEquals(result.replacement().transactionId().toString(), reversed.get("replacement_transaction_id"));
+		assertEquals("2", reversed.get("replacement_version_no"));
+		assertEquals("1", reversed.get("replacement_entity_version"));
+
+		Map<String, Object> posted = outbox(result.replacement().transactionId());
+		assertEquals("TransactionPosted", posted.get("event_type"));
+		assertEquals(9, ((Number) posted.get("payload_size")).intValue());
+		assertEquals(result.replacement().transactionId().toString(), posted.get("transaction_id"));
+		assertEquals(original.rootTransactionId().toString(), posted.get("root_transaction_id"));
+		assertEquals("2", posted.get("version_no"));
+		assertEquals("1", posted.get("entity_version"));
+		assertEquals("REVISION", posted.get("operation_kind"));
+		assertEquals(result.replacement().transactionId().toString(), posted.get("replacement_transaction_id"));
+		assertEquals("2", posted.get("replacement_version_no"));
+		assertEquals("1", posted.get("replacement_entity_version"));
+	}
+
+	private void assertVoidAuditAndOutbox(
+		Fixture fixture, Transaction original, TransactionVoidResult result) {
+		Map<String, Object> audit = jdbc.queryForMap("""
+			SELECT actor_user_id, actor_type, resource_id, account_id, request_id, result, reason_code,
+				(SELECT count(*) FROM jsonb_object_keys(metadata)) AS metadata_size,
+				metadata ->> 'rootTransactionId' AS root_transaction_id,
+				metadata ->> 'originalTransactionId' AS original_transaction_id,
+				metadata ->> 'reversalTransactionId' AS reversal_transaction_id,
+				metadata ->> 'originalVersionNo' AS original_version_no,
+				metadata ->> 'originalEntityVersionBefore' AS original_entity_version_before,
+				metadata ->> 'originalEntityVersionAfter' AS original_entity_version_after,
+				metadata ->> 'reversalEntityVersion' AS reversal_entity_version,
+				metadata ->> 'source' AS source
+			FROM audit_logs WHERE action = 'TRANSACTION_VOIDED' AND resource_id = ?
+			""", original.rootTransactionId());
+		assertEquals(fixture.userId, audit.get("actor_user_id"));
+		assertEquals("USER", audit.get("actor_type"));
+		assertEquals(original.rootTransactionId(), audit.get("resource_id"));
+		assertEquals(fixture.assetAccountId, audit.get("account_id"));
+		assertEquals("postgres-integration-request", audit.get("request_id"));
+		assertEquals("SUCCESS", audit.get("result"));
+		assertEquals("REVERSED", audit.get("reason_code"));
+		assertEquals(8, ((Number) audit.get("metadata_size")).intValue());
+		assertEquals(original.rootTransactionId().toString(), audit.get("root_transaction_id"));
+		assertEquals(original.transactionId().toString(), audit.get("original_transaction_id"));
+		assertEquals(result.reversal().transactionId().toString(), audit.get("reversal_transaction_id"));
+		assertEquals("1", audit.get("original_version_no"));
+		assertEquals("1", audit.get("original_entity_version_before"));
+		assertEquals("2", audit.get("original_entity_version_after"));
+		assertEquals("1", audit.get("reversal_entity_version"));
+		assertEquals("MANUAL", audit.get("source"));
+		assertEquals(2, count("SELECT entity_version FROM transactions WHERE id = ?", original.transactionId()));
+
+		Map<String, Object> reversed = outbox(result.reversal().transactionId());
+		assertEquals("TransactionReversed", reversed.get("event_type"));
+		assertEquals(9, ((Number) reversed.get("payload_size")).intValue());
+		assertEquals(result.reversal().transactionId().toString(), reversed.get("transaction_id"));
+		assertEquals(original.rootTransactionId().toString(), reversed.get("root_transaction_id"));
+		assertEquals("1", reversed.get("entity_version"));
+		assertEquals(original.transactionId().toString(), reversed.get("reversal_of_transaction_id"));
+		assertEquals("1", reversed.get("reversal_of_version_no"));
+		assertEquals("1", reversed.get("reversal_of_entity_version_before"));
+		assertEquals("2", reversed.get("reversal_of_entity_version_after"));
+		assertEquals("VOID", reversed.get("operation_kind"));
+		assertEquals(null, reversed.get("replacement_transaction_id"));
+	}
+
+	private Map<String, Object> outbox(UUID aggregateId) {
+		Map<String, Object> row = jdbc.queryForMap("""
+			SELECT aggregate_type, aggregate_id, event_type, payload_version,
+				(SELECT count(*) FROM jsonb_object_keys(payload)) AS payload_size,
+				payload ->> 'schemaVersion' AS schema_version,
+				payload ->> 'transactionId' AS transaction_id,
+				payload ->> 'rootTransactionId' AS root_transaction_id,
+				payload ->> 'versionNo' AS version_no,
+				payload ->> 'entityVersion' AS entity_version,
+				payload ->> 'reversalOfTransactionId' AS reversal_of_transaction_id,
+				payload ->> 'reversalOfVersionNo' AS reversal_of_version_no,
+				payload ->> 'reversalOfEntityVersionBefore' AS reversal_of_entity_version_before,
+				payload ->> 'reversalOfEntityVersionAfter' AS reversal_of_entity_version_after,
+				payload ->> 'operationKind' AS operation_kind,
+				payload ->> 'replacementTransactionId' AS replacement_transaction_id,
+				payload ->> 'replacementVersionNo' AS replacement_version_no,
+				payload ->> 'replacementEntityVersion' AS replacement_entity_version
+			FROM outbox_events WHERE aggregate_id = ?
+			""", aggregateId);
+		assertEquals("Transaction", row.get("aggregate_type"));
+		assertEquals(aggregateId, row.get("aggregate_id"));
+		assertEquals(1, ((Number) row.get("payload_version")).intValue());
+		assertEquals("1", row.get("schema_version"));
+		return row;
+	}
+
+	private LedgerCommandApplicationService serviceWith(
+		LedgerTransactionStore store, AuditLogWritePort audits, LedgerOutbox outbox) {
+		return new LedgerCommandApplicationService(
+			transactionRunner, accounts, accountAccess, categories, ledgerAccounts, store, audits, outbox,
+			() -> "postgres-integration-request", new PostingService(), Clock.fixed(NOW, ZoneOffset.UTC));
+	}
+
+	private LedgerTransactionStore failingStore(boolean revision) {
+		// 读取仍走真实 PostgreSQL adapter，仅在目标持久化调用处注入失败。
+		return new LedgerTransactionStore() {
+			@Override
+			public void persistPosted(PostedTransactionWrite write) {
+				ledgerTransactions.persistPosted(write);
+			}
+
+			@Override
+			public java.util.Optional<RefundCandidate> findRefundCandidate(UUID originalTransactionId) {
+				return ledgerTransactions.findRefundCandidate(originalTransactionId);
+			}
+
+			@Override
+			public java.util.Optional<PostedTransactionSnapshot> findPostedForMutation(UUID transactionId) {
+				return ledgerTransactions.findPostedForMutation(transactionId);
+			}
+
+			@Override
+			public void persistRevision(TransactionRevisionWrite write) {
+				if (revision) {
+					throw new LedgerPersistenceException(new IllegalStateException("测试账务写入失败。"));
+				}
+				ledgerTransactions.persistRevision(write);
+			}
+
+			@Override
+			public void persistVoid(TransactionVoidWrite write) {
+				if (!revision) {
+					throw new LedgerPersistenceException(new IllegalStateException("测试账务写入失败。"));
+				}
+				ledgerTransactions.persistVoid(write);
+			}
+		};
+	}
+
+	private RevisePostedTransactionCommand revisionCommand(Fixture fixture, Transaction original) {
+		return new RevisePostedTransactionCommand(
+			fixture.userId, original.transactionId(), 1, NOW.plusSeconds(60), BUSINESS_DATE,
+			"Asia/Shanghai", null, "失败注入商户", "失败注入替代备注", "修订失败注入",
+			new TransactionRevisionDetails.Expense(
+				money("60.00"), fixture.expenseLedgerId, fixture.correctedCategoryId));
+	}
+
+	private FactCounts factCounts(UUID userId) {
+		return new FactCounts(
+			userId,
+			count("SELECT count(*) FROM transactions WHERE created_by = ?", userId),
+			count("SELECT count(*) FROM ledger_entries e JOIN transactions t ON t.id = e.transaction_id WHERE t.created_by = ?", userId),
+			count("SELECT count(*) FROM audit_logs WHERE actor_user_id = ?", userId),
+			count("SELECT count(*) FROM outbox_events"));
+	}
+
+	private void assertPostedVersion(UUID transactionId, FactCounts before) {
+		Map<String, Object> original = jdbc.queryForMap(
+			"SELECT status, entity_version FROM transactions WHERE id = ?", transactionId);
+		assertEquals("POSTED", original.get("status"));
+		assertEquals(1, original.get("entity_version"));
+		assertEquals(before, factCounts(before.userId()));
 	}
 
 	private Transaction postExpense(Fixture fixture, String amount) {
@@ -459,5 +736,8 @@ class LedgerReversalPostgresIntegrationTests extends PostgresIntegrationTestSupp
 		private Fixture(UUID userId) {
 			this.userId = userId;
 		}
+	}
+
+	private record FactCounts(UUID userId, int transactions, int entries, int audits, int outbox) {
 	}
 }

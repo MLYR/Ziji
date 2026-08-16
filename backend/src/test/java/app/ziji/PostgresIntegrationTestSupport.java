@@ -6,6 +6,9 @@ import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.springframework.test.annotation.DirtiesContext;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.slf4j.MDC;
 
 @Testcontainers(disabledWithoutDocker = true)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -19,4 +22,15 @@ abstract class PostgresIntegrationTestSupport {
 		.withDatabaseName("ziji_test")
 		.withUsername("ziji")
 		.withPassword("ziji-test");
+
+	@BeforeEach
+	void bindTestRequestId() {
+		// 直接调用 application service 的集成测试也必须提供与 HTTP 相同的 correlation ID。
+		MDC.put("requestId", "postgres-integration-request");
+	}
+
+	@AfterEach
+	void clearTestRequestId() {
+		MDC.remove("requestId");
+	}
 }

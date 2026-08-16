@@ -16,6 +16,12 @@ import app.ziji.ledger.application.LedgerCommandApplicationService;
 import app.ziji.ledger.application.LedgerCommandValidationException;
 import app.ziji.ledger.application.LedgerPersistenceException;
 import app.ziji.ledger.application.LedgerTransactionStore;
+import app.ziji.ledger.application.LedgerAccountStore;
+import app.ziji.ledger.application.LedgerOutbox;
+import app.ziji.account.application.AccountPostingReferencePort;
+import app.ziji.accountmember.application.AccountPostingAccessPort;
+import app.ziji.audit.application.AuditLogWritePort;
+import app.ziji.category.application.CategoryStore;
 import app.ziji.ledger.application.NoTransactionDetails;
 import app.ziji.ledger.application.PostedTransactionWrite;
 import app.ziji.ledger.domain.CurrencyCode;
@@ -41,6 +47,9 @@ import org.springframework.test.context.ActiveProfiles;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 
 /** PostgreSQL/Testcontainers 验收：语义命令事实写入复用 V007 延迟约束并保持原子性。 */
 @SpringBootTest
@@ -59,6 +68,24 @@ class LedgerSemanticPostgresIntegrationTests extends PostgresIntegrationTestSupp
 
 	@Autowired
 	private LedgerTransactionStore ledgerTransactions;
+
+	@Autowired
+	private AccountPostingReferencePort accounts;
+
+	@Autowired
+	private AccountPostingAccessPort accountAccess;
+
+	@Autowired
+	private CategoryStore categories;
+
+	@Autowired
+	private LedgerAccountStore ledgerAccounts;
+
+	@Autowired
+	private AuditLogWritePort auditLogs;
+
+	@Autowired
+	private LedgerOutbox ledgerOutbox;
 
 	@Autowired
 	private TransactionRunner transactionRunner;
@@ -86,6 +113,55 @@ class LedgerSemanticPostgresIntegrationTests extends PostgresIntegrationTestSupp
 			SELECT count(*) FROM transaction_categories
 			WHERE transaction_id IN (?, ?) AND role = 'PRIMARY'
 			""", income.transactionId(), expense.transactionId()));
+		assertEquals(2, count("SELECT count(*) FROM audit_logs WHERE actor_user_id = ? AND action = 'TRANSACTION_POSTED'",
+			fixture.userId));
+		assertEquals(2, count("SELECT count(*) FROM outbox_events WHERE aggregate_id IN (?, ?) AND event_type = 'TransactionPosted'",
+			income.transactionId(), expense.transactionId()));
+	}
+
+	@Test
+	void ledgerAuditAndOutboxFailuresRollBackAllFourFactKinds() {
+		Fixture fixture = fixture();
+		int transactionsBefore = count("SELECT count(*) FROM transactions WHERE created_by = ?", fixture.userId);
+		int auditsBefore = count("SELECT count(*) FROM audit_logs WHERE actor_user_id = ?", fixture.userId);
+		int outboxBefore = count("SELECT count(*) FROM outbox_events");
+
+		AuditLogWritePort failingAudit = entry -> { throw new IllegalStateException("测试 audit 写入失败。"); };
+		assertThrows(IllegalStateException.class, () -> service(fixture, ledgerTransactions, failingAudit, ledgerOutbox)
+			.postExpense(expenseCommand(fixture)));
+		assertFactCounts(fixture, transactionsBefore, auditsBefore, outboxBefore);
+
+		LedgerOutbox failingOutbox = event -> { throw new IllegalStateException("测试 outbox 写入失败。"); };
+		assertThrows(IllegalStateException.class, () -> service(fixture, ledgerTransactions, auditLogs, failingOutbox)
+			.postExpense(expenseCommand(fixture)));
+		assertFactCounts(fixture, transactionsBefore, auditsBefore, outboxBefore);
+
+		LedgerTransactionStore failingLedger = mock(LedgerTransactionStore.class);
+		doThrow(new LedgerPersistenceException(new IllegalStateException("测试账务写入失败。")))
+			.when(failingLedger).persistPosted(any());
+		assertThrows(LedgerPersistenceException.class, () -> service(fixture, failingLedger, auditLogs, ledgerOutbox)
+			.postExpense(expenseCommand(fixture)));
+		assertFactCounts(fixture, transactionsBefore, auditsBefore, outboxBefore);
+	}
+
+	private LedgerCommandApplicationService service(
+		Fixture fixture, LedgerTransactionStore store, AuditLogWritePort audits, LedgerOutbox outbox) {
+		return new LedgerCommandApplicationService(
+			transactionRunner, accounts, accountAccess, categories, ledgerAccounts, store, audits, outbox,
+			() -> "postgres-integration-request", new PostingService(), Clock.fixed(NOW, ZoneOffset.UTC));
+	}
+
+	private ExpenseCommand expenseCommand(Fixture fixture) {
+		return new ExpenseCommand(
+			fixture.userId, fixture.assetAccountId, fixture.expenseLedgerId, EXPENSE_CATEGORY_ID,
+			money("1.00", CurrencyCode.CNY), NOW, BUSINESS_DATE, "Asia/Shanghai", "失败注入", "敏感正文不出边界");
+	}
+
+	private void assertFactCounts(Fixture fixture, int transactions, int audits, int outbox) {
+		assertEquals(transactions, count("SELECT count(*) FROM transactions WHERE created_by = ?", fixture.userId));
+		assertEquals(0, count("SELECT count(*) FROM ledger_entries e JOIN transactions t ON t.id = e.transaction_id WHERE t.created_by = ?", fixture.userId));
+		assertEquals(audits, count("SELECT count(*) FROM audit_logs WHERE actor_user_id = ?", fixture.userId));
+		assertEquals(outbox, count("SELECT count(*) FROM outbox_events"));
 	}
 
 	@Test

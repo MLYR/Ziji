@@ -3,12 +3,16 @@ package app.ziji.ledger.application;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import app.ziji.account.application.AccountPostingReference;
 import app.ziji.account.application.AccountPostingReferencePort;
 import app.ziji.accountmember.application.AccountPostingAccessPort;
+import app.ziji.audit.application.AuditLogWritePort;
 import app.ziji.category.application.CategoryReference;
 import app.ziji.category.application.CategoryStore;
 import app.ziji.category.application.CategoryType;
@@ -37,6 +41,9 @@ public final class LedgerCommandApplicationService {
 	private final CategoryStore categories;
 	private final LedgerAccountStore ledgerAccounts;
 	private final LedgerTransactionStore ledgerTransactions;
+	private final AuditLogWritePort auditLogs;
+	private final LedgerOutbox ledgerOutbox;
+	private final LedgerRequestIdProvider requestIds;
 	private final LedgerTransactionFactory transactionFactory;
 	private final Clock clock;
 
@@ -47,10 +54,14 @@ public final class LedgerCommandApplicationService {
 		CategoryStore categories,
 		LedgerAccountStore ledgerAccounts,
 		LedgerTransactionStore ledgerTransactions,
+		AuditLogWritePort auditLogs,
+		LedgerOutbox ledgerOutbox,
+		LedgerRequestIdProvider requestIds,
 		PostingService postingService,
 		Clock clock) {
 		if (transactions == null || accounts == null || accountAccess == null || categories == null
-			|| ledgerAccounts == null || ledgerTransactions == null || postingService == null || clock == null) {
+			|| ledgerAccounts == null || ledgerTransactions == null || auditLogs == null || ledgerOutbox == null
+			|| requestIds == null || postingService == null || clock == null) {
 			throw new LedgerCommandValidationException("账务命令服务依赖不能为空。");
 		}
 		this.transactions = transactions;
@@ -59,6 +70,9 @@ public final class LedgerCommandApplicationService {
 		this.categories = categories;
 		this.ledgerAccounts = ledgerAccounts;
 		this.ledgerTransactions = ledgerTransactions;
+		this.auditLogs = auditLogs;
+		this.ledgerOutbox = ledgerOutbox;
+		this.requestIds = requestIds;
 		this.transactionFactory = new LedgerTransactionFactory(postingService);
 		this.clock = clock;
 	}
@@ -84,7 +98,7 @@ public final class LedgerCommandApplicationService {
 				List.of(
 					new LedgerEntrySpec(accountLedger.id(), LedgerDirection.DEBIT, command.amount()),
 					new LedgerEntrySpec(command.incomeLedgerAccountId(), LedgerDirection.CREDIT, command.amount())));
-			ledgerTransactions.persistPosted(new PostedTransactionWrite(
+			completeInitialPosting(new PostedTransactionWrite(
 				transaction, command.userId(), command.counterparty(), null, command.note(),
 				command.categoryId(), new NoTransactionDetails()));
 			return transaction;
@@ -111,7 +125,7 @@ public final class LedgerCommandApplicationService {
 				List.of(
 					new LedgerEntrySpec(command.expenseLedgerAccountId(), LedgerDirection.DEBIT, command.amount()),
 					new LedgerEntrySpec(accountLedger.id(), LedgerDirection.CREDIT, command.amount())));
-			ledgerTransactions.persistPosted(new PostedTransactionWrite(
+			completeInitialPosting(new PostedTransactionWrite(
 				transaction, command.userId(), null, command.merchant(), command.note(),
 				command.categoryId(), new NoTransactionDetails()));
 			return transaction;
@@ -156,7 +170,7 @@ public final class LedgerCommandApplicationService {
 				List.of(
 					new LedgerEntrySpec(refundLedger.id(), LedgerDirection.DEBIT, command.amount()),
 					new LedgerEntrySpec(original.expenseLedgerAccountId(), LedgerDirection.CREDIT, command.amount())));
-			ledgerTransactions.persistPosted(new PostedTransactionWrite(
+			completeInitialPosting(new PostedTransactionWrite(
 				transaction, command.userId(), null, null, command.note(), null,
 				new RefundWriteDetails(command.originalTransactionId(), original.categoryId())));
 			return transaction;
@@ -204,7 +218,7 @@ public final class LedgerCommandApplicationService {
 				command.timezone(),
 				clock.instant(),
 				entries);
-			ledgerTransactions.persistPosted(new PostedTransactionWrite(
+			completeInitialPosting(new PostedTransactionWrite(
 				transaction, command.userId(), null, null, command.note(), categoryId,
 				new TransferWriteDetails(
 					command.fromAccountId(), command.toAccountId(), command.amount(), command.amount(), fee)));
@@ -250,7 +264,7 @@ public final class LedgerCommandApplicationService {
 				List.of(
 					new LedgerEntrySpec(accountLedger.id(), accountDirection, absoluteDifference),
 					new LedgerEntrySpec(equityLedger.id(), equityDirection, absoluteDifference)));
-			ledgerTransactions.persistPosted(new PostedTransactionWrite(
+			completeInitialPosting(new PostedTransactionWrite(
 				transaction, command.userId(), null, null, null, null,
 				new BalanceAdjustmentWriteDetails(
 					command.accountId(), before, command.actualBalance(), difference, command.reason())));
@@ -274,10 +288,12 @@ public final class LedgerCommandApplicationService {
 				UUID.randomUUID(), original.type(), original.source(), command.businessAt(), command.businessDate(),
 				command.timezone(), clock.instant(), original.rootTransactionId(), original.transactionId(),
 				original.versionNo() + 1, build.entries());
-			ledgerTransactions.persistRevision(new LedgerTransactionStore.TransactionRevisionWrite(
+			LedgerTransactionStore.TransactionRevisionWrite write = new LedgerTransactionStore.TransactionRevisionWrite(
 				original.transactionId(), snapshot.entityVersion(), command.reason(), reversal,
 				new PostedTransactionWrite(replacement, command.userId(), command.counterparty(), command.merchant(),
-					command.note(), build.categoryId(), build.details())));
+					command.note(), build.categoryId(), build.details()));
+			ledgerTransactions.persistRevision(write);
+			completeRevisionAuditAndOutbox(original, snapshot.entityVersion(), reversal, replacement, command.userId());
 			return new TransactionRevisionResult(original.transactionId(), reversal, replacement);
 		});
 	}
@@ -293,10 +309,140 @@ public final class LedgerCommandApplicationService {
 			validateOriginalAccess(command.userId(), original, original.businessAt());
 
 			Transaction reversal = transactionFactory.createReversal(original, UUID.randomUUID(), clock.instant());
-			ledgerTransactions.persistVoid(new LedgerTransactionStore.TransactionVoidWrite(
-				original.transactionId(), snapshot.entityVersion(), command.userId(), command.reason(), reversal));
+			LedgerTransactionStore.TransactionVoidWrite write = new LedgerTransactionStore.TransactionVoidWrite(
+				original.transactionId(), snapshot.entityVersion(), command.userId(), command.reason(), reversal);
+			ledgerTransactions.persistVoid(write);
+			completeVoidAuditAndOutbox(original, snapshot.entityVersion(), reversal, command.userId());
 			return new TransactionVoidResult(original.transactionId(), reversal);
 		});
+	}
+
+	/** 账务、审计和最小投影定位事件均处于当前 REQUIRED 事务，任何端口异常都会向外回滚。 */
+	private void completeInitialPosting(PostedTransactionWrite write) {
+		ledgerTransactions.persistPosted(write);
+		Transaction transaction = write.transaction();
+		auditLogs.append(audit(
+			write.createdBy(), "TRANSACTION_POSTED", null,
+			Map.of(
+				"transactionId", transaction.transactionId().toString(),
+				"rootTransactionId", transaction.rootTransactionId().toString(),
+				"versionNo", Integer.toString(transaction.versionNo()),
+				"entityVersion", "1",
+				"source", transaction.source().name()), transaction));
+		ledgerOutbox.append(postedEvent(transaction, "INITIAL", null));
+	}
+
+	private void completeRevisionAuditAndOutbox(
+		Transaction original,
+		int originalBefore,
+		Transaction reversal,
+		Transaction replacement,
+		UUID actorUserId) {
+		int originalAfter = originalBefore + 1;
+		auditLogs.append(audit(
+			actorUserId, "TRANSACTION_REVISED", "SUPERSEDED", Map.ofEntries(
+				Map.entry("rootTransactionId", original.rootTransactionId().toString()),
+				Map.entry("originalTransactionId", original.transactionId().toString()),
+				Map.entry("reversalTransactionId", reversal.transactionId().toString()),
+				Map.entry("replacementTransactionId", replacement.transactionId().toString()),
+				Map.entry("originalVersionNo", Integer.toString(original.versionNo())),
+				Map.entry("replacementVersionNo", Integer.toString(replacement.versionNo())),
+				Map.entry("originalEntityVersionBefore", Integer.toString(originalBefore)),
+				Map.entry("originalEntityVersionAfter", Integer.toString(originalAfter)),
+				Map.entry("replacementEntityVersion", "1"),
+				Map.entry("reversalEntityVersion", "1"),
+				Map.entry("source", replacement.source().name())), original, reversal, replacement));
+		ledgerOutbox.append(reversedEvent(reversal, original, originalBefore, originalAfter, "REVISION", replacement));
+		ledgerOutbox.append(postedEvent(replacement, "REVISION", replacement));
+	}
+
+	private void completeVoidAuditAndOutbox(
+		Transaction original,
+		int originalBefore,
+		Transaction reversal,
+		UUID actorUserId) {
+		int originalAfter = originalBefore + 1;
+		auditLogs.append(audit(
+			actorUserId, "TRANSACTION_VOIDED", "REVERSED",
+			Map.of(
+				"rootTransactionId", original.rootTransactionId().toString(),
+				"originalTransactionId", original.transactionId().toString(),
+				"reversalTransactionId", reversal.transactionId().toString(),
+				"originalVersionNo", Integer.toString(original.versionNo()),
+				"originalEntityVersionBefore", Integer.toString(originalBefore),
+				"originalEntityVersionAfter", Integer.toString(originalAfter),
+				"reversalEntityVersion", "1",
+				"source", original.source().name()), original, reversal));
+		ledgerOutbox.append(reversedEvent(reversal, original, originalBefore, originalAfter, "VOID", null));
+	}
+
+	private AuditLogWritePort.AuditLogEntry audit(
+		UUID actorUserId,
+		String action,
+		String reasonCode,
+		Map<String, String> metadata,
+		Transaction... transactions) {
+		Transaction resource = transactions[0];
+		return new AuditLogWritePort.AuditLogEntry(
+			clock.instant(), actorUserId, AuditLogWritePort.ActorType.USER, action, "TRANSACTION",
+			resource.rootTransactionId(), accountIdFor(transactions), requestIds.currentRequestId(),
+			AuditLogWritePort.Result.SUCCESS, reasonCode, metadata);
+	}
+
+	private LedgerOutboxEvent postedEvent(
+		Transaction transaction, String operationKind, Transaction replacement) {
+		Map<String, Object> payload = new LinkedHashMap<>();
+		payload.put("schemaVersion", 1);
+		payload.put("transactionId", transaction.transactionId().toString());
+		payload.put("rootTransactionId", transaction.rootTransactionId().toString());
+		payload.put("versionNo", transaction.versionNo());
+		payload.put("entityVersion", 1);
+		payload.put("operationKind", operationKind);
+		if (replacement != null) {
+			payload.put("replacementTransactionId", replacement.transactionId().toString());
+			payload.put("replacementVersionNo", replacement.versionNo());
+			payload.put("replacementEntityVersion", 1);
+		}
+		return new LedgerOutboxEvent(UUID.randomUUID(), transaction.transactionId(),
+			LedgerOutboxEvent.EventType.TransactionPosted, clock.instant(), payload);
+	}
+
+	private LedgerOutboxEvent reversedEvent(
+		Transaction reversal,
+		Transaction original,
+		int originalBefore,
+		int originalAfter,
+		String operationKind,
+		Transaction replacement) {
+		Map<String, Object> payload = new LinkedHashMap<>();
+		payload.put("schemaVersion", 1);
+		payload.put("transactionId", reversal.transactionId().toString());
+		payload.put("rootTransactionId", original.rootTransactionId().toString());
+		payload.put("entityVersion", 1);
+		payload.put("reversalOfTransactionId", original.transactionId().toString());
+		payload.put("reversalOfVersionNo", original.versionNo());
+		payload.put("reversalOfEntityVersionBefore", originalBefore);
+		payload.put("reversalOfEntityVersionAfter", originalAfter);
+		payload.put("operationKind", operationKind);
+		if (replacement != null) {
+			payload.put("replacementTransactionId", replacement.transactionId().toString());
+			payload.put("replacementVersionNo", replacement.versionNo());
+			payload.put("replacementEntityVersion", 1);
+		}
+		return new LedgerOutboxEvent(UUID.randomUUID(), reversal.transactionId(),
+			LedgerOutboxEvent.EventType.TransactionReversed, clock.instant(), payload);
+	}
+
+	private UUID accountIdFor(Transaction... transactions) {
+		Set<UUID> accountIds = new java.util.HashSet<>();
+		for (Transaction transaction : transactions) {
+			for (LedgerEntry entry : transaction.entries()) {
+				ledgerAccounts.findById(entry.ledgerAccountId())
+					.map(LedgerAccountReference::visibleAccountId)
+					.ifPresent(accountIds::add);
+			}
+		}
+		return accountIds.size() == 1 ? accountIds.iterator().next() : null;
 	}
 
 	private AccountPostingReference editableAccount(UUID userId, UUID accountId, java.time.Instant businessAt) {
