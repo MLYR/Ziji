@@ -2,6 +2,8 @@ package app.ziji.ledger.application;
 
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -9,6 +11,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import app.ziji.account.application.AccountOpeningBalance;
 import app.ziji.account.application.AccountPostingReference;
 import app.ziji.account.application.AccountPostingReferencePort;
 import app.ziji.accountmember.application.AccountPostingAccessPort;
@@ -79,6 +82,47 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 
 	public Transaction postIncome(IncomeCommand command) {
 		return postIncome(command, UUID.randomUUID(), TransactionSource.MANUAL);
+	}
+
+	/**
+	 * 仅由账户创建端口调用的内部 OPENING 入账；分录和权益科目始终由 Ledger 决定，不能暴露给公共交易接口。
+	 */
+	public UUID postOpening(
+		UUID accountId,
+		String accountClass,
+		String currencyCode,
+		UUID createdBy,
+		AccountOpeningBalance openingBalance,
+		ZoneId timezone) {
+		if (accountId == null || accountClass == null || currencyCode == null || createdBy == null
+			|| openingBalance == null || timezone == null) {
+			throw invalid("期初余额入账参数无效。");
+		}
+		return transactions.required(() -> {
+			CurrencyCode currency = CurrencyCode.fromCode(currencyCode);
+			Money amount = new Money(openingBalance.amount(), currency);
+			validateAmount(amount, currency);
+			LedgerAccountReference primary = openingPrimary(accountId, accountClass, currency);
+			LedgerAccountReference equity = ledgerAccounts.ensureOpeningEquityAccount(createdBy, currency);
+			if (equity.role() != LedgerAccountRole.SYSTEM || equity.nature() != LedgerAccountNature.EQUITY
+				|| !"EQUITY_OPENING_BALANCE".equals(equity.code()) || !equity.active()) {
+				throw invalid("期初权益科目状态无效。");
+			}
+			LocalDate businessDate = openingBalance.businessAt().atZone(timezone).toLocalDate();
+			boolean liability = "LIABILITY".equals(accountClass);
+			// 正债务以贷 PRIMARY 入账；资产和投资期初现金使用相反方向，投资绝不触碰 POSITION_COST。
+			LedgerDirection primaryDirection = liability ? LedgerDirection.CREDIT : LedgerDirection.DEBIT;
+			LedgerDirection equityDirection = liability ? LedgerDirection.DEBIT : LedgerDirection.CREDIT;
+			Transaction transaction = transactionFactory.createPosted(
+				UUID.randomUUID(), TransactionType.OPENING, TransactionSource.MANUAL,
+				openingBalance.businessAt(), businessDate, timezone.getId(), clock.instant(),
+				List.of(
+					new LedgerEntrySpec(primary.id(), primaryDirection, amount),
+					new LedgerEntrySpec(equity.id(), equityDirection, amount)));
+			completeInitialPosting(new PostedTransactionWrite(
+				transaction, createdBy, null, null, openingBalance.note(), null, new NoTransactionDetails()));
+			return transaction.transactionId();
+		});
 	}
 
 	private Transaction postIncome(IncomeCommand command, UUID transactionId, TransactionSource source) {
@@ -837,6 +881,19 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		}
 		if (reference.currency() != CurrencyCode.fromCode(account.currency())) {
 			throw invalid("账户与账务科目币种不一致。");
+		}
+		return reference;
+	}
+
+	private LedgerAccountReference openingPrimary(UUID accountId, String accountClass, CurrencyCode currency) {
+		LedgerAccountReference reference = ledgerAccounts.findPrimaryForVisibleAccount(accountId)
+			.orElseThrow(() -> invalid("账户缺少主账务科目。"));
+		LedgerAccountNature expectedNature = "LIABILITY".equals(accountClass)
+			? LedgerAccountNature.LIABILITY : LedgerAccountNature.ASSET;
+		if (reference.role() != LedgerAccountRole.PRIMARY || !reference.active()
+			|| !accountId.equals(reference.visibleAccountId()) || reference.nature() != expectedNature
+			|| reference.currency() != currency) {
+			throw invalid("账户主账务科目状态无效。");
 		}
 		return reference;
 	}

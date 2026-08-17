@@ -18,5 +18,11 @@ public interface LedgerAccountStore {
 	LedgerAccountReference ensureCategorySystemAccount(
 		UUID ownerUserId, UUID categoryId, LedgerAccountNature nature, app.ziji.ledger.domain.CurrencyCode currency);
 
+	/** 在当前账务事务内按唯一键读取或确保用户级期初权益系统科目。 */
+	default LedgerAccountReference ensureOpeningEquityAccount(
+		UUID ownerUserId, app.ziji.ledger.domain.CurrencyCode currency) {
+		throw new LedgerCommandValidationException("期初权益科目端口未实现。");
+	}
+
 	Money currentBalance(UUID ledgerAccountId);
 }

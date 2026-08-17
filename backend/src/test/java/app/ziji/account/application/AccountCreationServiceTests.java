@@ -1,7 +1,9 @@
 package app.ziji.account.application;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
@@ -25,6 +27,7 @@ class AccountCreationServiceTests {
 
 	private static final UUID CREATED_BY = UUID.fromString("00000000-0000-0000-0000-000000000501");
 	private static final UUID ACCOUNT_ID = UUID.fromString("00000000-0000-0000-0000-000000000502");
+	private static final UUID OPENING_ID = UUID.fromString("00000000-0000-0000-0000-000000000504");
 	private static final Instant FIXED_NOW = Instant.parse("2026-08-15T03:04:05Z");
 
 	@Test
@@ -82,6 +85,35 @@ class AccountCreationServiceTests {
 		assertEquals(1, ledgerInit.primaryCalls.size());
 		assertEquals(0, ledgerInit.positionCostCalls.size());
 		assertEquals(AccountClass.LIABILITY, ledgerInit.primaryCalls.get(0).accountClass());
+	}
+
+	@Test
+	void createsOpeningOnlyWhenCommandCarriesOpeningBalanceAndReturnsItsTransactionId() {
+		FakeLedgerInit ledgerInit = new FakeLedgerInit();
+		AccountCreationService service = service(new FakeAccountStore(), new FakeMemberInit(), ledgerInit);
+		AccountCreationResult withoutOpening = service.createAccountWithOpening(command(AccountClass.ASSET, AccountType.BANK));
+		AccountCreationResult withOpening = service.createAccountWithOpening(new AccountCreationCommand(
+			AccountClass.LIABILITY, AccountType.CREDIT_CARD, "信用卡", null, AccountCurrency.JPY, null, CREATED_BY,
+			new AccountOpeningBalance(new BigDecimal("1200"), Instant.parse("2026-08-14T16:30:00Z"), "初始债务"),
+			ZoneId.of("Asia/Shanghai")));
+
+		assertEquals(null, withoutOpening.openingTransactionId());
+		assertEquals(OPENING_ID, withOpening.openingTransactionId());
+		assertEquals(1, ledgerInit.openingCalls.size());
+		assertEquals(AccountClass.LIABILITY, ledgerInit.openingCalls.get(0).accountClass());
+		assertEquals(AccountCurrency.JPY, ledgerInit.openingCalls.get(0).currency());
+		assertEquals(ZoneId.of("Asia/Shanghai"), ledgerInit.openingCalls.get(0).timezone());
+	}
+
+	@Test
+	void rejectsOpeningBalanceWithoutCurrentUserTimezoneBeforeAnyWrite() {
+		FakeAccountStore accounts = new FakeAccountStore();
+		AccountCreationService service = service(accounts, new FakeMemberInit(), new FakeLedgerInit());
+
+		assertThrows(AccountCreationException.class, () -> new AccountCreationCommand(
+			AccountClass.ASSET, AccountType.BANK, "账户", null, AccountCurrency.CNY, null, CREATED_BY,
+			new AccountOpeningBalance(new BigDecimal("1.00"), FIXED_NOW, null), null));
+		assertEquals(0, accounts.inserted.size());
 	}
 
 	@Test
@@ -221,6 +253,7 @@ class AccountCreationServiceTests {
 	private static final class FakeLedgerInit implements AccountLedgerInitializationPort {
 		final List<LedgerInitCall> primaryCalls = new ArrayList<>();
 		final List<LedgerInitCall> positionCostCalls = new ArrayList<>();
+		final List<OpeningCall> openingCalls = new ArrayList<>();
 		@Override
 		public void initializePrimary(UUID accountId, String accountClass, String currency, Instant now) {
 			primaryCalls.add(new LedgerInitCall(accountId, AccountClass.valueOf(accountClass), now));
@@ -228,6 +261,17 @@ class AccountCreationServiceTests {
 		@Override
 		public void initializePositionCost(UUID accountId, String currency, Instant now) {
 			positionCostCalls.add(new LedgerInitCall(accountId, AccountClass.INVESTMENT, now));
+		}
+		@Override
+		public UUID postOpening(
+			UUID accountId,
+			String accountClass,
+			String currency,
+			UUID createdBy,
+			AccountOpeningBalance openingBalance,
+			ZoneId timezone) {
+			openingCalls.add(new OpeningCall(accountId, AccountClass.valueOf(accountClass), AccountCurrency.valueOf(currency), timezone));
+			return OPENING_ID;
 		}
 	}
 
@@ -245,4 +289,5 @@ class AccountCreationServiceTests {
 	private record MemberInitCall(UUID accountId, UUID userId, Instant now) {}
 	private record InclusionInitCall(UUID membershipId, UUID userId, Instant now) {}
 	private record LedgerInitCall(UUID accountId, AccountClass accountClass, Instant now) {}
+	private record OpeningCall(UUID accountId, AccountClass accountClass, AccountCurrency currency, ZoneId timezone) {}
 }

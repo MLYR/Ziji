@@ -48,6 +48,13 @@ public class AccountCreationService {
 	 * V007 延迟约束在事务提交时验证 OWNER、100% 计入和 PRIMARY 科目。
 	 */
 	public Account createAccount(AccountCreationCommand command) {
+		return createAccountWithOpening(command).account();
+	}
+
+	/**
+	 * 账户、成员、计入设置、科目和可选 OPENING 交易共享同一最外层事务；任一失败均不得留下局部事实。
+	 */
+	public AccountCreationResult createAccountWithOpening(AccountCreationCommand command) {
 		if (command == null) {
 			throw new AccountCreationException("创建账户命令不能为空。");
 		}
@@ -86,7 +93,20 @@ public class AccountCreationService {
 				ledgerInit.initializePositionCost(account.id(), account.currency().name(), now);
 			}
 
-			return account;
+			UUID openingTransactionId = command.openingBalance() == null ? null
+				: ledgerInit.postOpening(
+					account.id(), account.accountClass().name(), account.currency().name(), account.createdBy(),
+					command.openingBalance(), command.openingTimezone());
+			return new AccountCreationResult(account, openingTransactionId);
 		});
 	}
+
+	/** 仅用于同键重放恢复首次 AccountCreatedEnvelope 的内部 OPENING 标识。 */
+	public UUID findOpeningTransactionId(UUID accountId) {
+		if (accountId == null) {
+			throw new AccountCreationException("账户 ID 不能为空。");
+		}
+		return ledgerInit.findOpeningTransactionId(accountId).orElse(null);
+	}
+
 }

@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
@@ -11,8 +12,10 @@ import java.util.UUID;
 
 import app.ziji.account.application.AccountCreationCommand;
 import app.ziji.account.application.AccountCreationException;
+import app.ziji.account.application.AccountCreationResult;
 import app.ziji.account.application.AccountCreationService;
 import app.ziji.account.application.AccountLedgerInitializationPort;
+import app.ziji.account.application.AccountOpeningBalance;
 import app.ziji.account.application.AccountStore;
 import app.ziji.account.domain.Account;
 import app.ziji.account.domain.AccountClass;
@@ -295,6 +298,61 @@ class AccountCreationPostgresIntegrationTests extends PostgresIntegrationTestSup
 		}
 	}
 
+	@Test
+	void openingFactsUseFrozenDirectionsBusinessTimezoneAuditAndOutbox() {
+		UUID assetUser = insertUser("opening-asset");
+		AccountCreationResult asset = service(accountStore, memberInit, ledgerInit, UUID.randomUUID())
+			.createAccountWithOpening(openingCommand(
+				AccountClass.ASSET, AccountType.BANK, AccountCurrency.CNY, assetUser,
+				new BigDecimal("100.00"), Instant.parse("2026-08-14T16:30:00Z"), ZoneId.of("Asia/Shanghai")));
+		UUID investmentUser = insertUser("opening-investment");
+		AccountCreationResult investment = service(accountStore, memberInit, ledgerInit, UUID.randomUUID())
+			.createAccountWithOpening(openingCommand(
+				AccountClass.INVESTMENT, AccountType.FUND, AccountCurrency.JPY, investmentUser,
+				new BigDecimal("1200"), Instant.parse("2026-08-15T15:30:00Z"), ZoneId.of("Asia/Tokyo")));
+		UUID liabilityUser = insertUser("opening-liability");
+		AccountCreationResult liability = service(accountStore, memberInit, ledgerInit, UUID.randomUUID())
+			.createAccountWithOpening(openingCommand(
+				AccountClass.LIABILITY, AccountType.CREDIT_CARD, AccountCurrency.USD, liabilityUser,
+				new BigDecimal("88.50"), Instant.parse("2026-08-14T23:30:00Z"), ZoneId.of("America/New_York")));
+
+		assertOpening(asset, "2026-08-15", "Asia/Shanghai", "D", "C", false);
+		assertOpening(investment, "2026-08-16", "Asia/Tokyo", "D", "C", true);
+		assertOpening(liability, "2026-08-14", "America/New_York", "C", "D", false);
+	}
+
+	@Test
+	void openingFailureRollsBackAccountLedgerAuditOutboxAndEquityFactsTogether() {
+		UUID userId = insertUser("opening-rollback");
+		UUID accountId = UUID.randomUUID();
+		AccountLedgerInitializationPort failingOpening = new AccountLedgerInitializationPort() {
+			@Override public void initializePrimary(UUID id, String accountClass, String currency, Instant now) {
+				ledgerInit.initializePrimary(id, accountClass, currency, now);
+			}
+			@Override public void initializePositionCost(UUID id, String currency, Instant now) {
+				ledgerInit.initializePositionCost(id, currency, now);
+			}
+			@Override public UUID postOpening(
+				UUID id, String accountClass, String currency, UUID createdBy,
+				AccountOpeningBalance openingBalance, ZoneId timezone) {
+				ledgerInit.postOpening(id, accountClass, currency, createdBy, openingBalance, timezone);
+				throw new IllegalStateException("OPENING 写入失败注入。");
+			}
+		};
+
+		assertThrows(IllegalStateException.class, () -> service(accountStore, memberInit, failingOpening, accountId)
+			.createAccountWithOpening(openingCommand(
+				AccountClass.ASSET, AccountType.BANK, AccountCurrency.CNY, userId,
+				new BigDecimal("1.00"), FIXED_NOW, ZoneId.of("Asia/Shanghai"))));
+		assertNoAccountFacts(accountId);
+		assertEquals(0, count("SELECT count(*) FROM transactions WHERE created_by = ?", userId));
+		assertEquals(0, count("SELECT count(*) FROM audit_logs WHERE actor_user_id = ? AND action = 'TRANSACTION_POSTED'", userId));
+		assertEquals(0, count("""
+			SELECT count(*) FROM ledger_accounts
+			WHERE owner_user_id = ? AND code = 'EQUITY_OPENING_BALANCE' AND currency = 'CNY'
+			""", userId));
+	}
+
 	private Account create(
 		AccountClass accountClass,
 		AccountType accountType,
@@ -327,6 +385,62 @@ class AccountCreationPostgresIntegrationTests extends PostgresIntegrationTestSup
 		UUID userId) {
 		return new AccountCreationCommand(
 			accountClass, accountType, "失败注入账户", null, AccountCurrency.CNY, null, userId);
+	}
+
+	private static AccountCreationCommand openingCommand(
+		AccountClass accountClass,
+		AccountType accountType,
+		AccountCurrency currency,
+		UUID userId,
+		BigDecimal amount,
+		Instant businessAt,
+		ZoneId timezone) {
+		return new AccountCreationCommand(
+			accountClass, accountType, "期初账户", null, currency, null, userId,
+			new AccountOpeningBalance(amount, businessAt, "期初录入"), timezone);
+	}
+
+	private void assertOpening(
+		AccountCreationResult result,
+		String businessDate,
+		String timezone,
+		String primaryDirection,
+		String equityDirection,
+		boolean investment) {
+		assertNotNull(result.openingTransactionId());
+		jdbc.query("""
+			SELECT t.transaction_type, t.status, t.business_date, t.timezone,
+				la.ledger_role, la.code, e.direction
+			FROM transactions t
+			JOIN ledger_entries e ON e.transaction_id = t.id
+			JOIN ledger_accounts la ON la.id = e.ledger_account_id
+			WHERE t.id = ?
+			ORDER BY e.sequence_no
+			""", (org.springframework.jdbc.core.ResultSetExtractor<Void>) rows -> {
+			assertTrue(rows.next());
+			assertEquals("OPENING", rows.getString("transaction_type"));
+			assertEquals("POSTED", rows.getString("status"));
+			assertEquals(businessDate, rows.getDate("business_date").toString());
+			assertEquals(timezone, rows.getString("timezone"));
+			assertEquals("PRIMARY", rows.getString("ledger_role"));
+			assertEquals(primaryDirection, rows.getString("direction"));
+			assertTrue(rows.next());
+			assertEquals("EQUITY_OPENING_BALANCE", rows.getString("code"));
+			assertEquals(equityDirection, rows.getString("direction"));
+			assertTrue(!rows.next());
+			return null;
+		}, result.openingTransactionId());
+		if (investment) {
+			assertEquals(0, count("""
+				SELECT count(*) FROM ledger_entries e
+				JOIN ledger_accounts la ON la.id = e.ledger_account_id
+				WHERE e.transaction_id = ? AND la.ledger_role = 'POSITION_COST'
+				""", result.openingTransactionId()));
+		}
+		assertEquals(1, count("SELECT count(*) FROM audit_logs WHERE action = 'TRANSACTION_POSTED' AND resource_id = ?",
+			result.openingTransactionId()));
+		assertEquals(1, count("SELECT count(*) FROM outbox_events WHERE aggregate_id = ? AND event_type = 'TransactionPosted'",
+			result.openingTransactionId()));
 	}
 
 	private void assertOwnerMembership(UUID accountId, UUID userId) {

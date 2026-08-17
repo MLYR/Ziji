@@ -1,5 +1,6 @@
 package app.ziji.account.application;
 
+import java.time.ZoneId;
 import java.util.UUID;
 
 import app.ziji.account.domain.AccountClass;
@@ -7,7 +8,7 @@ import app.ziji.account.domain.AccountCurrency;
 import app.ziji.account.domain.AccountType;
 
 /**
- * 创建账户命令；不含余额、ID 或幂等键，ID 由服务端在事务内生成。
+ * 创建账户命令；账户 ID 与幂等键不进入命令，ID 由服务端在事务内生成。
  * 大类、子类型和币种直接使用领域枚举，在 Account.create 边界完成矩阵校验。
  */
 public record AccountCreationCommand(
@@ -17,7 +18,20 @@ public record AccountCreationCommand(
 	String institution,
 	AccountCurrency currency,
 	String note,
-	UUID createdBy) {
+	UUID createdBy,
+	AccountOpeningBalance openingBalance,
+	ZoneId openingTimezone) {
+
+	public AccountCreationCommand(
+		AccountClass accountClass,
+		AccountType accountType,
+		String name,
+		String institution,
+		AccountCurrency currency,
+		String note,
+		UUID createdBy) {
+		this(accountClass, accountType, name, institution, currency, note, createdBy, null, null);
+	}
 
 	public AccountCreationCommand {
 		if (accountClass == null) {
@@ -31,6 +45,9 @@ public record AccountCreationCommand(
 		}
 		if (createdBy == null) {
 			throw new AccountCreationException("创建人不能为空。");
+		}
+		if (openingBalance != null && openingTimezone == null) {
+			throw new AccountCreationException("期初余额缺少当前用户时区。");
 		}
 	}
 }

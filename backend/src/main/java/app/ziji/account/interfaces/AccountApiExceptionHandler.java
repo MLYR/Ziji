@@ -6,6 +6,7 @@ import java.util.Map;
 import app.ziji.account.application.AccountNotVisibleException;
 import app.ziji.account.application.AccountPermissionDeniedException;
 import app.ziji.account.application.AccountPersistenceException;
+import app.ziji.account.application.AccountCreationException;
 import app.ziji.account.application.AccountQueryValidationException;
 import app.ziji.account.application.AccountVersionConflictException;
 import app.ziji.account.application.LiquidityHoldException;
@@ -24,7 +25,9 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public final class AccountApiExceptionHandler {
 
-	@ExceptionHandler({AccountQueryValidationException.class, AccountDomainException.class, LiquidityHoldException.Validation.class})
+	@ExceptionHandler({
+		AccountCreationException.class, AccountQueryValidationException.class, AccountDomainException.class,
+		LiquidityHoldException.Validation.class})
 	ProblemDetail validation(HttpServletRequest request, HttpServletResponse response) {
 		return base(HttpStatus.BAD_REQUEST, "请求校验失败", "VALIDATION_ERROR", request, response);
 	}

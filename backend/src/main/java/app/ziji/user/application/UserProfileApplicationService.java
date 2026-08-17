@@ -11,7 +11,7 @@ import org.springframework.stereotype.Service;
 
 /** 用户资料用例；只更新 users 设置列，不修改历史账务或认证敏感字段。 */
 @Service
-public class UserProfileApplicationService implements UserProfileUseCase, UserRegistrationReplayPort {
+public class UserProfileApplicationService implements UserProfileUseCase, UserRegistrationReplayPort, CurrentUserTimezonePort {
 
 	private final UserProfileStore store;
 	private final TransactionRunner transactionRunner;
@@ -32,6 +32,11 @@ public class UserProfileApplicationService implements UserProfileUseCase, UserRe
 			throw new UserAuthenticationException();
 		}
 		return store.findById(userId).orElseThrow(UserAuthenticationException::new);
+	}
+
+	@Override
+	public java.time.ZoneId currentTimezone(UUID userId) {
+		return getCurrentUser(userId).timezone();
 	}
 
 	@Override
