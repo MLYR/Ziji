@@ -920,6 +920,8 @@ GET /sync/changes?cursor=<opaque>&limit=200
 POST /sync/operations
 ```
 
+同步载荷中的 `operationId` 是客户端操作 ID（`SyncOperation.operationId`），用于识别该离线操作；它不同于统一幂等作用域中的 OpenAPI operationId，后者仍固定为实际 `applySyncOperations`。
+
 ```json
 {
   "deviceId": "ios-device-local-id",
@@ -988,10 +990,18 @@ Sync CREATE 和 UPDATE replacement 的 `businessAt`、`businessDate`、`timezone
 - 每个操作重新校验当前成员权限
 - 相同 idempotencyKey 不同 Hash 返回 `REJECTED`，其中 `error.code=IDEMPOTENCY_KEY_REUSED`
 - `CONFLICT` 只使用 §2.5 的安全 `versionConflict` 摘要；资源不可见时改为 `REJECTED`，不得通过结果泄漏资源存在性
-- 每个操作独立复用 `UnifiedIdempotencyService`。作用域固定为当前用户 + API v1 + 实际 OpenAPI operationId `applySyncOperations` + 该操作 `idempotencyKey`；客户端 `operationId`、`entityType`、`operationType`、实际 `entityId`、`baseVersion` 的显式值或 `NULL`、`payloadVersion` 和规范化 payload 进入 requestHash。故退款的 `originalTransactionId`、Sync 的 `businessAt/businessDate/timezone`、转账金额/币种/手续费分类等冻结字段均由规范化 payload 覆盖；`deviceId` 和 `createdAt` 不进入 Hash，不另造派生 operationId。
+- 每个操作独立复用 `UnifiedIdempotencyService`。作用域固定为当前用户 + API v1 + 实际 OpenAPI operationId `applySyncOperations` + 该操作 `idempotencyKey`；客户端操作 ID（`SyncOperation.operationId`）、`entityType`、`operationType`、实际 `entityId`、`baseVersion` 的显式值或 `NULL`、`payloadVersion` 和规范化 payload 进入 requestHash。故退款的 `originalTransactionId`、Sync 的 `businessAt/businessDate/timezone`、转账金额/币种/手续费分类等冻结字段均由规范化 payload 覆盖；`deviceId` 和 `createdAt` 不进入 Hash，不另造派生 operationId。
 - 同 Key 同 Hash 只安全重放首次结果并返回 `DUPLICATE`；同 Key 异 Hash 不改写既有幂等记录。单个 Transaction、LedgerEntry、audit、outbox 和幂等终态仍必须在既有事务中原子提交；批内其他操作不随该操作失败回滚。
 - `deviceId` 只用于经 schema 校验的客户端设备标识，不参与身份、权限或 requestHash；`createdAt` 是本地队列元数据，不替代 payload 内业务时间，也不参与 requestHash。
 - `REJECTED` 是终态，客户端不得自动重试。`RETRYABLE` 必须保留同一 `operationId`、`idempotencyKey` 和 requestHash，等待 5 秒后串行重试；后续 Mobile 编排将其回到 `PENDING`，不得误标为 `REJECTED`。
+
+### 5.4 Mobile 当前主体与冲突处置
+
+Mobile 在登录或刷新接口成功后，必须使用新 access token 的 Bearer 请求调用既有 `getCurrentUser`，只以响应 `User.id` 确认当前主体；未确认前不得发布 `AUTHENTICATED`、打开 SQLite user scope 或开始同步。不得解析 JWT claims，也不得从 SecureStore、演示数据或 SQLite 推断主体。
+
+`CONFLICT` 的 `resourceLocation` 仅可精确为 `/api/v1/transactions/{UUID}`。Mobile 必须拒绝绝对 URL、`//`、query、fragment、路径穿越和其他资源；只提取 transactionId 并调用类型化 `getTransaction`，不得向任意 resourceLocation 发起请求。接受云端与放弃本地共用 `discardLocal(userId, operationId)`，在一个 SQLite transaction 删除同用户的 conflict 与旧 pending，不写服务器。编辑或作废后的重试使用 conflict `currentVersion` 作为 baseVersion，创建新的 operationId、Idempotency-Key 和规范化 Hash，并在一个 SQLite transaction 插入新 pending、删除旧 pending/conflict；同 Key 异 Hash 仍由既有协议拒绝，`REJECTED` 不自动重试。
+
+`getCurrentUser` 的 `401` 或 `403` 均不得让 Mobile 进入 `AUTHENTICATED`、打开或继续使用任一 SQLite user scope、开始同步；它们按不可恢复的当前会话拒绝处理，立即清除内存 access token/session/userId，并按既有无效凭据/安全退出规则删除 refresh credential。删除失败进入 `RECOVERABLE_ERROR`，但不得恢复旧/新主体或 scope。刷新确认到不同 `User.id` 时同样立即关闭旧 scope、清除内存主体，并安全删除本轮已轮换且已持久化的 refresh credential；删除失败仍只处于 `RECOVERABLE_ERROR`。按 userId 隔离的缓存、游标、pending、conflict 不删除，只在没有已确认主体时不可访问。网络、`5xx` 或可恢复 SecureStore 错误不得伪造主体。此处同步载荷的 `operationId` 均指客户端操作 ID（`SyncOperation.operationId`）；统一幂等作用域中的 OpenAPI operationId 仍指实际 `applySyncOperations`。
 
 ## 6. 异步任务契约
 
