@@ -285,6 +285,91 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /accounts/{accountId}/liability-details:
+    parameters: [{ $ref: '#/components/parameters/AccountId' }]
+    x-account-type-field-matrix:
+      CREDIT_CARD: [interestRate, billingDay, repaymentDay, currentAmountDue]
+      LOAN: [interestRate, loanDate, dueDate, repaymentDay, currentAmountDue]
+      CONSUMER_LOAN: [interestRate, loanDate, dueDate, repaymentDay, currentAmountDue]
+      OTHER: [interestRate, loanDate, dueDate, billingDay, repaymentDay, currentAmountDue]
+    get:
+      tags: [Accounts]
+      operationId: getLiabilityDetails
+      summary: 查询独立负债详情；无持久行时返回稳定空详情
+      description: 当前 ACTIVE membership 的 OWNER/EDITOR/VIEWER 可读。无详情行时返回六个业务字段 null、version=0 和强 ETag "0"；无 ACTIVE membership、created_by-only 或非 LIABILITY 账户统一 404。
+      x-requirement-ids: [LIA-001, LIA-005]
+      x-permission-matrix: { read: [OWNER, EDITOR, VIEWER], write: [] }
+      x-error-priority: [AUTHENTICATION_REQUIRED, RESOURCE_NOT_FOUND, VALIDATION_ERROR, PERMISSION_DENIED]
+      responses:
+        '200': { $ref: '#/components/responses/LiabilityDetailOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Accounts]
+      operationId: putLiabilityDetails
+      summary: 首次创建或完整替换独立负债详情
+      description: 六个业务字段必须全部提交并可为 null。无持久行时必须只带 If-None-Match:*，已有行时必须只带强 If-Match；缺失或同时提交两个条件头返回 400。首次创建成功返回 201，完整替换返回 200；均只推进详情 version，不推进 Account.version。
+      x-requirement-ids: [LIA-001, LIA-005]
+      x-permission-matrix: { read: [OWNER, EDITOR, VIEWER], write: [OWNER, EDITOR] }
+      x-precondition-order: [AUTHENTICATION, ACCOUNT_VISIBILITY_AND_LIABILITY_TYPE, WRITE_PERMISSION, HEADER_FORMAT, BUSINESS_RULES, SAFE_IDEMPOTENCY_REPLAY, PERSISTED_VERSION_OR_ABSENCE, IDEMPOTENCY_ACQUIRE]
+      x-idempotency:
+        scope: CURRENT_USER_API_VERSION_OPERATION_ID_KEY
+        requestHash: ACTUAL_ACCOUNT_ID_TYPED_COMPLETE_PAYLOAD_IF_MATCH_OR_IF_NONE_MATCH
+        sameKeySameHash: REPLAY_FIRST_RESPONSE
+        sameKeyDifferentHash: IDEMPOTENCY_KEY_REUSED
+        rejectedBeforeRecord: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND, VERSION_CONFLICT, BUSINESS_RULE_VIOLATION]
+      x-account-version-effect: UNCHANGED
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND, VERSION_CONFLICT, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_REQUEST_IN_PROGRESS, BUSINESS_RULE_VIOLATION]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/LiabilityDetailPutIfMatch' }
+        - { $ref: '#/components/parameters/LiabilityDetailIfNoneMatch' }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/PutLiabilityDetailRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/LiabilityDetailOk' }
+        '201': { $ref: '#/components/responses/LiabilityDetailCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+    patch:
+      tags: [Accounts]
+      operationId: patchLiabilityDetails
+      summary: 局部修改独立负债详情
+      description: 至少提交一个字段；null 清空字段。必须带强 If-Match 和 Idempotency-Key；尚无持久详情行时返回 404，不得以虚拟 version 0 创建。
+      x-requirement-ids: [LIA-001, LIA-005]
+      x-permission-matrix: { read: [OWNER, EDITOR, VIEWER], write: [OWNER, EDITOR] }
+      x-precondition-order: [AUTHENTICATION, ACCOUNT_VISIBILITY_AND_LIABILITY_TYPE, WRITE_PERMISSION, HEADER_FORMAT, BUSINESS_RULES, SAFE_IDEMPOTENCY_REPLAY, PERSISTED_VERSION, IDEMPOTENCY_ACQUIRE]
+      x-idempotency:
+        scope: CURRENT_USER_API_VERSION_OPERATION_ID_KEY
+        requestHash: ACTUAL_ACCOUNT_ID_TYPED_PATCH_PAYLOAD_IF_MATCH
+        sameKeySameHash: REPLAY_FIRST_RESPONSE
+        sameKeyDifferentHash: IDEMPOTENCY_KEY_REUSED
+        rejectedBeforeRecord: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND, VERSION_CONFLICT, BUSINESS_RULE_VIOLATION]
+      x-account-version-effect: UNCHANGED
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND, VERSION_CONFLICT, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_REQUEST_IN_PROGRESS, BUSINESS_RULE_VIOLATION]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/LiabilityDetailIfMatch' }
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json: { schema: { $ref: '#/components/schemas/PatchLiabilityDetailRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/LiabilityDetailOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
   /accounts/{accountId}/archive:
     parameters: [{ $ref: '#/components/parameters/AccountId' }]
     post:
@@ -456,6 +541,7 @@ paths:
         '422': { $ref: '#/components/responses/BusinessRuleViolation' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /transactions/{transactionId}:
     parameters: [{ $ref: '#/components/parameters/TransactionId' }]
     get:
@@ -1460,6 +1546,24 @@ components:
       required: true
       description: LiquidityHold 修订和释放使用强 ETag，必须是双引号包围的正整数，例如 "7"；缺失、重复、弱 ETag、*、未加双引号、非正整数或溢出（超出服务端整数范围）均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。
       schema: { type: string, minLength: 3, maxLength: 82, pattern: '^"[1-9][0-9]*"$' }
+    LiabilityDetailIfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: 负债详情 PATCH 使用强 ETag，必须是双引号包围的正整数。缺失、重复、弱 ETag、*、未加双引号、零、负数、非数字或溢出均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。虚拟空详情的 "0" 不能用于创建。
+      schema: { type: string, minLength: 3, maxLength: 82, pattern: '^"[1-9][0-9]*"$' }
+    LiabilityDetailPutIfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: 已有持久化负债详情的 PUT 完整替换必须携带此强 ETag；首次创建禁止携带。PUT 必须在此头和 If-None-Match 中恰好提交一个。
+      schema: { type: string, minLength: 3, maxLength: 82, pattern: '^"[1-9][0-9]*"$' }
+    LiabilityDetailIfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      description: 尚无持久化负债详情行时，首次 PUT 必须且只能提交 *；已有持久化行返回 409 VERSION_CONFLICT。PUT 必须在此头和 If-Match 中恰好提交一个。
+      schema: { type: string, const: '*' }
     CsrfToken:
       name: X-CSRF-Token
       in: header
@@ -1800,6 +1904,57 @@ components:
       properties:
         name: { type: string, minLength: 1, maxLength: 100 }
         institution: { type: [string, 'null'], maxLength: 120 }
+    LiabilityDetail:
+      type: object
+      additionalProperties: false
+      required: [accountId, interestRate, loanDate, dueDate, billingDay, repaymentDay, currentAmountDue, version]
+      description: 独立负债详情读取投影。无持久化行时六个业务字段均为 null、version=0、响应强 ETag 为 "0"；持久化详情 version 从 1 开始。
+      properties:
+        accountId: { type: string, format: uuid }
+        interestRate: { type: [string, 'null'], pattern: '^(0(\.[0-9]{1,8})?|1(\.0{1,8})?)$', description: 年化比例，0.045 表示 4.5%。 }
+        loanDate: { type: [string, 'null'], format: date }
+        dueDate: { type: [string, 'null'], format: date }
+        billingDay: { type: [integer, 'null'], minimum: 1, maximum: 31, description: 名义日；短月取月末，仅用于提醒。 }
+        repaymentDay: { type: [integer, 'null'], minimum: 1, maximum: 31, description: 名义日；短月取月末，仅用于提醒。 }
+        currentAmountDue:
+          oneOf:
+            - type: 'null'
+            - { $ref: '#/components/schemas/NonNegativePostedMoney' }
+          description: 账户币种精度内的非负提醒金额，不是账务余额事实。
+          x-currency-precision: ACCOUNT_CURRENCY_AT_APPLICATION_BOUNDARY
+        version: { type: integer, minimum: 0, description: 0 仅表示无持久行的虚拟空详情；持久化版本从 1 开始。 }
+    PutLiabilityDetailRequest:
+      type: object
+      additionalProperties: false
+      required: [interestRate, loanDate, dueDate, billingDay, repaymentDay, currentAmountDue]
+      description: 完整替换负债详情；六个业务字段必须全部提交并可使用 null 清空。不适用 accountType 的字段返回 422。
+      properties:
+        interestRate: { type: [string, 'null'], pattern: '^(0(\.[0-9]{1,8})?|1(\.0{1,8})?)$' }
+        loanDate: { type: [string, 'null'], format: date }
+        dueDate: { type: [string, 'null'], format: date }
+        billingDay: { type: [integer, 'null'], minimum: 1, maximum: 31 }
+        repaymentDay: { type: [integer, 'null'], minimum: 1, maximum: 31 }
+        currentAmountDue:
+          oneOf:
+            - type: 'null'
+            - { $ref: '#/components/schemas/NonNegativePostedMoney' }
+          x-currency-precision: ACCOUNT_CURRENCY_AT_APPLICATION_BOUNDARY
+    PatchLiabilityDetailRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: 局部修改负债详情；显式 null 清空字段。不适用 accountType 的字段返回 422。
+      properties:
+        interestRate: { type: [string, 'null'], pattern: '^(0(\.[0-9]{1,8})?|1(\.0{1,8})?)$' }
+        loanDate: { type: [string, 'null'], format: date }
+        dueDate: { type: [string, 'null'], format: date }
+        billingDay: { type: [integer, 'null'], minimum: 1, maximum: 31 }
+        repaymentDay: { type: [integer, 'null'], minimum: 1, maximum: 31 }
+        currentAmountDue:
+          oneOf:
+            - type: 'null'
+            - { $ref: '#/components/schemas/NonNegativePostedMoney' }
+          x-currency-precision: ACCOUNT_CURRENCY_AT_APPLICATION_BOUNDARY
     ArchiveAccountRequest:
       type: object
       additionalProperties: false
@@ -1870,6 +2025,7 @@ components:
         - { $ref: '#/components/schemas/ExpenseTransactionRequest' }
         - { $ref: '#/components/schemas/RefundTransactionRequest' }
         - { $ref: '#/components/schemas/TransferTransactionRequest' }
+        - { $ref: '#/components/schemas/LiabilityBorrowingTransactionRequest' }
         - { $ref: '#/components/schemas/LiabilityRepaymentTransactionRequest' }
       discriminator:
         propertyName: type
@@ -1878,7 +2034,20 @@ components:
           EXPENSE: '#/components/schemas/ExpenseTransactionRequest'
           REFUND: '#/components/schemas/RefundTransactionRequest'
           TRANSFER: '#/components/schemas/TransferTransactionRequest'
+          LIABILITY_BORROWING: '#/components/schemas/LiabilityBorrowingTransactionRequest'
           LIABILITY_REPAYMENT: '#/components/schemas/LiabilityRepaymentTransactionRequest'
+    RecurringTransactionCommand:
+      description: 周期规则专用交易模板，仅允许收入、支出和转账，不复用公共交易创建的退款或负债命令。
+      oneOf:
+        - { $ref: '#/components/schemas/IncomeTransactionRequest' }
+        - { $ref: '#/components/schemas/ExpenseTransactionRequest' }
+        - { $ref: '#/components/schemas/TransferTransactionRequest' }
+      discriminator:
+        propertyName: type
+        mapping:
+          INCOME: '#/components/schemas/IncomeTransactionRequest'
+          EXPENSE: '#/components/schemas/ExpenseTransactionRequest'
+          TRANSFER: '#/components/schemas/TransferTransactionRequest'
     TransactionCommandBase:
       type: object
       required: [type, businessAt]
@@ -1904,6 +2073,11 @@ components:
             categoryId: { type: string, format: uuid }
             counterparty: { type: [string, 'null'], maxLength: 200 }
     ExpenseTransactionRequest:
+      description: 资产账户支出时贷资产 PRIMARY；CREDIT_CARD 消费时借费用/分类科目、贷信用卡 PRIMARY。其他负债类型不得使用该分支伪装信用卡消费。
+      x-liability-command:
+        accountType: CREDIT_CARD
+        domainTransactionType: EXPENSE
+        postings: DEBIT_EXPENSE_CATEGORY_CREDIT_LIABILITY_PRIMARY
       unevaluatedProperties: false
       allOf:
         - { $ref: '#/components/schemas/TransactionCommandBase' }
@@ -1943,9 +2117,34 @@ components:
             fee: { $ref: '#/components/schemas/MoneyAmount' }
             feeCategoryId: { type: [string, 'null'], format: uuid }
             exchangeRate: { type: [string, 'null'], pattern: '^(0*[1-9][0-9]{0,27})(\.[0-9]{1,12})?$|^0\.[0-9]*[1-9][0-9]{0,11}$' }
+    LiabilityBorrowingTransactionRequest:
+      description: 借款到账独立语义命令；借收款资产 PRIMARY、贷负债 PRIMARY，不计收入。公共 discriminator 固定映射内部 TransactionType.TRANSFER。
+      x-domain-transaction-type: TRANSFER
+      x-postings: DEBIT_ASSET_PRIMARY_CREDIT_LIABILITY_PRIMARY
+      x-business-rules: ACTIVE_WRITABLE_ASSET_AND_LIABILITY_ACCOUNTS_MATCH_REQUEST_CURRENCY_AND_ATOMIC_BALANCE
+      type: object
+      additionalProperties: false
+      required: [type, businessAt, assetAccountId, liabilityAccountId, currency, amount]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, const: LIABILITY_BORROWING }
+        businessAt: { type: string, format: date-time }
+        businessDate: { type: string, format: date }
+        timezone: { type: [string, 'null'], minLength: 1, maxLength: 64 }
+        note: { type: [string, 'null'], maxLength: 2000 }
+        tagIds: { type: array, uniqueItems: true, maxItems: 20, items: { type: string, format: uuid } }
+        assetAccountId: { type: string, format: uuid }
+        liabilityAccountId: { type: string, format: uuid }
+        currency: { $ref: '#/components/schemas/Currency' }
+        amount: { $ref: '#/components/schemas/PositivePostedMoney' }
     LiabilityRepaymentTransactionRequest:
       description: 公共 discriminator LIABILITY_REPAYMENT 固定映射为领域和数据库 TransactionType.REPAYMENT。
       x-domain-transaction-type: REPAYMENT
+      x-postings:
+        principal: DEBIT_LIABILITY_PRIMARY_CREDIT_ASSET_PRIMARY
+        interest: DEBIT_EXPENSE_CATEGORY_CREDIT_ASSET_PRIMARY
+        fee: DEBIT_EXPENSE_CATEGORY_CREDIT_ASSET_PRIMARY
+      x-business-rules: SAME_CURRENCY_ATOMIC_BALANCE_POSITIVE_PRINCIPAL_NON_NEGATIVE_INTEREST_FEE_AND_CATEGORY_REQUIRED_IFF_POSITIVE
       unevaluatedProperties: false
       allOf:
         - { $ref: '#/components/schemas/TransactionCommandBase' }
@@ -2135,7 +2334,7 @@ components:
       required: [schemaVersion, command]
       properties:
         schemaVersion: { type: integer, const: 1 }
-        command: { $ref: '#/components/schemas/PostTransactionRequest' }
+        command: { $ref: '#/components/schemas/RecurringTransactionCommand' }
     CreateRecurringRuleRequest:
       type: object
       additionalProperties: false
@@ -3145,6 +3344,11 @@ components:
       additionalProperties: false
       required: [data, meta]
       properties: { data: { $ref: '#/components/schemas/Account' }, meta: { $ref: '#/components/schemas/ResponseMeta' } }
+    LiabilityDetailEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/LiabilityDetail' }, meta: { $ref: '#/components/schemas/ResponseMeta' } }
     AccountCreatedEnvelope:
       type: object
       additionalProperties: false
@@ -3470,6 +3674,8 @@ components:
     AccountCreated: { description: 账户、OWNER membership、计入设置和科目已原子创建, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/AccountCreatedEnvelope' } } } }
     AccountOk: { description: 账户详情, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/AccountEnvelope' } } } }
     AccountListOk: { description: 账户列表, content: { application/json: { schema: { $ref: '#/components/schemas/AccountListEnvelope' } } } }
+    LiabilityDetailCreated: { description: 首次持久化负债详情已创建；详情 version 从 1 开始且不推进 Account.version, headers: { ETag: { schema: { type: string, pattern: '^"[1-9][0-9]*"$' } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LiabilityDetailEnvelope' } } } }
+    LiabilityDetailOk: { description: 独立负债详情；无持久行时返回 version 0 和 ETag "0"，持久化详情返回正整数版本强 ETag, headers: { ETag: { schema: { type: string, pattern: '^"(0|[1-9][0-9]*)"$' } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LiabilityDetailEnvelope' } } } }
     AccountBalanceOk: { description: 账户账面及可用余额, content: { application/json: { schema: { $ref: '#/components/schemas/AccountBalanceEnvelope' } } } }
     BalanceHistoryOk: { description: 账户历史余额, content: { application/json: { schema: { $ref: '#/components/schemas/BalanceHistoryEnvelope' } } } }
     LiquidityHoldCreated: { description: 首版或修订版 LiquidityHold 已创建；响应包含完整审计字段和新的强 ETag, headers: { ETag: { schema: { type: string, pattern: '^"[1-9][0-9]*"$' } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LiquidityHoldEnvelope' } } } }

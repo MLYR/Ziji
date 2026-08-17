@@ -339,6 +339,9 @@ V1 用户状态 `User.status` 固定为 `ACTIVE`、`LOCKED`、`CLOSING`、`CLOSE
 | POST | `/accounts/{accountId}/archive` | 归档账户 | ACC-006、007 |
 | GET | `/accounts/{accountId}/balance` | 查询指定时点余额 | ACC-004 |
 | GET | `/accounts/{accountId}/balance-history` | 查询历史余额 | DASH-006、007 |
+| GET | `/accounts/{accountId}/liability-details` | 查询独立负债详情或稳定空详情 | LIA-001、005 |
+| PUT | `/accounts/{accountId}/liability-details` | 首次创建或完整替换负债详情 | LIA-001、005 |
+| PATCH | `/accounts/{accountId}/liability-details` | 局部修改负债详情 | LIA-001、005 |
 | GET | `/accounts/{accountId}/liquidity-holds` | 查询冻结、在途和预留记录 | ACC-009 |
 | POST | `/accounts/{accountId}/liquidity-holds` | 新增流动性占用记录 | ACC-009 |
 | POST | `/accounts/{accountId}/liquidity-holds/{holdId}/revisions` | 关闭旧占用并创建修正版 | ACC-009 |
@@ -389,6 +392,27 @@ V1 用户状态 `User.status` 固定为 `ACTIVE`、`LOCKED`、`CLOSING`、`CLOSE
 基金账户使用 `FUND`，消费贷款使用 `CONSUMER_LOAN`。`OTHER` 只表示对应大类的其他账户，不得代替这两类。
 
 创建账户时服务端原子创建账户、创建者的 ACTIVE OWNER membership、`included=true/ratio=1.000000` 计入设置和所需账务科目。所有账户都通过 ACTIVE AccountMember 授权，创建者字段不构成权限捷径。
+
+负债详情是独立资源，不嵌入 `Account`，也不扩展 `POST /accounts`。负债账户尚无持久化详情行时，GET 仍返回 `200`：六个业务字段均为 `null`、`version=0`，并返回强 ETag `"0"`；持久化详情从 version 1 开始。空详情的 `"0"` 只表示稳定读取投影，首次创建必须使用 `PUT + If-None-Match: *`，不得使用 `If-Match: "0"`。V1 不提供 DELETE；清空字段使用 PATCH 显式提交 `null`。
+
+PUT 是完整替换，六个业务字段必须全部出现并可为 `null`。首次 PUT 只接受 `If-None-Match: *`，已有持久化行时返回 `409 VERSION_CONFLICT`；已有详情的完整替换只接受强 `If-Match: "<正整数>"`。PUT 必须在 `If-Match` 与 `If-None-Match` 中恰好提交一个，缺失、同时提交、重复、弱 ETag、未加引号、`*` 用作 If-Match、零、负数、非数字或溢出均返回 `400 VALIDATION_ERROR`。PATCH 至少提交一个字段，必须携带强 If-Match；尚无持久化行时返回 `404 RESOURCE_NOT_FOUND`。成功 GET/PUT/PATCH 返回详情自身的强 ETag，PUT/PATCH 不推进 Account.version，失败响应不带成功 ETag。
+
+字段契约为：
+
+| 字段 | 类型与语义 |
+| --- | --- |
+| interestRate | `null` 或 0～1 的十进制字符串，最多 8 位小数；单位是年化比例，`0.045` 表示 4.5% |
+| loanDate / dueDate | `null` 或 ISO date；同时存在时 `dueDate >= loanDate` |
+| billingDay / repaymentDay | `null` 或整数 1～31；短月取月末，仅用于提醒，不改变账务日期 |
+| currentAmountDue | `null` 或账户币种精度内的非负十进制字符串；仅提醒，不是余额事实 |
+
+字段矩阵固定为：CREDIT_CARD 允许 `interestRate/billingDay/repaymentDay/currentAmountDue`，禁止 `loanDate/dueDate`；LOAN、CONSUMER_LOAN 允许 `interestRate/loanDate/dueDate/repaymentDay/currentAmountDue`，禁止 `billingDay`；OTHER 允许全部字段。请求均禁止额外字段。类型、格式、范围错误返回 `400 VALIDATION_ERROR`；字段不适用、日期关系或提醒金额币种精度不符合账户事实返回 `422 BUSINESS_RULE_VIOLATION`。
+
+权限顺序固定为：未认证先返回 `401 AUTHENTICATION_REQUIRED`；随后按当前 ACTIVE membership 和账户类型判断可见性，无 ACTIVE membership、LEFT、REMOVED、已结束 membership、无关用户、仅 created_by 命中或非 LIABILITY 账户统一返回 `404 RESOURCE_NOT_FOUND`；OWNER/EDITOR 可写，VIEWER 写入返回 `403 PERMISSION_DENIED`。可见性和账户类型优先于条件头及业务字段，写权限优先于条件头；合法可见且可写后依次校验条件头格式、字段组合/日期/币种业务规则和当前持久版本。上述 400/403/404/409/422 均在创建新幂等记录前结束。
+
+PUT/PATCH 复用 §2.4 的统一幂等作用域与规范化请求 Hash：实际 accountId、类型化载荷以及实际提交的 If-Match 或 If-None-Match 前置进入 Hash；同 Key/同 Hash 精确重放首次结果，同 Key/异 Hash 返回 `409 IDEMPOTENCY_KEY_REUSED`。为兼顾安全重放与无条件覆盖禁止，服务端在可见性、权限、头格式和业务字段校验后先识别已有的同 Key/Hash 安全终态；命中时重放首次响应，不重新执行写入。没有可重放终态时，If-None-Match 与当前持久行存在性、If-Match 与当前详情版本必须先校验，冲突返回 `409 VERSION_CONFLICT` 且不创建幂等记录；通过后才取得统一幂等记录并执行写入。
+
+三条 operation 的错误体均为 Problem Details。GET 显式声明 `400/401/403/404/200`；PUT/PATCH 显式声明 `400/401/403/404/409/422` 以及成功响应。详情 version conflict 的 `resourceLocation` 固定为 `/api/v1/accounts/{accountId}/liability-details`，不得嵌入当前详情对象或泄漏不可见账户事实。
 
 余额响应：
 
@@ -466,6 +490,14 @@ AND (expires_at IS NULL OR expires_at > asOf)
 
 `postTransaction` 不接受 `OPENING`；期初余额只能通过 `createAccount` 原子创建。`LIABILITY_REPAYMENT` 是公共请求 discriminator，Ledger 与数据库固定持久化为内部 `TransactionType.REPAYMENT`，不增加第二种交易事实。请求联合、类型、金额正负和可由 schema 表达的 class/type 组合违反时返回 `400 VALIDATION_ERROR`；通过 schema 后的资源可见性、成员权限和业务状态仍分别遵循既有 `404`、`403`、`422` 语义。
 
+BE-LIA-002 的公共命令边界固定为：
+
+- 信用卡消费复用 `EXPENSE` 分支；`accountId` 指向 CREDIT_CARD 时，Ledger 借费用/分类科目、贷信用卡 PRIMARY，增加负债并计入支出。其他负债类型不能以该分支伪装信用卡消费。
+- 借款到账新增 `LIABILITY_BORROWING` 分支，字段为 `assetAccountId`、`liabilityAccountId`、`currency`、`amount` 和公共时间/备注。资产账户与负债账户必须可写、ACTIVE、币种等于请求币种；Ledger 借资产 PRIMARY、贷负债 PRIMARY，内部持久化为 `TransactionType.TRANSFER`，不计收入。
+- 负债还款使用 `LIABILITY_REPAYMENT` 并持久化为 `REPAYMENT`。本金借负债 PRIMARY、贷付款资产 PRIMARY且不计支出；利息和手续费分别借费用科目、贷付款资产 PRIMARY并计入支出。同币种内平衡并原子提交。
+
+上述命令均只接收语义字段，不接收 LedgerAccountId、LedgerEntry、借贷方向或系统科目 code。账户类型、可见性、币种一致性和费用分类组合属于业务校验，违反时按既有 404/403/422 语义处理。
+
 创建交易使用判别联合体：
 
 ```json
@@ -497,6 +529,20 @@ AND (expires_at IS NULL OR expires_at > asOf)
   "fee": { "amount": "0.00", "currency": "CNY" },
   "exchangeRate": null,
   "note": null
+}
+```
+
+借款到账：
+
+```json
+{
+  "type": "LIABILITY_BORROWING",
+  "businessAt": "2026-08-12T13:30:00+08:00",
+  "assetAccountId": "0191...",
+  "liabilityAccountId": "0192...",
+  "currency": "CNY",
+  "amount": "10000.00",
+  "note": "借款到账"
 }
 ```
 
@@ -808,6 +854,8 @@ Dashboard 顶层字段：
 | GET | `/recurring-occurrences` | 查询待确认发生项 | REC-002 |
 | POST | `/recurring-occurrences/{id}/confirm` | 确认并生成正式交易 | REC-002 |
 | POST | `/recurring-occurrences/{id}/skip` | 跳过本次 | REC-002 |
+
+`TransactionTemplate.command` 使用周期规则专用联合体，只允许 `INCOME`、`EXPENSE`、`TRANSFER`；不得接受公共交易创建支持的 `REFUND`、`LIABILITY_BORROWING`、`LIABILITY_REPAYMENT`，也不得重新开放已移除的 `OPENING`。
 
 确认发生项需要 `Idempotency-Key`，重复确认不能生成重复交易。
 

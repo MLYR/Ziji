@@ -69,7 +69,7 @@ try {
   assert.equal(schemas.OpeningTransactionRequest, undefined, '删除公共 OPENING 后不得保留无引用 schema')
   assert.equal(schemas.TransactionCommandBase.properties.type.enum.includes('OPENING'), false)
   assert.equal(schemas.ReviseTransactionRequest.properties.replacement.$ref, '#/components/schemas/PostTransactionRequest')
-  assert.equal(schemas.TransactionTemplate.properties.command.$ref, '#/components/schemas/PostTransactionRequest')
+  assert.equal(schemas.TransactionTemplate.properties.command.$ref, '#/components/schemas/RecurringTransactionCommand')
   assert.equal(schemas.LiabilityRepaymentTransactionRequest['x-domain-transaction-type'], 'REPAYMENT')
   assert.equal(postTransactionRequest.discriminator.mapping.LIABILITY_REPAYMENT, '#/components/schemas/LiabilityRepaymentTransactionRequest')
 

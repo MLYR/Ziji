@@ -270,6 +270,36 @@ export interface paths {
         patch: operations["updateAccount"];
         trace?: never;
     };
+    "/accounts/{accountId}/liability-details": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * 查询独立负债详情；无持久行时返回稳定空详情
+         * @description 当前 ACTIVE membership 的 OWNER/EDITOR/VIEWER 可读。无详情行时返回六个业务字段 null、version=0 和强 ETag "0"；无 ACTIVE membership、created_by-only 或非 LIABILITY 账户统一 404。
+         */
+        get: operations["getLiabilityDetails"];
+        /**
+         * 首次创建或完整替换独立负债详情
+         * @description 六个业务字段必须全部提交并可为 null。无持久行时必须只带 If-None-Match:*，已有行时必须只带强 If-Match；缺失或同时提交两个条件头返回 400。首次创建成功返回 201，完整替换返回 200；均只推进详情 version，不推进 Account.version。
+         */
+        put: operations["putLiabilityDetails"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * 局部修改独立负债详情
+         * @description 至少提交一个字段；null 清空字段。必须带强 If-Match 和 Idempotency-Key；尚无持久详情行时返回 404，不得以虚拟 version 0 创建。
+         */
+        patch: operations["patchLiabilityDetails"];
+        trace?: never;
+    };
     "/accounts/{accountId}/archive": {
         parameters: {
             query?: never;
@@ -1674,6 +1704,47 @@ export interface components {
             name?: string;
             institution?: string | null;
         };
+        /** @description 独立负债详情读取投影。无持久化行时六个业务字段均为 null、version=0、响应强 ETag 为 "0"；持久化详情 version 从 1 开始。 */
+        LiabilityDetail: {
+            /** Format: uuid */
+            accountId: string;
+            /** @description 年化比例，0.045 表示 4.5%。 */
+            interestRate: string | null;
+            /** Format: date */
+            loanDate: string | null;
+            /** Format: date */
+            dueDate: string | null;
+            /** @description 名义日；短月取月末，仅用于提醒。 */
+            billingDay: number | null;
+            /** @description 名义日；短月取月末，仅用于提醒。 */
+            repaymentDay: number | null;
+            /** @description 账户币种精度内的非负提醒金额，不是账务余额事实。 */
+            currentAmountDue: null | components["schemas"]["NonNegativePostedMoney"];
+            /** @description 0 仅表示无持久行的虚拟空详情；持久化版本从 1 开始。 */
+            version: number;
+        };
+        /** @description 完整替换负债详情；六个业务字段必须全部提交并可使用 null 清空。不适用 accountType 的字段返回 422。 */
+        PutLiabilityDetailRequest: {
+            interestRate: string | null;
+            /** Format: date */
+            loanDate: string | null;
+            /** Format: date */
+            dueDate: string | null;
+            billingDay: number | null;
+            repaymentDay: number | null;
+            currentAmountDue: null | components["schemas"]["NonNegativePostedMoney"];
+        };
+        /** @description 局部修改负债详情；显式 null 清空字段。不适用 accountType 的字段返回 422。 */
+        PatchLiabilityDetailRequest: {
+            interestRate?: string | null;
+            /** Format: date */
+            loanDate?: string | null;
+            /** Format: date */
+            dueDate?: string | null;
+            billingDay?: number | null;
+            repaymentDay?: number | null;
+            currentAmountDue?: null | components["schemas"]["NonNegativePostedMoney"];
+        };
         ArchiveAccountRequest: {
             reason: string;
         };
@@ -1728,7 +1799,9 @@ export interface components {
             /** @constant */
             currency: "JPY";
         };
-        PostTransactionRequest: components["schemas"]["IncomeTransactionRequest"] | components["schemas"]["ExpenseTransactionRequest"] | components["schemas"]["RefundTransactionRequest"] | components["schemas"]["TransferTransactionRequest"] | components["schemas"]["LiabilityRepaymentTransactionRequest"];
+        PostTransactionRequest: components["schemas"]["IncomeTransactionRequest"] | components["schemas"]["ExpenseTransactionRequest"] | components["schemas"]["RefundTransactionRequest"] | components["schemas"]["TransferTransactionRequest"] | components["schemas"]["LiabilityBorrowingTransactionRequest"] | components["schemas"]["LiabilityRepaymentTransactionRequest"];
+        /** @description 周期规则专用交易模板，仅允许收入、支出和转账，不复用公共交易创建的退款或负债命令。 */
+        RecurringTransactionCommand: components["schemas"]["IncomeTransactionRequest"] | components["schemas"]["ExpenseTransactionRequest"] | components["schemas"]["TransferTransactionRequest"];
         TransactionCommandBase: {
             /** Format: uuid */
             id?: string;
@@ -1759,6 +1832,7 @@ export interface components {
              */
             type: "INCOME";
         };
+        /** @description 资产账户支出时贷资产 PRIMARY；CREDIT_CARD 消费时借费用/分类科目、贷信用卡 PRIMARY。其他负债类型不得使用该分支伪装信用卡消费。 */
         ExpenseTransactionRequest: components["schemas"]["TransactionCommandBase"] & {
             /** @constant */
             type: "EXPENSE";
@@ -1814,6 +1888,29 @@ export interface components {
              * @enum {string}
              */
             type: "TRANSFER";
+        };
+        /** @description 借款到账独立语义命令；借收款资产 PRIMARY、贷负债 PRIMARY，不计收入。公共 discriminator 固定映射内部 TransactionType.TRANSFER。 */
+        LiabilityBorrowingTransactionRequest: {
+            /** Format: uuid */
+            id?: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "LIABILITY_BORROWING";
+            /** Format: date-time */
+            businessAt: string;
+            /** Format: date */
+            businessDate?: string;
+            timezone?: string | null;
+            note?: string | null;
+            tagIds?: string[];
+            /** Format: uuid */
+            assetAccountId: string;
+            /** Format: uuid */
+            liabilityAccountId: string;
+            currency: components["schemas"]["Currency"];
+            amount: components["schemas"]["PositivePostedMoney"];
         };
         /** @description 公共 discriminator LIABILITY_REPAYMENT 固定映射为领域和数据库 TransactionType.REPAYMENT。 */
         LiabilityRepaymentTransactionRequest: components["schemas"]["TransactionCommandBase"] & {
@@ -1978,7 +2075,7 @@ export interface components {
         TransactionTemplate: {
             /** @constant */
             schemaVersion: 1;
-            command: components["schemas"]["PostTransactionRequest"];
+            command: components["schemas"]["RecurringTransactionCommand"];
         };
         CreateRecurringRuleRequest: {
             /** Format: uuid */
@@ -2939,6 +3036,10 @@ export interface components {
             data: components["schemas"]["Account"];
             meta: components["schemas"]["ResponseMeta"];
         };
+        LiabilityDetailEnvelope: {
+            data: components["schemas"]["LiabilityDetail"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
         AccountCreatedEnvelope: {
             data: {
                 account: components["schemas"]["Account"];
@@ -3377,6 +3478,26 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["AccountListEnvelope"];
+            };
+        };
+        /** @description 首次持久化负债详情已创建；详情 version 从 1 开始且不推进 Account.version */
+        LiabilityDetailCreated: {
+            headers: {
+                ETag?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["LiabilityDetailEnvelope"];
+            };
+        };
+        /** @description 独立负债详情；无持久行时返回 version 0 和 ETag "0"，持久化详情返回正整数版本强 ETag */
+        LiabilityDetailOk: {
+            headers: {
+                ETag?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["LiabilityDetailEnvelope"];
             };
         };
         /** @description 账户账面及可用余额 */
@@ -3915,6 +4036,12 @@ export interface components {
         IfMatch: string;
         /** @description LiquidityHold 修订和释放使用强 ETag，必须是双引号包围的正整数，例如 "7"；缺失、重复、弱 ETag、*、未加双引号、非正整数或溢出（超出服务端整数范围）均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。 */
         LiquidityHoldIfMatch: string;
+        /** @description 负债详情 PATCH 使用强 ETag，必须是双引号包围的正整数。缺失、重复、弱 ETag、*、未加双引号、零、负数、非数字或溢出均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。虚拟空详情的 "0" 不能用于创建。 */
+        LiabilityDetailIfMatch: string;
+        /** @description 已有持久化负债详情的 PUT 完整替换必须携带此强 ETag；首次创建禁止携带。PUT 必须在此头和 If-None-Match 中恰好提交一个。 */
+        LiabilityDetailPutIfMatch: string;
+        /** @description 尚无持久化负债详情行时，首次 PUT 必须且只能提交 *；已有持久化行返回 409 VERSION_CONFLICT。PUT 必须在此头和 If-Match 中恰好提交一个。 */
+        LiabilityDetailIfNoneMatch: "*";
         CsrfToken: string;
         Limit: number;
         Cursor: string;
@@ -4349,6 +4476,85 @@ export interface operations {
             409: components["responses"]["Conflict"];
         };
     };
+    getLiabilityDetails: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["LiabilityDetailOk"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    putLiabilityDetails: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description 已有持久化负债详情的 PUT 完整替换必须携带此强 ETag；首次创建禁止携带。PUT 必须在此头和 If-None-Match 中恰好提交一个。 */
+                "If-Match"?: components["parameters"]["LiabilityDetailPutIfMatch"];
+                /** @description 尚无持久化负债详情行时，首次 PUT 必须且只能提交 *；已有持久化行返回 409 VERSION_CONFLICT。PUT 必须在此头和 If-Match 中恰好提交一个。 */
+                "If-None-Match"?: components["parameters"]["LiabilityDetailIfNoneMatch"];
+            };
+            path: {
+                accountId: components["parameters"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutLiabilityDetailRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["LiabilityDetailOk"];
+            201: components["responses"]["LiabilityDetailCreated"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["BusinessRuleViolation"];
+        };
+    };
+    patchLiabilityDetails: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description 负债详情 PATCH 使用强 ETag，必须是双引号包围的正整数。缺失、重复、弱 ETag、*、未加双引号、零、负数、非数字或溢出均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。虚拟空详情的 "0" 不能用于创建。 */
+                "If-Match": components["parameters"]["LiabilityDetailIfMatch"];
+            };
+            path: {
+                accountId: components["parameters"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/merge-patch+json": components["schemas"]["PatchLiabilityDetailRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["LiabilityDetailOk"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["BusinessRuleViolation"];
+        };
+    };
     archiveAccount: {
         parameters: {
             query?: never;
@@ -4568,6 +4774,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["BusinessRuleViolation"];
         };
