@@ -1,9 +1,12 @@
 package app.ziji.ledger.infrastructure;
 
+import java.security.SecureRandom;
 import java.time.Clock;
+import java.util.Base64;
 
 import app.ziji.account.application.AccountPostingReferencePort;
 import app.ziji.accountmember.application.AccountPostingAccessPort;
+import app.ziji.accountmember.application.AccountMembershipReadPort;
 import app.ziji.audit.application.AuditLogWritePort;
 import app.ziji.category.application.CategoryStore;
 import app.ziji.ledger.application.LedgerAccountStore;
@@ -12,9 +15,13 @@ import app.ziji.ledger.application.LedgerCommandValidationException;
 import app.ziji.ledger.application.LedgerOutbox;
 import app.ziji.ledger.application.LedgerRequestIdProvider;
 import app.ziji.ledger.application.LedgerTransactionStore;
+import app.ziji.ledger.application.TransactionCursorCodec;
+import app.ziji.ledger.application.TransactionQueryReadPort;
+import app.ziji.ledger.application.TransactionQueryService;
 import app.ziji.ledger.domain.PostingService;
 import app.ziji.shared.application.TransactionRunner;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -64,5 +71,25 @@ class LedgerInfrastructureConfiguration {
 			}
 			return requestId;
 		};
+	}
+
+	@Bean
+	TransactionQueryService transactionQueryService(
+		TransactionQueryReadPort transactions,
+		AccountMembershipReadPort memberships,
+		CategoryStore categories,
+		TransactionCursorCodec cursors) {
+		return new TransactionQueryService(transactions, memberships, categories, cursors);
+	}
+
+	@Bean
+	TransactionCursorCodec transactionCursorCodec(
+		@Value("${ziji.transaction.cursor-key-base64:${ziji.account.cursor-key-base64}}") String cursorKeyBase64) {
+		try {
+			// 交易游标使用独立领域 AAD；未单独配置时仅复用现有 AES-256 密钥材料，避免新增启动硬依赖。
+			return new AesGcmTransactionCursorCodec(Base64.getDecoder().decode(cursorKeyBase64), new SecureRandom());
+		} catch (IllegalArgumentException exception) {
+			throw new IllegalStateException("交易游标密钥配置无效。", exception);
+		}
 	}
 }

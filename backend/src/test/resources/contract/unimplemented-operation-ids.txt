@@ -3,9 +3,7 @@ createAccount
 archiveAccount
 getAccountBalance
 listAccountBalanceHistory
-listTransactions
 postTransaction
-getTransaction
 reviseTransaction
 reverseTransaction
 createBalanceAdjustment

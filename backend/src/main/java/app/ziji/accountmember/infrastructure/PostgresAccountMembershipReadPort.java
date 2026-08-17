@@ -15,18 +15,26 @@ import org.springframework.stereotype.Repository;
 public class PostgresAccountMembershipReadPort implements AccountMembershipReadPort, AccountRecipientReadPort {
 
 	private static final String LIST_ACTIVE_SQL = """
+		/* 当前 ACTIVE 还必须处于 membership 周期内，避免 status 未同步时泄漏已结束成员事实。 */
 		SELECT m.account_id, m.role, s.ratio
 		FROM account_members m
 		JOIN account_inclusion_settings s ON s.membership_id = m.id
 		WHERE m.user_id = ? AND m.status = 'ACTIVE' AND s.valid_to IS NULL
+		  AND m.joined_at <= CURRENT_TIMESTAMP
+		  AND (m.ended_at IS NULL OR m.ended_at > CURRENT_TIMESTAMP)
+		  AND s.valid_from <= CURRENT_TIMESTAMP
 		ORDER BY m.account_id
 		""";
 
 	private static final String FIND_ACTIVE_SQL = """
+		/* 详情读取与列表使用同一当前周期边界，不能仅依赖 status='ACTIVE'。 */
 		SELECT m.role, s.ratio
 		FROM account_members m
 		JOIN account_inclusion_settings s ON s.membership_id = m.id
 		WHERE m.user_id = ? AND m.account_id = ? AND m.status = 'ACTIVE' AND s.valid_to IS NULL
+		  AND m.joined_at <= CURRENT_TIMESTAMP
+		  AND (m.ended_at IS NULL OR m.ended_at > CURRENT_TIMESTAMP)
+		  AND s.valid_from <= CURRENT_TIMESTAMP
 		""";
 
 	private final JdbcTemplate jdbc;
