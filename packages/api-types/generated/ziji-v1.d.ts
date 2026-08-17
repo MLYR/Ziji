@@ -403,7 +403,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 查询流水 */
+        /**
+         * 查询流水
+         * @description 按账户、类型、日期和分类查询当前用户 ACTIVE membership 可见的流水。结果固定按 businessDate DESC、transactionId DESC 排序；dateFrom/dateTo 包含边界。显式不可见 accountId 返回 404 RESOURCE_NOT_FOUND；不带 accountId 时不得泄漏其他用户事实。cursor 绑定当前 userId、API 主版本、全部筛选条件和排序定义。
+         */
         get: operations["listTransactions"];
         put?: never;
         /** 创建并确认交易 */
@@ -423,7 +426,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** 查询交易、分录和版本关系 */
+        /**
+         * 查询交易、分录和版本关系
+         * @description 仅返回当前用户 ACTIVE membership 可见的交易、分录和版本关系。不可见交易统一返回 404 RESOURCE_NOT_FOUND；非法 transactionId 返回 400 VALIDATION_ERROR。
+         */
         get: operations["getTransaction"];
         put?: never;
         post?: never;
@@ -1546,6 +1552,12 @@ export interface components {
         PageMeta: {
             requestId: string;
             nextCursor?: string | null;
+            hasMore: boolean;
+        };
+        /** @description listTransactions 专用分页元数据；不改变其他列表响应的 PageMeta 必填字段。 */
+        TransactionPageMeta: {
+            requestId: string;
+            nextCursor: string | null;
             hasMore: boolean;
         };
         ResponseMeta: {
@@ -2958,7 +2970,7 @@ export interface components {
         };
         TransactionListEnvelope: {
             data: components["schemas"]["Transaction"][];
-            meta: components["schemas"]["PageMeta"];
+            meta: components["schemas"]["TransactionPageMeta"];
         };
         CategoryEnvelope: {
             data: components["schemas"]["Category"];
@@ -3428,7 +3440,7 @@ export interface components {
                 "application/json": components["schemas"]["TransactionEnvelope"];
             };
         };
-        /** @description 交易列表 */
+        /** @description 当前用户 ACTIVE membership 可见的交易列表，固定按 businessDate DESC、transactionId DESC 返回不透明 keyset 分页结果 */
         TransactionListOk: {
             headers: {
                 [name: string]: unknown;
@@ -3900,6 +3912,8 @@ export interface components {
         CsrfToken: string;
         Limit: number;
         Cursor: string;
+        /** @description listTransactions 生成的不透明 keyset 游标；绑定当前 userId、API 主版本、全部筛选条件和 businessDate DESC/transactionId DESC 排序定义。客户端不得解析；篡改、跨用户复用、边界错误或与筛选/排序不匹配均返回 400 VALIDATION_ERROR。 */
+        TransactionCursor: string;
         DateFrom: string;
         DateTo: string;
         AsOf: string;
@@ -3911,6 +3925,10 @@ export interface components {
         /** @description scopeType=INSTRUMENT 时必填，PORTFOLIO 时禁止。 */
         InstrumentIdQuery: string;
         AccountIdQuery: string;
+        /** @description 复用领域 TransactionType 与 V003 的冻结值。 */
+        TransactionTypeQuery: "OPENING" | "INCOME" | "EXPENSE" | "REFUND" | "TRANSFER" | "FX_TRANSFER" | "ADJUSTMENT" | "INVESTMENT" | "REPAYMENT" | "INTEREST" | "REVERSAL";
+        /** @description categories.id 的分类 UUID；既有分类类型仍为 INCOME/EXPENSE，分类可见性按当前 ACTIVE membership 和账户范围校验。 */
+        TransactionCategoryIdQuery: string;
         BaseCurrency: components["schemas"]["Currency"];
         QuoteCurrency: components["schemas"]["Currency"];
         Granularity: "DAY" | "WEEK" | "MONTH" | "YEAR";
@@ -4501,10 +4519,15 @@ export interface operations {
         parameters: {
             query?: {
                 accountId?: components["parameters"]["AccountIdQuery"];
+                /** @description 复用领域 TransactionType 与 V003 的冻结值。 */
+                type?: components["parameters"]["TransactionTypeQuery"];
                 dateFrom?: components["parameters"]["DateFrom"];
                 dateTo?: components["parameters"]["DateTo"];
+                /** @description categories.id 的分类 UUID；既有分类类型仍为 INCOME/EXPENSE，分类可见性按当前 ACTIVE membership 和账户范围校验。 */
+                categoryId?: components["parameters"]["TransactionCategoryIdQuery"];
                 limit?: components["parameters"]["Limit"];
-                cursor?: components["parameters"]["Cursor"];
+                /** @description listTransactions 生成的不透明 keyset 游标；绑定当前 userId、API 主版本、全部筛选条件和 businessDate DESC/transactionId DESC 排序定义。客户端不得解析；篡改、跨用户复用、边界错误或与筛选/排序不匹配均返回 400 VALIDATION_ERROR。 */
+                cursor?: components["parameters"]["TransactionCursor"];
             };
             header?: never;
             path?: never;
@@ -4513,8 +4536,10 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["TransactionListOk"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     postTransaction: {
@@ -4553,6 +4578,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["TransactionOk"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

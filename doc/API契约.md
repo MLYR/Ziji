@@ -153,6 +153,17 @@ ETag: "7"
 
 `GET /accounts/{accountId}/liquidity-holds` 返回完整修订历史，而不是每条根链只返回当前版本；结果包含 `PENDING`、`ACTIVE`、`RELEASED`、`SUPERSEDED` 和 `EXPIRED`。固定排序为 `created_at DESC, id DESC`。cursor 是服务端生成并认证的不透明 keyset 游标，绑定实际 `accountId`、全部过滤条件、排序定义和 API 主版本；篡改、边界错误、排序不匹配或条件不匹配均返回 `400 VALIDATION_ERROR`，错误内容不得包含 SQL、表名或资源内部信息。
 
+流水列表 `GET /transactions` 固定使用以下语义：
+
+- 查询参数为 `accountId`、`type`、`dateFrom`、`dateTo`、`categoryId`、`limit` 和 `cursor`；除 `limit`/`cursor` 外均为可选筛选。
+- `type` 只能取 V1 `TransactionType` 已冻结值：`OPENING`、`INCOME`、`EXPENSE`、`REFUND`、`TRANSFER`、`FX_TRANSFER`、`ADJUSTMENT`、`INVESTMENT`、`REPAYMENT`、`INTEREST`、`REVERSAL`。`categoryId` 只能引用 `categories.id`，其分类类型仍以既有 `INCOME`/`EXPENSE` 事实为准，不新增第二套分类枚举。
+- `dateFrom` 与 `dateTo` 均为用户提交的 ISO 日期，并且边界包含在内；缺失表示不限制该侧边界，`dateFrom > dateTo` 返回 `400 VALIDATION_ERROR`。
+- `limit` 默认 `50`，合法范围为 `1～200`；非法、重复或超范围值返回 `400 VALIDATION_ERROR`。
+- 结果固定按 `businessDate DESC, transactionId DESC` 排序。该键以 `ledger_entries(ledger_account_id, business_date, transaction_id)` 支持带 `accountId` 的 keyset 查询；不带 `accountId` 时先限定当前用户可见账户，再以同一排序键合并结果，不改变契约语义。
+- `cursor` 是服务端生成的不透明 keyset 游标，绑定当前认证 `userId`、API 主版本、`listTransactions`、全部筛选条件和排序定义；客户端不得解析或修改。篡改、跨用户复用、与筛选/排序不匹配、非法边界或无法验证的游标均返回 `400 VALIDATION_ERROR`，且不得回显游标内容。
+
+流水可见性固定为当前用户在账户上的 `ACTIVE` membership；`LEFT`、`REMOVED`、已结束 membership 和无关用户均不可见。显式指定不可见 `accountId` 时列表返回 `404 RESOURCE_NOT_FOUND`；不指定账户时只返回当前用户可见事实，不泄漏其他账户。`GET /transactions/{transactionId}` 对不可见交易同样统一返回 `404 RESOURCE_NOT_FOUND`。已认证但被对象策略拒绝时返回 `403 PERMISSION_DENIED`；未认证返回 `401 AUTHENTICATION_REQUIRED`。列表的非法 UUID、日期、类型、分类、limit 或 cursor，以及详情的非法 `transactionId`，均返回 `400 VALIDATION_ERROR`；成功分别返回 `200` 的 `TransactionEnvelope` 或 `TransactionListEnvelope`，错误体均为 `Problem`。交易详情响应包含资源版本和强 ETag；列表响应使用交易专用 `TransactionPageMeta`（不改变其他列表的全局 `PageMeta`），不承诺资源 ETag。
+
 示例：
 
 ```text
@@ -436,6 +447,8 @@ AND (expires_at IS NULL OR expires_at > asOf)
 | POST | `/transactions/{transactionId}/revisions` | 冲正旧版本并创建新版本 | LED-009 |
 | POST | `/transactions/{transactionId}/reversal` | 作废并冲正交易 | LED-010 |
 | POST | `/accounts/{accountId}/balance-adjustments` | 创建余额调整 | ACC-005 |
+
+`listTransactions` 与 `getTransaction` 的 `operationId` 固定不变。列表筛选、排序、游标绑定和 ACTIVE membership 可见性遵循 §2.6；两条读取接口的 `400/401/403/404/200` 响应分别对应 `Problem` 或相应的交易 envelope。交易类型筛选只复用领域 `TransactionType`，分类筛选只接受分类 UUID；客户端不得提交内部 `LedgerAccount`、`LedgerEntry` 或系统科目标识。
 
 创建交易使用判别联合体：
 

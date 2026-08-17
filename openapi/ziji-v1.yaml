@@ -421,12 +421,15 @@ paths:
       tags: [Ledger]
       operationId: listTransactions
       summary: 查询流水
-      x-requirement-ids: [LED-001, LED-011]
-      parameters: [{ $ref: '#/components/parameters/AccountIdQuery' }, { $ref: '#/components/parameters/DateFrom' }, { $ref: '#/components/parameters/DateTo' }, { $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      description: 按账户、类型、日期和分类查询当前用户 ACTIVE membership 可见的流水。结果固定按 businessDate DESC、transactionId DESC 排序；dateFrom/dateTo 包含边界。显式不可见 accountId 返回 404 RESOURCE_NOT_FOUND；不带 accountId 时不得泄漏其他用户事实。cursor 绑定当前 userId、API 主版本、全部筛选条件和排序定义。
+      x-requirement-ids: [LED-001, LED-011, SEC-003]
+      parameters: [{ $ref: '#/components/parameters/AccountIdQuery' }, { $ref: '#/components/parameters/TransactionTypeQuery' }, { $ref: '#/components/parameters/DateFrom' }, { $ref: '#/components/parameters/DateTo' }, { $ref: '#/components/parameters/TransactionCategoryIdQuery' }, { $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/TransactionCursor' }]
       responses:
         '200': { $ref: '#/components/responses/TransactionListOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
     post:
       tags: [Ledger]
       operationId: postTransaction
@@ -450,9 +453,11 @@ paths:
       tags: [Ledger]
       operationId: getTransaction
       summary: 查询交易、分录和版本关系
-      x-requirement-ids: [LED-001, LED-011]
+      description: 仅返回当前用户 ACTIVE membership 可见的交易、分录和版本关系。不可见交易统一返回 404 RESOURCE_NOT_FOUND；非法 transactionId 返回 400 VALIDATION_ERROR。
+      x-requirement-ids: [LED-001, LED-011, SEC-003]
       responses:
         '200': { $ref: '#/components/responses/TransactionOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1461,6 +1466,12 @@ components:
       in: query
       required: false
       schema: { type: string, minLength: 1, maxLength: 500 }
+    TransactionCursor:
+      name: cursor
+      in: query
+      required: false
+      description: listTransactions 生成的不透明 keyset 游标；绑定当前 userId、API 主版本、全部筛选条件和 businessDate DESC/transactionId DESC 排序定义。客户端不得解析；篡改、跨用户复用、边界错误或与筛选/排序不匹配均返回 400 VALIDATION_ERROR。
+      schema: { type: string, minLength: 1, maxLength: 500 }
     DateFrom:
       name: dateFrom
       in: query
@@ -1503,6 +1514,18 @@ components:
       name: accountId
       in: query
       required: false
+      schema: { type: string, format: uuid }
+    TransactionTypeQuery:
+      name: type
+      in: query
+      required: false
+      description: 复用领域 TransactionType 与 V003 的冻结值。
+      schema: { type: string, enum: [OPENING, INCOME, EXPENSE, REFUND, TRANSFER, FX_TRANSFER, ADJUSTMENT, INVESTMENT, REPAYMENT, INTEREST, REVERSAL] }
+    TransactionCategoryIdQuery:
+      name: categoryId
+      in: query
+      required: false
+      description: categories.id 的分类 UUID；既有分类类型仍为 INCOME/EXPENSE，分类可见性按当前 ACTIVE membership 和账户范围校验。
       schema: { type: string, format: uuid }
     BaseCurrency:
       name: baseCurrency
@@ -1594,6 +1617,15 @@ components:
       type: object
       additionalProperties: false
       required: [requestId, hasMore]
+      properties:
+        requestId: { type: string, minLength: 1, maxLength: 100 }
+        nextCursor: { type: [string, 'null'], maxLength: 500 }
+        hasMore: { type: boolean }
+    TransactionPageMeta:
+      type: object
+      additionalProperties: false
+      required: [requestId, nextCursor, hasMore]
+      description: listTransactions 专用分页元数据；不改变其他列表响应的 PageMeta 必填字段。
       properties:
         requestId: { type: string, minLength: 1, maxLength: 100 }
         nextCursor: { type: [string, 'null'], maxLength: 500 }
@@ -3153,7 +3185,7 @@ components:
       type: object
       additionalProperties: false
       required: [data, meta]
-      properties: { data: { type: array, items: { $ref: '#/components/schemas/Transaction' } }, meta: { $ref: '#/components/schemas/PageMeta' } }
+      properties: { data: { type: array, items: { $ref: '#/components/schemas/Transaction' } }, meta: { $ref: '#/components/schemas/TransactionPageMeta' } }
     CategoryEnvelope:
       type: object
       additionalProperties: false
@@ -3437,8 +3469,8 @@ components:
     LiquidityHoldOk: { description: LiquidityHold 已释放；响应包含完整审计字段和新的强 ETag, headers: { ETag: { schema: { type: string, pattern: '^"[1-9][0-9]*"$' } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LiquidityHoldEnvelope' } } } }
     LiquidityHoldListOk: { description: 完整 LiquidityHold 修订历史，按 created_at DESC、id DESC 返回并使用不透明 keyset cursor, content: { application/json: { schema: { $ref: '#/components/schemas/LiquidityHoldListEnvelope' } } } }
     TransactionCreated: { description: 交易和不可变分录已创建, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/TransactionEnvelope' } } } }
-    TransactionOk: { description: 交易、分录和修订链, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/TransactionEnvelope' } } } }
-    TransactionListOk: { description: 交易列表, content: { application/json: { schema: { $ref: '#/components/schemas/TransactionListEnvelope' } } } }
+    TransactionOk: { description: 交易、分录和修订链, headers: { ETag: { schema: { type: string, pattern: '^"[1-9][0-9]*"$' } } }, content: { application/json: { schema: { $ref: '#/components/schemas/TransactionEnvelope' } } } }
+    TransactionListOk: { description: 当前用户 ACTIVE membership 可见的交易列表，固定按 businessDate DESC、transactionId DESC 返回不透明 keyset 分页结果, content: { application/json: { schema: { $ref: '#/components/schemas/TransactionListEnvelope' } } } }
     CategoryCreated: { description: 分类已创建, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/CategoryEnvelope' } } } }
     CategoryOk: { description: 分类, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/CategoryEnvelope' } } } }
     CategoryListOk: { description: 分类列表, content: { application/json: { schema: { $ref: '#/components/schemas/CategoryListEnvelope' } } } }
