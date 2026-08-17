@@ -2,6 +2,7 @@ package app.ziji.shared.application;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -39,6 +40,20 @@ public class UnifiedIdempotencyService {
 		IdempotencyWork<T> work) {
 		return execute(IdempotencyRequest.authenticated(
 			userId, apiMajorVersion, operationId, idempotencyKey, requestHash), work);
+	}
+
+	/**
+	 * 只读识别同作用域已有状态；缺失或租约已可接管时返回 empty，实际 acquire 算法保持不变。
+	 */
+	public Optional<IdempotencyExecution<Void>> inspectAuthenticated(
+		UUID userId,
+		int apiMajorVersion,
+		String operationId,
+		String idempotencyKey,
+		String requestHash) {
+		IdempotencyRequest request = IdempotencyRequest.authenticated(
+			userId, apiMajorVersion, operationId, idempotencyKey, requestHash);
+		return recordStore.inspect(request, clock.instant()).map(UnifiedIdempotencyService::inspectionResult);
 	}
 
 	/** 公开 registerUser/resetPassword 使用独立 HMAC 主体，绝不以伪造 userId 回退。 */
@@ -99,5 +114,19 @@ public class UnifiedIdempotencyService {
 		}
 		recordStore.complete(acquired.recordId(), result.response(), clock.instant());
 		return IdempotencyExecution.executed(result.value(), result.response());
+	}
+
+	private static IdempotencyExecution<Void> inspectionResult(IdempotencyRecordStore.Acquisition acquisition) {
+		if (acquisition instanceof IdempotencyRecordStore.Acquisition.Replay replay) {
+			return IdempotencyExecution.replayed(replay.response());
+		}
+		if (acquisition instanceof IdempotencyRecordStore.Acquisition.KeyReused) {
+			return IdempotencyExecution.keyReused();
+		}
+		if (acquisition instanceof IdempotencyRecordStore.Acquisition.InProgress) {
+			return IdempotencyExecution.inProgress();
+		}
+		// 只读入口绝不能返回 Acquired；未知或不安全历史统一 fail closed。
+		return IdempotencyExecution.safeReplayUnavailable();
 	}
 }

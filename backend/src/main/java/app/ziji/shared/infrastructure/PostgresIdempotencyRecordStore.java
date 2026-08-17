@@ -7,6 +7,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import app.ziji.shared.application.IdempotencyInfrastructureException;
@@ -35,6 +36,7 @@ public class PostgresIdempotencyRecordStore implements IdempotencyRecordStore {
 		WHERE user_id = ? AND api_major_version = ? AND operation_id = ? AND idempotency_key = ?
 		FOR UPDATE
 		""";
+	private static final String SELECT_AUTHENTICATED_SQL = SELECT_AUTHENTICATED_FOR_UPDATE_SQL.replace("\nFOR UPDATE\n", "\n");
 
 	private static final String SELECT_ANONYMOUS_ONE_FOR_UPDATE_SQL = """
 		SELECT id, request_hash, status, response_status, response_reference::text AS response_reference_json,
@@ -44,6 +46,7 @@ public class PostgresIdempotencyRecordStore implements IdempotencyRecordStore {
 			AND api_major_version = ? AND operation_id = ? AND idempotency_key = ?
 		FOR UPDATE
 		""";
+	private static final String SELECT_ANONYMOUS_ONE_SQL = SELECT_ANONYMOUS_ONE_FOR_UPDATE_SQL.replace("\nFOR UPDATE\n", "\n");
 
 	private static final String SELECT_ANONYMOUS_TWO_FOR_UPDATE_SQL = """
 		SELECT id, request_hash, status, response_status, response_reference::text AS response_reference_json,
@@ -55,6 +58,7 @@ public class PostgresIdempotencyRecordStore implements IdempotencyRecordStore {
 		ORDER BY anonymous_subject_hash_key_version, id
 		FOR UPDATE
 		""";
+	private static final String SELECT_ANONYMOUS_TWO_SQL = SELECT_ANONYMOUS_TWO_FOR_UPDATE_SQL.replace("\nFOR UPDATE\n", "\n");
 
 	private static final String INSERT_AUTHENTICATED_PROCESSING_SQL = """
 		INSERT INTO idempotency_records (
@@ -133,10 +137,51 @@ public class PostgresIdempotencyRecordStore implements IdempotencyRecordStore {
 	}
 
 	@Override
+	public Optional<Acquisition> inspect(IdempotencyRequest request, Instant now) {
+		try {
+			List<StoredRecord> existing = find(request, false);
+			if (existing.size() > 1) {
+				return Optional.of(new Acquisition.SafeReplayUnavailable());
+			}
+			if (existing.isEmpty()) {
+				return Optional.empty();
+			}
+			StoredRecord record = existing.getFirst();
+			if (!request.requestHash().equals(record.requestHash())) {
+				return Optional.of(new Acquisition.KeyReused());
+			}
+			if ("PROCESSING".equals(record.status())) {
+				if (record.processingLeaseExpiresAt() == null) {
+					return Optional.of(new Acquisition.SafeReplayUnavailable());
+				}
+				return now.isBefore(record.processingLeaseExpiresAt())
+					? Optional.of(new Acquisition.InProgress()) : Optional.empty();
+			}
+			if ("FAILED_RETRYABLE".equals(record.status())) {
+				if (record.retryAfterAt() == null) {
+					return Optional.of(new Acquisition.SafeReplayUnavailable());
+				}
+				return now.isBefore(record.retryAfterAt())
+					? Optional.of(new Acquisition.InProgress()) : Optional.empty();
+			}
+			if ("SUCCEEDED".equals(record.status()) || "FAILED_FINAL".equals(record.status())) {
+				IdempotencyResponse response = deserialize(record);
+				return Optional.of(response == null
+					? new Acquisition.SafeReplayUnavailable() : new Acquisition.Replay(response));
+			}
+			return Optional.of(new Acquisition.SafeReplayUnavailable());
+		} catch (org.jooq.exception.DataAccessException exception) {
+			throw translate(exception);
+		} catch (org.springframework.dao.DataAccessException exception) {
+			throw translate(exception);
+		}
+	}
+
+	@Override
 	public Acquisition acquire(IdempotencyRequest request, Instant now) {
 		try {
 			setLockTimeout();
-			List<StoredRecord> existing = findForUpdate(request);
+			List<StoredRecord> existing = find(request, true);
 			if (existing.size() > 1) {
 				// 旧/新配置并发写入会产生两个版本行；不猜测哪个结果可重放或重执行业务。
 				return new Acquisition.SafeReplayUnavailable();
@@ -149,7 +194,7 @@ public class PostgresIdempotencyRecordStore implements IdempotencyRecordStore {
 				return new Acquisition.Acquired(id);
 			}
 			// ON CONFLICT 可能刚等待了另一实例提交；重新 FOR UPDATE 后只读取其终态，不并行执行业务。
-			existing = findForUpdate(request);
+			existing = find(request, true);
 			if (existing.size() != 1) {
 				return new Acquisition.SafeReplayUnavailable();
 			}
@@ -232,22 +277,22 @@ public class PostgresIdempotencyRecordStore implements IdempotencyRecordStore {
 		return new Acquisition.Acquired(recordId);
 	}
 
-	private List<StoredRecord> findForUpdate(IdempotencyRequest request) {
+	private List<StoredRecord> find(IdempotencyRequest request, boolean forUpdate) {
 		if (request.subject() instanceof IdempotencySubject.Authenticated authenticated) {
-			return records(dsl.resultQuery(SELECT_AUTHENTICATED_FOR_UPDATE_SQL,
+			return records(dsl.resultQuery(forUpdate ? SELECT_AUTHENTICATED_FOR_UPDATE_SQL : SELECT_AUTHENTICATED_SQL,
 				authenticated.userId(), request.apiMajorVersion(), request.operationId(), request.idempotencyKey()).fetch());
 		}
 		IdempotencySubject.Anonymous anonymous = (IdempotencySubject.Anonymous) request.subject();
 		List<IdempotencySubject.AnonymousDigest> candidates = anonymous.lookupCandidatesInVersionOrder();
 		if (candidates.size() == 1) {
 			IdempotencySubject.AnonymousDigest only = candidates.getFirst();
-			return records(dsl.resultQuery(SELECT_ANONYMOUS_ONE_FOR_UPDATE_SQL,
+			return records(dsl.resultQuery(forUpdate ? SELECT_ANONYMOUS_ONE_FOR_UPDATE_SQL : SELECT_ANONYMOUS_ONE_SQL,
 				only.valueCopy(), only.keyVersion(), request.apiMajorVersion(), request.operationId(), request.idempotencyKey())
 				.fetch());
 		}
 		IdempotencySubject.AnonymousDigest first = candidates.get(0);
 		IdempotencySubject.AnonymousDigest second = candidates.get(1);
-		return records(dsl.resultQuery(SELECT_ANONYMOUS_TWO_FOR_UPDATE_SQL,
+		return records(dsl.resultQuery(forUpdate ? SELECT_ANONYMOUS_TWO_FOR_UPDATE_SQL : SELECT_ANONYMOUS_TWO_SQL,
 			request.apiMajorVersion(), request.operationId(), request.idempotencyKey(),
 			first.valueCopy(), first.keyVersion(), second.valueCopy(), second.keyVersion()).fetch());
 	}

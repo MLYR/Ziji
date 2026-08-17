@@ -3,6 +3,7 @@ package app.ziji.shared.application;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
@@ -62,6 +63,23 @@ class UnifiedIdempotencyServiceTests {
 		assertEquals("\"7\"", conflict.currentEtag());
 		assertEquals("/api/v1/transactions/4f6ba6c8-0a3c-4bd2-9313-d11850b3f73f", conflict.resourceLocation());
 		assertEquals(0, store.completes);
+	}
+
+	@Test
+	void readOnlyInspectionNeverStartsATransactionOrAcquiresARecord() {
+		FakeTransactionRunner transactions = new FakeTransactionRunner();
+		FakeStore store = new FakeStore(new IdempotencyRecordStore.Acquisition.Acquired(UUID.randomUUID()));
+		store.inspection = Optional.of(new IdempotencyRecordStore.Acquisition.Replay(
+			IdempotencyResponse.succeededEmpty(200)));
+		UnifiedIdempotencyService service = service(transactions, store);
+
+		Optional<IdempotencyExecution<Void>> result = service.inspectAuthenticated(
+			UUID.randomUUID(), 1, "putLiabilityDetails", key(), hash());
+
+		assertEquals(IdempotencyExecution.Status.REPLAYED, result.orElseThrow().status());
+		assertEquals(1, store.inspections);
+		assertEquals(0, store.acquires);
+		assertEquals(0, transactions.calls);
 	}
 
 	@Test
@@ -157,9 +175,17 @@ class UnifiedIdempotencyServiceTests {
 		private int cleanupCalls;
 		private int deleted;
 		private boolean lockTimeout;
+		private int inspections;
+		private Optional<Acquisition> inspection = Optional.empty();
 
 		private FakeStore(Acquisition acquisition) {
 			this.acquisition = acquisition;
+		}
+
+		@Override
+		public Optional<Acquisition> inspect(IdempotencyRequest request, Instant now) {
+			inspections++;
+			return inspection;
 		}
 
 		@Override

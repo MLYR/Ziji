@@ -60,10 +60,13 @@ class SecurityConfiguration {
 				"/api/v1/auth/password-reset-challenges", "/api/v1/auth/password-reset").permitAll()
 			.requestMatchers(HttpMethod.GET, "/api/v1/users/me", "/api/v1/users/me/sessions").authenticated()
 			.requestMatchers(HttpMethod.GET,
-				"/api/v1/accounts", "/api/v1/accounts/*", "/api/v1/accounts/*/liquidity-holds",
+				"/api/v1/accounts", "/api/v1/accounts/*", "/api/v1/accounts/*/liability-details",
+				"/api/v1/accounts/*/liquidity-holds",
 				"/api/v1/sync/changes", "/api/v1/transactions", "/api/v1/transactions/*").authenticated()
 			.requestMatchers(HttpMethod.PATCH, "/api/v1/users/me").authenticated()
-			.requestMatchers(HttpMethod.PATCH, "/api/v1/accounts/*").authenticated()
+			.requestMatchers(HttpMethod.PATCH,
+				"/api/v1/accounts/*", "/api/v1/accounts/*/liability-details").authenticated()
+			.requestMatchers(HttpMethod.PUT, "/api/v1/accounts/*/liability-details").authenticated()
 			.requestMatchers(HttpMethod.POST, "/api/v1/accounts").authenticated()
 			.requestMatchers(HttpMethod.POST, "/api/v1/users/me/password-change").authenticated()
 			.requestMatchers(HttpMethod.POST,
@@ -121,10 +124,15 @@ class SecurityConfiguration {
 				|| "/api/v1/transactions".equals(path)
 				|| path.matches("/api/v1/transactions/[^/]+")
 				|| path.matches("/api/v1/accounts/[^/]+")
+				|| path.matches("/api/v1/accounts/[^/]+/liability-details")
 				|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds");
 		}
 		if ("PATCH".equals(method)) {
-			return "/api/v1/users/me".equals(path) || path.matches("/api/v1/accounts/[^/]+");
+			return "/api/v1/users/me".equals(path) || path.matches("/api/v1/accounts/[^/]+")
+				|| path.matches("/api/v1/accounts/[^/]+/liability-details");
+		}
+		if ("PUT".equals(method)) {
+			return path.matches("/api/v1/accounts/[^/]+/liability-details");
 		}
 		if ("POST".equals(method)) {
 			return "/api/v1/accounts".equals(path)

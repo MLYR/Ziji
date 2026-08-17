@@ -1,10 +1,18 @@
 package app.ziji.shared.application;
 
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 
 /** PostgreSQL 幂等记录端口；实现必须以原子 UPSERT 和 FOR UPDATE 而不是进程内锁保证并发安全。 */
 public interface IdempotencyRecordStore {
+
+	/**
+	 * 只读识别已有幂等状态，不插入 PROCESSING、不接管租约；用于必须在新 acquire 前完成的业务前置。
+	 */
+	default Optional<Acquisition> inspect(IdempotencyRequest request, Instant now) {
+		return Optional.empty();
+	}
 
 	Acquisition acquire(IdempotencyRequest request, Instant now);
 
