@@ -54,7 +54,7 @@ public class TransactionController {
 			new TransactionQuery(parseUuid(rawAccountId), parseType(rawType), parseDate(rawDateFrom), parseDate(rawDateTo), parseUuid(rawCategoryId)),
 			parseLimit(rawLimit), cursor);
 		return ResponseEntity.ok(new TransactionListEnvelope(
-			page.transactions().stream().map(this::view).toList(),
+			page.transactions().stream().map(TransactionController::view).toList(),
 			new TransactionPageMeta(requestId(response), page.nextCursor(), page.hasMore())));
 	}
 
@@ -128,19 +128,22 @@ public class TransactionController {
 		return new TransactionQueryValidationException();
 	}
 
-	private TransactionView view(TransactionSnapshot snapshot) {
+	/** 读写两个 HTTP operation 共用同一 OpenAPI Transaction 映射，避免响应字段漂移。 */
+	static TransactionView view(TransactionSnapshot snapshot) {
 		var transaction = snapshot.transaction();
 		return new TransactionView(
 			transaction.transactionId(), transaction.type().name(), transaction.status().name(), transaction.businessAt(),
 			transaction.businessDate(), transaction.timezone().getId(), transaction.source().name(),
 			transaction.rootTransactionId(), transaction.previousVersionId(), transaction.reversalOfId(),
-			transaction.versionNo(), snapshot.entityVersion(), transaction.entries().stream().map(this::entry).toList());
+			transaction.versionNo(), snapshot.entityVersion(), transaction.entries().stream().map(TransactionController::entry).toList());
 	}
 
-	private LedgerEntryView entry(LedgerEntry entry) {
+	private static LedgerEntryView entry(LedgerEntry entry) {
 		return new LedgerEntryView(entry.entryId(), entry.ledgerAccountId(), entry.sequenceNo(),
 			entry.direction() == app.ziji.ledger.domain.LedgerDirection.DEBIT ? "D" : "C",
-			entry.amount().amount().toPlainString(), entry.currency().name(), entry.businessDate());
+			// 数据库 NUMERIC 保留计算精度；API 按币种入账精度输出，避免响应出现 schema 不允许的尾随小数。
+			entry.amount().amount().setScale(entry.currency().minorUnits()).toPlainString(),
+			entry.currency().name(), entry.businessDate());
 	}
 
 	private String etag(int version) {

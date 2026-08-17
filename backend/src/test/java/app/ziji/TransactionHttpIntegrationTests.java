@@ -3,6 +3,7 @@ package app.ziji;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -14,7 +15,15 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
+import app.ziji.accountmember.application.AccountPostingAccessPort;
+import app.ziji.accountmember.infrastructure.PostgresAccountPostingAccessPort;
 import app.ziji.auth.application.CreateDeviceSessionCommand;
 import app.ziji.auth.application.DeviceSessionApplicationService;
 import app.ziji.auth.application.SessionTokenResult;
@@ -22,12 +31,17 @@ import app.ziji.shared.application.TransactionRunner;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -35,6 +49,7 @@ import tools.jackson.databind.ObjectMapper;
 @SpringBootTest
 @ActiveProfiles("test")
 @AutoConfigureMockMvc
+@Import(TransactionHttpIntegrationTests.PermissionRaceConfiguration.class)
 class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 
 	@Autowired private MockMvc mvc;
@@ -42,6 +57,389 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 	@Autowired private ObjectMapper objectMapper;
 	@Autowired private DeviceSessionApplicationService deviceSessions;
 	@Autowired private TransactionRunner transactions;
+	@Autowired private PermissionRacePostingAccessPort permissionRace;
+
+	@Test
+	void postsExpenseReplaysSameKeyAndIsImmediatelyQueryable() throws Exception {
+		User owner = user("ledger-write-owner");
+		Account account = account(owner.id());
+		UUID categoryId = category(owner.id());
+		String token = bearer(owner);
+		String key = "ledger-expense-key-0001";
+		String body = """
+			{
+			  "type":"EXPENSE",
+			  "businessAt":"2026-08-17T12:00:00Z",
+			  "accountId":"%s",
+			  "amount":"50.00",
+			  "currency":"CNY",
+			  "categoryId":"%s",
+			  "merchant":"示例餐厅",
+			  "tagIds":[]
+			}
+			""".formatted(account.id(), categoryId);
+
+		MvcResult first = mvc.perform(post("/api/v1/transactions")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", key)
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content(body))
+			.andExpect(status().isCreated()).andExpect(header().string(HttpHeaders.ETAG, "\"1\""))
+			.andExpect(header().string(HttpHeaders.LOCATION, org.hamcrest.Matchers.startsWith("/api/v1/transactions/")))
+			.andExpect(jsonPath("$.data.type").value("EXPENSE"))
+			.andExpect(jsonPath("$.data.businessDate").value("2026-08-17"))
+			.andExpect(jsonPath("$.data.timezone").value("Asia/Shanghai"))
+			.andExpect(jsonPath("$.data.entries.length()").value(2)).andReturn();
+		String transactionId = json(first).at("/data/id").asString();
+
+		mvc.perform(post("/api/v1/transactions")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", key)
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content(body))
+			.andExpect(status().isCreated()).andExpect(header().string(HttpHeaders.ETAG, "\"1\""))
+			.andExpect(jsonPath("$.data.id").value(transactionId));
+		mvc.perform(post("/api/v1/transactions")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", key)
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content(body.replace("50.00", "51.00")))
+			.andExpect(status().isConflict()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
+		mvc.perform(get("/api/v1/transactions/{id}", transactionId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+			.andExpect(status().isOk()).andExpect(header().string(HttpHeaders.ETAG, "\"1\""));
+		assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM transactions WHERE id = ?", Integer.class,
+			UUID.fromString(transactionId)));
+		assertEquals(2, jdbc.queryForObject("SELECT count(*) FROM ledger_entries WHERE transaction_id = ?", Integer.class,
+			UUID.fromString(transactionId)));
+		assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM audit_logs WHERE resource_id = ?", Integer.class,
+			UUID.fromString(transactionId)));
+		assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM outbox_events WHERE aggregate_id = ?", Integer.class,
+			UUID.fromString(transactionId)));
+		assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM idempotency_records WHERE operation_id = 'postTransaction' AND idempotency_key = ?",
+			Integer.class, key));
+	}
+
+	@Test
+	void revisesAndReversesWithStrongIfMatchAndPersistsSafeConflictReference() throws Exception {
+		User owner = user("ledger-mutation-owner");
+		Account account = account(owner.id());
+		UUID categoryId = category(owner.id());
+		String token = bearer(owner);
+		String createBody = """
+			{"type":"EXPENSE","businessAt":"2026-08-17T12:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"10.00","currency":"CNY","categoryId":"%s"}
+			""".formatted(account.id(), categoryId);
+		String originalId = json(mvc.perform(post("/api/v1/transactions")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", "mutation-create-key-01")
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(createBody))
+			.andExpect(status().isCreated()).andReturn()).at("/data/id").asString();
+
+		String replacementId = UUID.randomUUID().toString();
+		String revisionBody = """
+			{"reason":"修订金额","replacement":{"id":"%s","type":"EXPENSE",
+			 "businessAt":"2026-08-17T13:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"12.00","currency":"CNY","categoryId":"%s"}}
+			""".formatted(replacementId, account.id(), categoryId);
+		mvc.perform(post("/api/v1/transactions/{id}/revisions", originalId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", "mutation-revision-key-01")
+				.header("If-Match", "\"1\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content(revisionBody))
+			.andExpect(status().isCreated()).andExpect(header().string(HttpHeaders.LOCATION,
+				"/api/v1/transactions/" + replacementId)).andExpect(header().string(HttpHeaders.ETAG, "\"1\""))
+			.andExpect(jsonPath("$.data.id").value(replacementId));
+
+		mvc.perform(post("/api/v1/transactions/{id}/revisions", originalId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", "mutation-revision-key-01")
+				.header("If-Match", "\"1\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content(revisionBody))
+			.andExpect(status().isCreated()).andExpect(jsonPath("$.data.id").value(replacementId));
+		assertEquals(2, jdbc.queryForObject("SELECT entity_version FROM transactions WHERE id = ?", Integer.class, UUID.fromString(originalId)));
+		assertEquals("SUPERSEDED", jdbc.queryForObject("SELECT status FROM transactions WHERE id = ?", String.class, UUID.fromString(originalId)));
+
+		mvc.perform(post("/api/v1/transactions/{id}/revisions", originalId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", "mutation-stale-key-01")
+				.header("If-Match", "\"1\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content(revisionBody))
+			.andExpect(status().isConflict()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(2))
+			.andExpect(jsonPath("$.versionConflict.currentEtag").value("\"2\""))
+			.andExpect(jsonPath("$.versionConflict.resourceLocation").value("/api/v1/transactions/" + originalId));
+		mvc.perform(post("/api/v1/transactions/{id}/revisions", originalId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", "mutation-stale-key-01")
+				.header("If-Match", "\"1\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content(revisionBody))
+			.andExpect(status().isConflict()).andExpect(jsonPath("$.versionConflict.currentVersion").value(2));
+
+		String reasonBody = "{\"reason\":\"作废\"}";
+		mvc.perform(post("/api/v1/transactions/{id}/reversal", replacementId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", "mutation-reverse-key-01")
+				.header("If-Match", "\"1\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content(reasonBody))
+			.andExpect(status().isCreated()).andExpect(header().string(HttpHeaders.ETAG, "\"1\""))
+			.andExpect(jsonPath("$.data.reversalOfId").value(replacementId));
+	}
+
+	@Test
+	void postsEveryFrozenSemanticUnionAndBalanceAdjustmentThroughLedgerFacts() throws Exception {
+		User owner = user("ledger-union-owner");
+		Account cash = account(owner.id());
+		Account savings = account(owner.id());
+		Account creditCard = account(owner.id(), "LIABILITY", "CREDIT_CARD", "CNY");
+		Account loan = account(owner.id(), "LIABILITY", "LOAN", "CNY");
+		UUID incomeCategory = category(owner.id(), "INCOME");
+		UUID expenseCategory = category(owner.id(), "EXPENSE");
+		UUID feeCategory = category(owner.id(), "EXPENSE");
+		String token = bearer(owner);
+
+		postLedgerTransaction(token, "union-income-key-0001", """
+			{"type":"INCOME","businessAt":"2026-08-17T01:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"100.00","currency":"CNY","categoryId":"%s"}
+			""".formatted(cash.id(), incomeCategory), "INCOME");
+		postLedgerTransaction(token, "union-credit-key-0001", """
+			{"type":"EXPENSE","businessAt":"2026-08-17T02:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"30.00","currency":"CNY","categoryId":"%s"}
+			""".formatted(creditCard.id(), expenseCategory), "EXPENSE");
+		UUID expenseId = postLedgerTransaction(token, "union-expense-key-001", """
+			{"type":"EXPENSE","businessAt":"2026-08-17T03:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"20.00","currency":"CNY","categoryId":"%s"}
+			""".formatted(cash.id(), expenseCategory), "EXPENSE");
+		postLedgerTransaction(token, "union-refund-key-0001", """
+			{"type":"REFUND","businessAt":"2026-08-17T04:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"5.00","currency":"CNY","originalTransactionId":"%s"}
+			""".formatted(cash.id(), expenseId), "REFUND");
+		postLedgerTransaction(token, "union-transfer-key-001", """
+			{"type":"TRANSFER","businessAt":"2026-08-17T05:00:00Z","timezone":"Asia/Shanghai",
+			 "fromAccountId":"%s","toAccountId":"%s",
+			 "fromAmount":{"amount":"10.00","currency":"CNY"},
+			 "toAmount":{"amount":"10.00","currency":"CNY"},
+			 "fee":{"amount":"1.00","currency":"CNY"},"feeCategoryId":"%s"}
+			""".formatted(cash.id(), savings.id(), feeCategory), "TRANSFER");
+		postLedgerTransaction(token, "union-borrow-key-00001", """
+			{"type":"LIABILITY_BORROWING","businessAt":"2026-08-17T06:00:00Z","timezone":"Asia/Shanghai",
+			 "assetAccountId":"%s","liabilityAccountId":"%s","currency":"CNY","amount":"1000.00"}
+			""".formatted(cash.id(), loan.id()), "TRANSFER");
+		postLedgerTransaction(token, "union-repayment-key-01", """
+			{"type":"LIABILITY_REPAYMENT","businessAt":"2026-08-17T07:00:00Z","timezone":"Asia/Shanghai",
+			 "cashAccountId":"%s","liabilityAccountId":"%s","currency":"CNY",
+			 "principalAmount":"100.00","interestAmount":"2.00","feeAmount":"1.00",
+			 "interestCategoryId":"%s","feeCategoryId":"%s"}
+			""".formatted(cash.id(), loan.id(), expenseCategory, feeCategory), "REPAYMENT");
+
+		mvc.perform(post("/api/v1/accounts/{id}/balance-adjustments", savings.id())
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", "union-adjustment-key-01")
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON).content("""
+					{"actualBalance":"100.00","businessAt":"2026-08-17T08:00:00Z",
+					 "timezone":"Asia/Shanghai","reason":"与银行余额对账"}
+					"""))
+			.andExpect(status().isCreated()).andExpect(header().string(HttpHeaders.ETAG, "\"1\""))
+			.andExpect(jsonPath("$.data.type").value("ADJUSTMENT"));
+
+		assertEquals(8, jdbc.queryForObject("SELECT count(*) FROM transactions WHERE created_by = ?", Integer.class, owner.id()));
+		assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM refund_details", Integer.class));
+		assertEquals(2, jdbc.queryForObject("SELECT count(*) FROM transfer_details", Integer.class));
+		assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM repayment_details", Integer.class));
+		assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM balance_adjustment_details", Integer.class));
+	}
+
+	@Test
+	void writePermissionAndValidationFailuresAreBoundedAndDoNotAcquireIdempotency() throws Exception {
+		User owner = user("ledger-write-permission-owner");
+		User editor = user("ledger-write-permission-editor");
+		User viewer = user("ledger-write-permission-viewer");
+		User left = user("ledger-write-permission-left");
+		User removed = user("ledger-write-permission-removed");
+		User creatorOnly = user("ledger-write-permission-creator");
+		User stranger = user("ledger-write-permission-stranger");
+		Account account = account(owner.id());
+		membership(account.id(), editor.id(), "EDITOR", "ACTIVE", null);
+		membership(account.id(), viewer.id(), "VIEWER", "ACTIVE", null);
+		membership(account.id(), left.id(), "EDITOR", "LEFT", Instant.now().minus(1, ChronoUnit.HOURS));
+		membership(account.id(), removed.id(), "EDITOR", "REMOVED", Instant.now().minus(1, ChronoUnit.HOURS));
+		jdbc.update("UPDATE accounts SET created_by = ? WHERE id = ?", creatorOnly.id(), account.id());
+		String body = """
+			{"type":"EXPENSE","businessAt":"2026-08-17T12:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"10.00","currency":"CNY",
+			 "categoryId":"00000000-0000-4000-8000-000000000201"}
+			""".formatted(account.id());
+
+		postLedgerTransaction(bearer(editor), "permission-editor-key-1", body, "EXPENSE");
+		assertWriteFailure(viewer, body, "permission-viewer-key-1", 403, "PERMISSION_DENIED");
+		for (var value : List.of(
+			new FailureUser(left, "permission-left-key-001"),
+			new FailureUser(removed, "permission-removed-key1"),
+			new FailureUser(creatorOnly, "permission-creator-key1"),
+			new FailureUser(stranger, "permission-stranger-key"))) {
+			assertWriteFailure(value.user(), body, value.key(), 404, "RESOURCE_NOT_FOUND");
+		}
+		mvc.perform(post("/api/v1/transactions").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.header("Idempotency-Key", "permission-noauth-key1").content(body))
+			.andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+
+		String invalidKey = "permission-invalid-key1";
+		mvc.perform(post("/api/v1/transactions")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer(owner)).header("Idempotency-Key", invalidKey)
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content(body.substring(0, body.length() - 2) + ",\"entries\":[]}"))
+			.andExpect(status().isBadRequest()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+		for (String key : List.of(
+			"permission-viewer-key-1", "permission-left-key-001", "permission-removed-key1",
+			"permission-creator-key1", "permission-stranger-key", "permission-noauth-key1", invalidKey)) {
+			assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM idempotency_records WHERE idempotency_key = ?",
+				Integer.class, key));
+		}
+	}
+
+	@Test
+	void permissionChangesAfterPreflightRollbackEveryWriteOperation() throws Exception {
+		User postOwner = user("ledger-race-post-owner");
+		User postEditor = user("ledger-race-post-editor");
+		Account postAccount = account(postOwner.id());
+		membership(postAccount.id(), postEditor.id(), "EDITOR", "ACTIVE", null);
+		UUID postCategory = category(postOwner.id());
+		String postKey = "permission-race-post-key";
+		assertPermissionRaceRollback(
+			post("/api/v1/transactions")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer(postEditor))
+				.header("Idempotency-Key", postKey)
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content("""
+					{"type":"EXPENSE","businessAt":"2026-08-17T12:00:00Z","timezone":"Asia/Shanghai",
+					 "accountId":"%s","amount":"10.00","currency":"CNY","categoryId":"%s"}
+					""".formatted(postAccount.id(), postCategory)),
+			postEditor.id(), postAccount.id(), postKey, MembershipChange.ENDED, 404, "RESOURCE_NOT_FOUND");
+
+		User reviseOwner = user("ledger-race-revise-owner");
+		User reviseEditor = user("ledger-race-revise-editor");
+		Account reviseAccount = account(reviseOwner.id());
+		membership(reviseAccount.id(), reviseEditor.id(), "EDITOR", "ACTIVE", null);
+		UUID reviseCategory = category(reviseOwner.id());
+		UUID reviseOriginal = postLedgerTransaction(bearer(reviseOwner), "permission-race-revise-create", """
+			{"type":"EXPENSE","businessAt":"2026-08-17T10:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"10.00","currency":"CNY","categoryId":"%s"}
+			""".formatted(reviseAccount.id(), reviseCategory), "EXPENSE");
+		String reviseKey = "permission-race-revise-key";
+		assertPermissionRaceRollback(
+			post("/api/v1/transactions/{id}/revisions", reviseOriginal)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer(reviseEditor))
+				.header("Idempotency-Key", reviseKey).header("If-Match", "\"1\"")
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content("""
+					{"reason":"并发降权","replacement":{"type":"EXPENSE",
+					 "businessAt":"2026-08-17T11:00:00Z","timezone":"Asia/Shanghai",
+					 "accountId":"%s","amount":"11.00","currency":"CNY","categoryId":"%s"}}
+					""".formatted(reviseAccount.id(), reviseCategory)),
+			reviseEditor.id(), reviseAccount.id(), reviseKey, MembershipChange.VIEWER, 403, "PERMISSION_DENIED");
+
+		User reverseOwner = user("ledger-race-reverse-owner");
+		User reverseEditor = user("ledger-race-reverse-editor");
+		Account reverseAccount = account(reverseOwner.id());
+		membership(reverseAccount.id(), reverseEditor.id(), "EDITOR", "ACTIVE", null);
+		UUID reverseCategory = category(reverseOwner.id());
+		UUID reverseOriginal = postLedgerTransaction(bearer(reverseOwner), "permission-race-reverse-create", """
+			{"type":"EXPENSE","businessAt":"2026-08-17T09:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"10.00","currency":"CNY","categoryId":"%s"}
+			""".formatted(reverseAccount.id(), reverseCategory), "EXPENSE");
+		String reverseKey = "permission-race-reverse-key";
+		assertPermissionRaceRollback(
+			post("/api/v1/transactions/{id}/reversal", reverseOriginal)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer(reverseEditor))
+				.header("Idempotency-Key", reverseKey).header("If-Match", "\"1\"")
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content("{\"reason\":\"并发结束成员周期\"}"),
+			reverseEditor.id(), reverseAccount.id(), reverseKey, MembershipChange.REMOVED, 404, "RESOURCE_NOT_FOUND");
+
+		User adjustmentOwner = user("ledger-race-adjustment-owner");
+		User adjustmentEditor = user("ledger-race-adjustment-editor");
+		Account adjustmentAccount = account(adjustmentOwner.id());
+		membership(adjustmentAccount.id(), adjustmentEditor.id(), "EDITOR", "ACTIVE", null);
+		String adjustmentKey = "permission-race-adjustment-key";
+		assertPermissionRaceRollback(
+			post("/api/v1/accounts/{id}/balance-adjustments", adjustmentAccount.id())
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer(adjustmentEditor))
+				.header("Idempotency-Key", adjustmentKey)
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content("""
+					{"actualBalance":"100.00","businessAt":"2026-08-17T12:00:00Z",
+					 "timezone":"Asia/Shanghai","reason":"并发降权"}
+					"""),
+			adjustmentEditor.id(), adjustmentAccount.id(), adjustmentKey,
+			MembershipChange.VIEWER, 403, "PERMISSION_DENIED");
+	}
+
+	@Test
+	void validatesIfMatchBusinessRulesAndMultiAccount404BeforeIdempotency() throws Exception {
+		User owner = user("ledger-precondition-owner");
+		User viewer = user("ledger-precondition-viewer");
+		User otherOwner = user("ledger-precondition-other");
+		Account account = account(owner.id());
+		Account invisibleAccount = account(otherOwner.id());
+		membership(account.id(), viewer.id(), "VIEWER", "ACTIVE", null);
+		String ownerToken = bearer(owner);
+		UUID categoryId = category(owner.id());
+		UUID transactionId = postLedgerTransaction(ownerToken, "precondition-create-key", """
+			{"type":"EXPENSE","businessAt":"2026-08-17T10:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"10.00","currency":"CNY","categoryId":"%s"}
+			""".formatted(account.id(), categoryId), "EXPENSE");
+		String reason = "{\"reason\":\"作废\"}";
+		List<String> malformed = java.util.Arrays.asList(null, "W/\"1\"", "*", "1", "\"0\"", "\"-1\"",
+			"\"abc\"", "\"2147483648\"", "\"1\", \"2\"");
+		for (int index = 0; index < malformed.size(); index++) {
+			String key = "invalid-if-match-key-" + index;
+			var request = post("/api/v1/transactions/{id}/reversal", transactionId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken).header("Idempotency-Key", key)
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(reason);
+			if (malformed.get(index) != null) request.header("If-Match", malformed.get(index));
+			mvc.perform(request).andExpect(status().isBadRequest()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+				.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+			assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM idempotency_records WHERE idempotency_key = ?",
+				Integer.class, key));
+		}
+		mvc.perform(post("/api/v1/transactions/{id}/reversal", transactionId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken).header("Idempotency-Key", "invalid-if-match-duplicate")
+				.header("If-Match", "\"1\"", "\"1\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content(reason))
+			.andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+		String transfer = """
+			{"type":"TRANSFER","businessAt":"2026-08-17T11:00:00Z","timezone":"Asia/Shanghai",
+			 "fromAccountId":"%s","toAccountId":"%s",
+			 "fromAmount":{"amount":"10.00","currency":"CNY"},
+			 "toAmount":{"amount":"10.00","currency":"CNY"},"fee":{"amount":"0","currency":"CNY"}}
+			""".formatted(account.id(), invisibleAccount.id());
+		assertWriteFailure(viewer, transfer, "multi-account-hidden-key", 404, "RESOURCE_NOT_FOUND");
+		assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM idempotency_records WHERE idempotency_key = ?",
+			Integer.class, "multi-account-hidden-key"));
+
+		// 非空 tagIds 是 schema 合法但当前事实链未开放的业务拒绝，不能被静默丢弃。
+		String unsupportedTags = """
+			{"type":"EXPENSE","businessAt":"2026-08-17T12:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"10.00","currency":"CNY","categoryId":"%s","tagIds":["%s"]}
+			""".formatted(account.id(), categoryId, UUID.randomUUID());
+		mvc.perform(post("/api/v1/transactions").header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+				.header("Idempotency-Key", "unsupported-tags-key-01")
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(unsupportedTags))
+			.andExpect(status().isUnprocessableEntity()).andExpect(jsonPath("$.code").value("BUSINESS_RULE_VIOLATION"));
+		assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM idempotency_records WHERE idempotency_key = ?",
+			Integer.class, "unsupported-tags-key-01"));
+
+		String missingCategory = """
+			{"type":"EXPENSE","businessAt":"2026-08-17T12:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"10.00","currency":"CNY","categoryId":"%s"}
+			""".formatted(account.id(), UUID.randomUUID());
+		for (int attempt = 0; attempt < 2; attempt++) {
+			mvc.perform(post("/api/v1/transactions").header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+					.header("Idempotency-Key", "failed-final-category-key")
+					.contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(missingCategory))
+				.andExpect(status().isUnprocessableEntity()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+				.andExpect(jsonPath("$.code").value("BUSINESS_RULE_VIOLATION"));
+		}
+		assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM idempotency_records WHERE idempotency_key = ? AND status = 'FAILED_FINAL'",
+			Integer.class, "failed-final-category-key"));
+	}
 
 	@Test
 	void listsWithStableKeysetAndReturnsStrongEtagForVisibleDetail() throws Exception {
@@ -213,14 +611,19 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 	}
 
 	private Account account(UUID ownerId) {
+		return account(ownerId, "ASSET", "BANK", "CNY");
+	}
+
+	private Account account(UUID ownerId, String accountClass, String accountType, String currency) {
 		UUID accountId = UUID.randomUUID();
 		UUID ledgerId = UUID.randomUUID();
 		Instant now = Instant.now().minus(1, ChronoUnit.DAYS);
+		String nature = "LIABILITY".equals(accountClass) ? "LIABILITY" : "ASSET";
 		transactions.required(() -> {
 			jdbc.update("""
 				INSERT INTO accounts (id, account_class, account_type, name, currency, status, created_by, created_at, updated_at, version)
-				VALUES (?, 'ASSET', 'BANK', 'Ledger account', 'CNY', 'ACTIVE', ?, ?, ?, 1)
-				""", accountId, ownerId, ts(now), ts(now));
+				VALUES (?, ?, ?, 'Ledger account', ?, 'ACTIVE', ?, ?, ?, 1)
+				""", accountId, accountClass, accountType, currency, ownerId, ts(now), ts(now));
 			UUID membershipId = UUID.randomUUID();
 			jdbc.update("""
 				INSERT INTO account_members (id, account_id, user_id, role, status, joined_at, membership_no, version)
@@ -232,8 +635,8 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 				""", UUID.randomUUID(), membershipId, ts(now), ownerId, ts(now));
 			jdbc.update("""
 				INSERT INTO ledger_accounts (id, visible_account_id, code, ledger_role, account_nature, currency, status, created_at)
-				VALUES (?, ?, ?, 'PRIMARY', 'ASSET', 'CNY', 'ACTIVE', ?)
-				""", ledgerId, accountId, "PRIMARY_" + accountId, ts(now));
+				VALUES (?, ?, ?, 'PRIMARY', ?, ?, 'ACTIVE', ?)
+				""", ledgerId, accountId, "PRIMARY_" + accountId, nature, currency, ts(now));
 		});
 		return new Account(accountId, ledgerId);
 	}
@@ -254,12 +657,17 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 	}
 
 	private UUID category(UUID ownerId) {
+		return category(ownerId, "EXPENSE");
+	}
+
+	private UUID category(UUID ownerId, String categoryType) {
 		UUID categoryId = UUID.randomUUID();
 		Instant now = Instant.now();
+		String name = categoryType + "-" + categoryId;
 		jdbc.update("""
 			INSERT INTO categories (id, owner_user_id, category_type, name, name_normalized, status, created_at, updated_at, version)
-			VALUES (?, ?, 'EXPENSE', '筛选分类', '筛选分类', 'ACTIVE', ?, ?, 1)
-			""", categoryId, ownerId, ts(now), ts(now));
+			VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?, 1)
+			""", categoryId, ownerId, categoryType, name, name, ts(now), ts(now));
 		return categoryId;
 	}
 
@@ -303,8 +711,145 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 		return session.accessToken();
 	}
 
+	private UUID postLedgerTransaction(String token, String key, String body, String expectedType) throws Exception {
+		MvcResult result = mvc.perform(post("/api/v1/transactions")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", key)
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isCreated()).andExpect(header().string(HttpHeaders.ETAG, "\"1\""))
+			.andExpect(jsonPath("$.data.type").value(expectedType)).andReturn();
+		return UUID.fromString(json(result).at("/data/id").asString());
+	}
+
+	private void assertWriteFailure(User user, String body, String key, int statusCode, String code) throws Exception {
+		mvc.perform(post("/api/v1/transactions")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer(user)).header("Idempotency-Key", key)
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().is(statusCode)).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value(code))
+			.andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.not(
+				org.hamcrest.Matchers.anyOf(org.hamcrest.Matchers.containsString("transactions"),
+					org.hamcrest.Matchers.containsString("ledger_entries")))));
+	}
+
+	private void assertPermissionRaceRollback(
+		MockHttpServletRequestBuilder request,
+		UUID userId,
+		UUID accountId,
+		String idempotencyKey,
+		MembershipChange change,
+		int expectedStatus,
+		String expectedCode) throws Exception {
+		FactCounts before = factCounts();
+		PermissionRaceGate gate = permissionRace.arm();
+		try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+			Future<MvcResult> future = executor.submit(() -> mvc.perform(request).andReturn());
+			try {
+				assertTrue(gate.finalCheckReached().await(10, TimeUnit.SECONDS), "最终权限复核未进入竞争栅栏");
+				int updated = switch (change) {
+					case ENDED -> jdbc.update("""
+						UPDATE account_members
+						SET status = 'LEFT', ended_at = CURRENT_TIMESTAMP, version = version + 1
+						WHERE account_id = ? AND user_id = ? AND status = 'ACTIVE'
+						""", accountId, userId);
+					case REMOVED -> jdbc.update("""
+						UPDATE account_members
+						SET status = 'REMOVED', ended_at = CURRENT_TIMESTAMP, version = version + 1
+						WHERE account_id = ? AND user_id = ? AND status = 'ACTIVE'
+						""", accountId, userId);
+					case VIEWER -> jdbc.update("""
+						UPDATE account_members
+						SET role = 'VIEWER', version = version + 1
+						WHERE account_id = ? AND user_id = ? AND status = 'ACTIVE'
+						""", accountId, userId);
+				};
+				assertEquals(1, updated);
+			} finally {
+				gate.membershipChanged().countDown();
+			}
+			MvcResult result = future.get(10, TimeUnit.SECONDS);
+			assertEquals(expectedStatus, result.getResponse().getStatus());
+			assertEquals(expectedCode, json(result).at("/code").asString());
+			assertEquals(null, result.getResponse().getHeader(HttpHeaders.ETAG));
+		} finally {
+			permissionRace.disarm(gate);
+			gate.membershipChanged().countDown();
+		}
+		assertEquals(before, factCounts());
+		assertEquals(0, jdbc.queryForObject(
+			"SELECT count(*) FROM idempotency_records WHERE idempotency_key = ?", Integer.class, idempotencyKey));
+	}
+
+	private FactCounts factCounts() {
+		return new FactCounts(
+			jdbc.queryForObject("SELECT count(*) FROM transactions", Integer.class),
+			jdbc.queryForObject("SELECT count(*) FROM ledger_entries", Integer.class),
+			jdbc.queryForObject("SELECT count(*) FROM audit_logs", Integer.class),
+			jdbc.queryForObject("SELECT count(*) FROM outbox_events", Integer.class),
+			jdbc.queryForObject("SELECT count(*) FROM idempotency_records", Integer.class));
+	}
+
+	@TestConfiguration(proxyBeanMethods = false)
+	static class PermissionRaceConfiguration {
+
+		@Bean
+		@Primary
+		PermissionRacePostingAccessPort permissionRacePostingAccessPort(
+			PostgresAccountPostingAccessPort delegate) {
+			return new PermissionRacePostingAccessPort(delegate);
+		}
+	}
+
+	static final class PermissionRacePostingAccessPort implements AccountPostingAccessPort {
+
+		private final AccountPostingAccessPort delegate;
+		private final AtomicReference<PermissionRaceGate> armed = new AtomicReference<>();
+
+		private PermissionRacePostingAccessPort(AccountPostingAccessPort delegate) {
+			this.delegate = delegate;
+		}
+
+		PermissionRaceGate arm() {
+			PermissionRaceGate gate = new PermissionRaceGate(new CountDownLatch(1), new CountDownLatch(1));
+			if (!armed.compareAndSet(null, gate)) {
+				throw new IllegalStateException("权限竞争栅栏已启用。");
+			}
+			return gate;
+		}
+
+		void disarm(PermissionRaceGate gate) {
+			armed.compareAndSet(gate, null);
+		}
+
+		@Override
+		public boolean mayPost(UUID userId, UUID accountId, Instant effectiveAt) {
+			return delegate.mayPost(userId, accountId, effectiveAt);
+		}
+
+		@Override
+		public PostingAccessDecision postingDecision(UUID userId, UUID accountId, Instant effectiveAt) {
+			PermissionRaceGate gate = armed.getAndSet(null);
+			if (gate != null) {
+				// 只暂停最终 application 复核，preflight 的 mayPost 已在此前完成。
+				gate.finalCheckReached().countDown();
+				try {
+					if (!gate.membershipChanged().await(10, TimeUnit.SECONDS)) {
+						throw new AssertionError("成员变更未释放权限竞争栅栏");
+					}
+				} catch (InterruptedException exception) {
+					Thread.currentThread().interrupt();
+					throw new AssertionError("权限竞争测试线程被中断", exception);
+				}
+			}
+			return delegate.postingDecision(userId, accountId, effectiveAt);
+		}
+	}
+
 	private JsonNode json(MvcResult result) throws Exception { return objectMapper.readTree(result.getResponse().getContentAsString()); }
 	private java.sql.Timestamp ts(Instant value) { return java.sql.Timestamp.from(value); }
+	private enum MembershipChange { ENDED, REMOVED, VIEWER }
+	private record PermissionRaceGate(CountDownLatch finalCheckReached, CountDownLatch membershipChanged) {}
+	private record FactCounts(int transactions, int entries, int audits, int outbox, int idempotency) {}
 	private record User(UUID id) {}
 	private record Account(UUID id, UUID ledgerId) {}
+	private record FailureUser(User user, String key) {}
 }

@@ -490,6 +490,8 @@ AND (expires_at IS NULL OR expires_at > asOf)
 
 `postTransaction` 不接受 `OPENING`；期初余额只能通过 `createAccount` 原子创建。`LIABILITY_REPAYMENT` 是公共请求 discriminator，Ledger 与数据库固定持久化为内部 `TransactionType.REPAYMENT`，不增加第二种交易事实。请求联合、类型、金额正负和可由 schema 表达的 class/type 组合违反时返回 `400 VALIDATION_ERROR`；通过 schema 后的资源可见性、成员权限和业务状态仍分别遵循既有 `404`、`403`、`422` 语义。
 
+`postTransaction` 在无法安全重建历史幂等响应或未预期基础设施失败时返回 `500 INTERNAL_ERROR`。`reviseTransaction` 与 `reverseTransaction` 的路径、请求体、`If-Match`、`Idempotency-Key` 错误返回 `400 VALIDATION_ERROR`，交易或关联账户不可见返回 `404 RESOURCE_NOT_FOUND`，业务规则违反返回 `422 BUSINESS_RULE_VIOLATION`，幂等安全重建或基础设施失败返回 `500 INTERNAL_ERROR`。`createBalanceAdjustment` 的账户不可见、业务规则违反和幂等安全重建或基础设施失败分别对应 `404`、`422`、`500`，请求与 `Idempotency-Key` 错误仍返回 `400`。
+
 BE-LIA-002 的公共命令边界固定为：
 
 - 信用卡消费复用 `EXPENSE` 分支；`accountId` 指向 CREDIT_CARD 时，Ledger 借费用/分类科目、贷信用卡 PRIMARY，增加负债并计入支出。其他负债类型不能以该分支伪装信用卡消费。

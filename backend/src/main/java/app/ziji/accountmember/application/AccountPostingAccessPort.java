@@ -7,4 +7,17 @@ import java.util.UUID;
 public interface AccountPostingAccessPort {
 
 	boolean mayPost(UUID userId, UUID accountId, Instant effectiveAt);
+
+	/** 最终账务写入复核需要区分不可见、只读和业务时间越界，避免统一降级为业务 422。 */
+	default PostingAccessDecision postingDecision(UUID userId, UUID accountId, Instant effectiveAt) {
+		return mayPost(userId, accountId, effectiveAt)
+			? PostingAccessDecision.ALLOWED : PostingAccessDecision.OUTSIDE_PERIOD;
+	}
+
+	enum PostingAccessDecision {
+		ALLOWED,
+		NOT_VISIBLE,
+		READ_ONLY,
+		OUTSIDE_PERIOD
+	}
 }

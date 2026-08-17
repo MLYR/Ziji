@@ -4777,6 +4777,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["BusinessRuleViolation"];
+            500: components["responses"]["InternalError"];
         };
     };
     getTransaction: {
@@ -4818,9 +4819,13 @@ export interface operations {
         };
         responses: {
             201: components["responses"]["TransactionCreated"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["BusinessRuleViolation"];
+            500: components["responses"]["InternalError"];
         };
     };
     reverseTransaction: {
@@ -4844,9 +4849,13 @@ export interface operations {
         };
         responses: {
             201: components["responses"]["TransactionCreated"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["BusinessRuleViolation"];
+            500: components["responses"]["InternalError"];
         };
     };
     createBalanceAdjustment: {
@@ -4871,7 +4880,10 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["BusinessRuleViolation"];
+            500: components["responses"]["InternalError"];
         };
     };
     listCategories: {

@@ -2,10 +2,6 @@
 archiveAccount
 getAccountBalance
 listAccountBalanceHistory
-postTransaction
-reviseTransaction
-reverseTransaction
-createBalanceAdjustment
 listCategories
 createCategory
 updateCategory

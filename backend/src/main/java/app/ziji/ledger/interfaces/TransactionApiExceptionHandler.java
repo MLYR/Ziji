@@ -3,14 +3,20 @@ package app.ziji.ledger.interfaces;
 import java.net.URI;
 
 import app.ziji.ledger.application.LedgerPersistenceException;
+import app.ziji.ledger.application.LedgerCommandValidationException;
+import app.ziji.ledger.application.LedgerPermissionDeniedException;
+import app.ziji.ledger.application.LedgerVersionConflictException;
 import app.ziji.ledger.application.TransactionNotVisibleException;
 import app.ziji.ledger.application.TransactionQueryValidationException;
+import app.ziji.shared.application.IdempotencyInfrastructureException;
+import app.ziji.shared.application.IdempotencyResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -24,13 +30,66 @@ public final class TransactionApiExceptionHandler {
 		return problem(HttpStatus.BAD_REQUEST, "请求校验失败", "VALIDATION_ERROR", request, response);
 	}
 
+	@ExceptionHandler(TransactionRequestValidationException.class)
+	ProblemDetail requestValidation(HttpServletRequest request, HttpServletResponse response) {
+		return problem(HttpStatus.BAD_REQUEST, "请求校验失败", "VALIDATION_ERROR", request, response);
+	}
+
 	@ExceptionHandler(TransactionNotVisibleException.class)
 	ProblemDetail notFound(HttpServletRequest request, HttpServletResponse response) {
 		return problem(HttpStatus.NOT_FOUND, "资源不存在", "RESOURCE_NOT_FOUND", request, response);
 	}
 
+	@ExceptionHandler(LedgerPermissionDeniedException.class)
+	ProblemDetail permissionDenied(HttpServletRequest request, HttpServletResponse response) {
+		return problem(HttpStatus.FORBIDDEN, "无权操作资源", "PERMISSION_DENIED", request, response);
+	}
+
+	@ExceptionHandler(LedgerCommandValidationException.class)
+	ProblemDetail businessRule(HttpServletRequest request, HttpServletResponse response) {
+		return problem(HttpStatus.UNPROCESSABLE_ENTITY, "业务规则不允许该请求", "BUSINESS_RULE_VIOLATION", request, response);
+	}
+
+	@ExceptionHandler(LedgerVersionConflictException.class)
+	ProblemDetail versionConflict(
+		LedgerVersionConflictException exception,
+		HttpServletRequest request,
+		HttpServletResponse response) {
+		ProblemDetail detail = problem(HttpStatus.CONFLICT, "资源版本冲突", "VERSION_CONFLICT", request, response);
+		detail.setProperty("versionConflict", java.util.Map.of(
+			"currentVersion", exception.currentVersion(),
+			"currentEtag", "\"" + exception.currentVersion() + "\"",
+			"resourceLocation", "/api/v1/transactions/" + exception.transactionId()));
+		return detail;
+	}
+
+	@ExceptionHandler(TransactionApiProblemException.class)
+	ResponseEntity<ProblemDetail> apiProblem(
+		TransactionApiProblemException exception,
+		HttpServletRequest request,
+		HttpServletResponse response) {
+		ProblemDetail detail = problem(exception.status(), exception.code(), exception.code(), request, response);
+		if (exception.versionConflict() != null) {
+			IdempotencyResponse.VersionConflictReference conflict = exception.versionConflict();
+			detail.setProperty("versionConflict", java.util.Map.of(
+				"currentVersion", conflict.currentVersion(),
+				"currentEtag", conflict.currentEtag(),
+				"resourceLocation", conflict.resourceLocation()));
+		}
+		ResponseEntity.BodyBuilder builder = ResponseEntity.status(exception.status());
+		if (exception.retryAfter()) {
+			builder.header("Retry-After", "5");
+		}
+		return builder.body(detail);
+	}
+
 	@ExceptionHandler(LedgerPersistenceException.class)
 	ProblemDetail persistence(HttpServletRequest request, HttpServletResponse response) {
+		return problem(HttpStatus.INTERNAL_SERVER_ERROR, "服务器处理请求失败", "INTERNAL_ERROR", request, response);
+	}
+
+	@ExceptionHandler(IdempotencyInfrastructureException.class)
+	ProblemDetail idempotencyInfrastructure(HttpServletRequest request, HttpServletResponse response) {
 		return problem(HttpStatus.INTERNAL_SERVER_ERROR, "服务器处理请求失败", "INTERNAL_ERROR", request, response);
 	}
 

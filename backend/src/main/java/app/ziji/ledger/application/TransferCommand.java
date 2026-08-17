@@ -32,12 +32,28 @@ public record TransferCommand(
 		if (fromAccountId.equals(toAccountId)) {
 			throw new LedgerCommandValidationException("转出和转入账户不能相同。");
 		}
-		if (feeAmount != null && feeAmount.amount().signum() > 0 && feeLedgerAccountId == null) {
-			throw new LedgerCommandValidationException("有手续费时必须提供费用科目。");
+		if (feeAmount != null && feeAmount.amount().signum() > 0 && feeCategoryId == null) {
+			throw new LedgerCommandValidationException("有手续费时必须提供费用分类。");
 		}
 		if (feeAmount != null && feeAmount.amount().signum() < 0) {
 			throw new LedgerCommandValidationException("手续费不能为负数。");
 		}
+	}
+
+	/** 公开语义构造器只接收费用分类；内部费用科目由 Ledger 在事务内确保。 */
+	public TransferCommand(
+		UUID userId,
+		UUID fromAccountId,
+		UUID toAccountId,
+		UUID feeCategoryId,
+		Money amount,
+		Money feeAmount,
+		Instant businessAt,
+		LocalDate businessDate,
+		String timezone,
+		String note) {
+		this(userId, fromAccountId, toAccountId, null, feeCategoryId, amount, feeAmount,
+			businessAt, businessDate, timezone, note);
 	}
 
 	private static void require(Object value, String field) {

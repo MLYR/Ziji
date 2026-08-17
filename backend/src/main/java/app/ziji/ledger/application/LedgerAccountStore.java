@@ -24,5 +24,11 @@ public interface LedgerAccountStore {
 		throw new LedgerCommandValidationException("期初权益科目端口未实现。");
 	}
 
+	/** 在当前账务事务内按唯一键读取或确保用户级余额调整权益科目。 */
+	default LedgerAccountReference ensureBalanceAdjustmentEquityAccount(
+		UUID ownerUserId, app.ziji.ledger.domain.CurrencyCode currency) {
+		throw new LedgerCommandValidationException("余额调整权益科目端口未实现。");
+	}
+
 	Money currentBalance(UUID ledgerAccountId);
 }

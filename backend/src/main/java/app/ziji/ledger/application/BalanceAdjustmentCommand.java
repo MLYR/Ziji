@@ -20,7 +20,6 @@ public record BalanceAdjustmentCommand(
 	public BalanceAdjustmentCommand {
 		require(userId, "用户");
 		require(accountId, "账户");
-		require(equityLedgerAccountId, "余额调整权益科目");
 		require(actualBalance, "实际余额");
 		require(businessAt, "业务时间");
 		require(businessDate, "业务日期");
@@ -30,6 +29,18 @@ public record BalanceAdjustmentCommand(
 		if (reason.codePointCount(0, reason.length()) > 500) {
 			throw new LedgerCommandValidationException("调整原因长度无效。");
 		}
+	}
+
+	/** 公开余额调整不接收内部权益科目；Ledger 以固定 code 在事务内确保。 */
+	public BalanceAdjustmentCommand(
+		UUID userId,
+		UUID accountId,
+		Money actualBalance,
+		Instant businessAt,
+		LocalDate businessDate,
+		String timezone,
+		String reason) {
+		this(userId, accountId, null, actualBalance, businessAt, businessDate, timezone, reason);
 	}
 
 	private static void require(Object value, String field) {

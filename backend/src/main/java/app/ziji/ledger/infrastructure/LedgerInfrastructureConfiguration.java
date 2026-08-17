@@ -13,6 +13,7 @@ import app.ziji.ledger.application.LedgerAccountStore;
 import app.ziji.ledger.application.BalanceProjectionService;
 import app.ziji.ledger.application.BalanceProjectionStore;
 import app.ziji.ledger.application.LedgerCommandApplicationService;
+import app.ziji.ledger.application.LedgerCommandPreflightService;
 import app.ziji.ledger.application.LedgerCommandValidationException;
 import app.ziji.ledger.application.LedgerOutbox;
 import app.ziji.ledger.application.LedgerRequestIdProvider;
@@ -61,6 +62,15 @@ class LedgerInfrastructureConfiguration {
 			requestIds,
 			postingService,
 			clock);
+	}
+
+	@Bean
+	LedgerCommandPreflightService ledgerCommandPreflightService(
+		AccountPostingReferencePort accounts,
+		AccountMembershipReadPort memberships,
+		AccountPostingAccessPort postingAccess,
+		LedgerAccountStore ledgerAccounts) {
+		return new LedgerCommandPreflightService(accounts, memberships, postingAccess, ledgerAccounts);
 	}
 
 	@Bean

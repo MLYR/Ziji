@@ -73,6 +73,10 @@ class SecurityConfiguration {
 				"/api/v1/accounts/*/liquidity-holds",
 				"/api/v1/accounts/*/liquidity-holds/*/revisions",
 				"/api/v1/accounts/*/liquidity-holds/*/release",
+				"/api/v1/transactions",
+				"/api/v1/transactions/*/revisions",
+				"/api/v1/transactions/*/reversal",
+				"/api/v1/accounts/*/balance-adjustments",
 				"/api/v1/sync/operations").authenticated()
 			.requestMatchers(HttpMethod.DELETE,
 				"/api/v1/auth/sessions/current", "/api/v1/users/me/sessions", "/api/v1/users/me/sessions/*").authenticated()
@@ -138,8 +142,11 @@ class SecurityConfiguration {
 			return "/api/v1/accounts".equals(path)
 				|| "/api/v1/users/me/password-change".equals(path)
 				|| "/api/v1/sync/operations".equals(path)
+				|| "/api/v1/transactions".equals(path)
+				|| path.matches("/api/v1/transactions/[^/]+/(revisions|reversal)")
 				|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds")
-				|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds/[^/]+/(revisions|release)");
+				|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds/[^/]+/(revisions|release)")
+				|| path.matches("/api/v1/accounts/[^/]+/balance-adjustments");
 		}
 		if (!"DELETE".equals(method)) {
 			return false;

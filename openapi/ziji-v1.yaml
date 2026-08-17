@@ -542,6 +542,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /transactions/{transactionId}:
     parameters: [{ $ref: '#/components/parameters/TransactionId' }]
     get:
@@ -571,8 +572,12 @@ paths:
       responses:
         '201': { $ref: '#/components/responses/TransactionCreated' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /transactions/{transactionId}/reversal:
     parameters: [{ $ref: '#/components/parameters/TransactionId' }]
     post:
@@ -588,8 +593,12 @@ paths:
       responses:
         '201': { $ref: '#/components/responses/TransactionCreated' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /accounts/{accountId}/balance-adjustments:
     parameters: [{ $ref: '#/components/parameters/AccountId' }]
     post:
@@ -608,6 +617,9 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /categories:
     get:
       tags: [Categories]

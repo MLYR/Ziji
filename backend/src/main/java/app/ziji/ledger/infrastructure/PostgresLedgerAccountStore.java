@@ -118,6 +118,35 @@ public class PostgresLedgerAccountStore implements LedgerAccountStore {
 	}
 
 	@Override
+	public LedgerAccountReference ensureBalanceAdjustmentEquityAccount(UUID ownerUserId, CurrencyCode currency) {
+		if (ownerUserId == null || currency == null) {
+			throw new LedgerPersistenceException(new IllegalArgumentException("余额调整权益科目参数无效。"));
+		}
+		try {
+			// 复用既有用户级系统科目唯一键，HTTP/application 不接触内部科目 ID。
+			jdbc.update("""
+				INSERT INTO ledger_accounts (
+					id, visible_account_id, owner_user_id, code, ledger_role, account_nature, currency, status, created_at)
+				VALUES (?, NULL, ?, 'EQUITY_BALANCE_ADJUSTMENT', 'SYSTEM', 'EQUITY', ?, 'ACTIVE', CURRENT_TIMESTAMP)
+				ON CONFLICT (owner_user_id, code, currency) WHERE visible_account_id IS NULL DO NOTHING
+				""", UUID.randomUUID(), ownerUserId, currency.name());
+			return jdbc.query("""
+				SELECT id, visible_account_id, owner_user_id, code, ledger_role, account_nature, currency, status
+				FROM ledger_accounts
+				WHERE owner_user_id = ? AND code = 'EQUITY_BALANCE_ADJUSTMENT'
+				  AND currency = ? AND ledger_role = 'SYSTEM'
+				""", result -> {
+				if (!result.next()) {
+					throw new LedgerPersistenceException(new IllegalStateException("余额调整权益科目未创建。"));
+				}
+				return toReference(result);
+			}, ownerUserId, currency.name());
+		} catch (RuntimeException exception) {
+			throw persistence(exception);
+		}
+	}
+
+	@Override
 	public Money currentBalance(UUID ledgerAccountId) {
 		if (ledgerAccountId == null) {
 			throw new LedgerPersistenceException(new IllegalArgumentException("账务科目不能为空。"));
