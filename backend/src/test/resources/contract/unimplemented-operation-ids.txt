@@ -2,6 +2,9 @@
 archiveAccount
 getAccountBalance
 listAccountBalanceHistory
+getLiabilityDetails
+putLiabilityDetails
+patchLiabilityDetails
 postTransaction
 reviseTransaction
 reverseTransaction

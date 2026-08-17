@@ -52,7 +52,8 @@ class IdempotencyOpenApiContractTests {
 			}
 		}
 
-		assertEquals(38, idempotencyOperationCount, "Idempotency-Key operation 覆盖数必须和冻结基线一致");
+		// 独立负债详情的 PUT/PATCH 都是写操作，必须纳入统一幂等契约门禁。
+		assertEquals(40, idempotencyOperationCount, "Idempotency-Key operation 覆盖数必须和冻结基线一致");
 	}
 
 	@Test
