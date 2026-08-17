@@ -28,6 +28,7 @@ public class PostgresAccountPostingReferencePort implements AccountPostingRefere
 		return new AccountPostingReference(
 			account.id(),
 			account.accountClass().name(),
+			account.accountType().name(),
 			account.currency().name(),
 			account.status() == app.ziji.account.domain.AccountStatus.ACTIVE);
 	}

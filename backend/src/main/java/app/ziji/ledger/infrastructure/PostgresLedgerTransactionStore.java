@@ -12,8 +12,10 @@ import app.ziji.ledger.application.BalanceAdjustmentWriteDetails;
 import app.ziji.ledger.application.LedgerPersistenceException;
 import app.ziji.ledger.application.LedgerTransactionStore;
 import app.ziji.ledger.application.LedgerTransactionSyncReadPort;
+import app.ziji.ledger.application.LiabilityBorrowingWriteDetails;
 import app.ziji.ledger.application.NoTransactionDetails;
 import app.ziji.ledger.application.PostedTransactionWrite;
+import app.ziji.ledger.application.RepaymentWriteDetails;
 import app.ziji.ledger.application.RefundWriteDetails;
 import app.ziji.ledger.application.TransferWriteDetails;
 import app.ziji.ledger.application.TransactionWriteDetails;
@@ -345,17 +347,29 @@ public class PostgresLedgerTransactionStore implements LedgerTransactionStore, L
 		CurrencyCode currency) {
 		return switch (type) {
 			case TRANSFER -> jdbc.query("""
-				SELECT from_account_id, to_account_id, from_amount, to_amount, fee_amount
-				FROM transfer_details WHERE transaction_id = ?
+				SELECT d.from_account_id, d.to_account_id, d.from_amount, d.to_amount, d.fee_amount,
+					from_account.account_class AS from_class, to_account.account_class AS to_class
+				FROM transfer_details d
+				JOIN accounts from_account ON from_account.id = d.from_account_id
+				JOIN accounts to_account ON to_account.id = d.to_account_id
+				WHERE d.transaction_id = ?
 				""", (org.springframework.jdbc.core.ResultSetExtractor<TransactionWriteDetails>) result ->
-				result.next()
-					? new TransferWriteDetails(
-						result.getObject("from_account_id", UUID.class),
-						result.getObject("to_account_id", UUID.class),
-						new Money(result.getBigDecimal("from_amount"), currency),
+				{
+					if (!result.next()) {
+						return new NoTransactionDetails();
+					}
+					UUID fromAccountId = result.getObject("from_account_id", UUID.class);
+					UUID toAccountId = result.getObject("to_account_id", UUID.class);
+					Money fromAmount = new Money(result.getBigDecimal("from_amount"), currency);
+					if ("LIABILITY".equals(result.getString("from_class"))
+						&& "ASSET".equals(result.getString("to_class"))) {
+						return new LiabilityBorrowingWriteDetails(toAccountId, fromAccountId, fromAmount);
+					}
+					return new TransferWriteDetails(
+						fromAccountId, toAccountId, fromAmount,
 						new Money(result.getBigDecimal("to_amount"), currency),
-						new Money(result.getBigDecimal("fee_amount"), currency))
-					: new NoTransactionDetails(), transactionId);
+						new Money(result.getBigDecimal("fee_amount"), currency));
+				}, transactionId);
 			case REFUND -> jdbc.query("""
 				SELECT original_transaction_id, category_id FROM refund_details WHERE transaction_id = ?
 				""", (org.springframework.jdbc.core.ResultSetExtractor<TransactionWriteDetails>) result ->
@@ -376,8 +390,57 @@ public class PostgresLedgerTransactionStore implements LedgerTransactionStore, L
 						new Money(result.getBigDecimal("difference_amount"), currency),
 						result.getString("reason"))
 					: new NoTransactionDetails(), transactionId);
+			case REPAYMENT -> {
+				List<RepaymentWriteDetails> rows = jdbc.query("""
+					SELECT liability_account_id, cash_account_id, principal_amount, interest_amount, fee_amount
+					FROM repayment_details WHERE transaction_id = ?
+					""", (result, ignored) -> new RepaymentWriteDetails(
+						result.getObject("liability_account_id", UUID.class),
+						result.getObject("cash_account_id", UUID.class),
+						new Money(result.getBigDecimal("principal_amount"), currency),
+						new Money(result.getBigDecimal("interest_amount"), currency),
+						new Money(result.getBigDecimal("fee_amount"), currency), null, null), transactionId);
+				if (rows.isEmpty()) {
+					yield new NoTransactionDetails();
+				}
+				RepaymentWriteDetails row = rows.getFirst();
+				List<UUID> categoryIds = repaymentCategoryIds(transactionId);
+				int index = 0;
+				UUID interestCategoryId = row.interestAmount().amount().signum() > 0 && index < categoryIds.size()
+					? categoryIds.get(index++) : null;
+				UUID feeCategoryId = row.feeAmount().amount().signum() > 0 && index < categoryIds.size()
+					? categoryIds.get(index) : null;
+				yield new RepaymentWriteDetails(
+					row.liabilityAccountId(), row.cashAccountId(), row.principalAmount(), row.interestAmount(),
+					row.feeAmount(), interestCategoryId, feeCategoryId);
+			}
 			default -> new NoTransactionDetails();
 		};
+	}
+
+	private List<UUID> repaymentCategoryIds(UUID transactionId) {
+		// 还款没有单一 transaction category；费用分类由不可变的系统科目编码逐分录保留。
+		return jdbc.queryForList("""
+			SELECT la.code
+			FROM ledger_entries e
+			JOIN ledger_accounts la ON la.id = e.ledger_account_id
+			WHERE e.transaction_id = ? AND e.direction = 'D' AND la.account_nature = 'EXPENSE'
+			ORDER BY e.sequence_no
+			""", String.class, transactionId).stream()
+			.map(PostgresLedgerTransactionStore::categoryIdFromLedgerCode)
+			.toList();
+	}
+
+	private static UUID categoryIdFromLedgerCode(String code) {
+		String prefix = "EXPENSE_CATEGORY_";
+		if (code == null || !code.startsWith(prefix)) {
+			throw new LedgerPersistenceException(new IllegalStateException("还款费用科目编码无效。"));
+		}
+		try {
+			return UUID.fromString(code.substring(prefix.length()));
+		} catch (IllegalArgumentException exception) {
+			throw new LedgerPersistenceException(exception);
+		}
 	}
 
 	private void insertDetails(PostedTransactionWrite write) {
@@ -396,6 +459,17 @@ public class PostgresLedgerTransactionStore implements LedgerTransactionStore, L
 				details.fromAmount().amount(),
 				details.toAmount().amount(),
 				details.feeAmount().amount());
+			case LiabilityBorrowingWriteDetails details -> jdbc.update("""
+				INSERT INTO transfer_details (
+					transaction_id, from_account_id, to_account_id, from_amount,
+					to_amount, exchange_rate, fee_amount)
+				VALUES (?, ?, ?, ?, ?, NULL, 0)
+				""",
+				write.transaction().transactionId(),
+				details.liabilityAccountId(),
+				details.assetAccountId(),
+				details.amount().amount(),
+				details.amount().amount());
 			case RefundWriteDetails details -> jdbc.update("""
 				INSERT INTO refund_details (transaction_id, original_transaction_id, category_id)
 				VALUES (?, ?, ?)
@@ -415,6 +489,18 @@ public class PostgresLedgerTransactionStore implements LedgerTransactionStore, L
 				details.actualBalance().amount(),
 				details.differenceAmount().amount(),
 				details.reason());
+			case RepaymentWriteDetails details -> jdbc.update("""
+				INSERT INTO repayment_details (
+					transaction_id, liability_account_id, cash_account_id,
+					principal_amount, interest_amount, fee_amount)
+				VALUES (?, ?, ?, ?, ?, ?)
+				""",
+				write.transaction().transactionId(),
+				details.liabilityAccountId(),
+				details.cashAccountId(),
+				details.principalAmount().amount(),
+				details.interestAmount().amount(),
+				details.feeAmount().amount());
 		}
 	}
 
@@ -428,10 +514,14 @@ public class PostgresLedgerTransactionStore implements LedgerTransactionStore, L
 		if (categoryId == null) {
 			return;
 		}
+		insertTransactionCategory(write.transaction().transactionId(), categoryId, role);
+	}
+
+	private void insertTransactionCategory(UUID transactionId, UUID categoryId, String role) {
 		jdbc.update("""
 			INSERT INTO transaction_categories (transaction_id, category_id, role)
 			VALUES (?, ?, ?)
-			""", write.transaction().transactionId(), categoryId, role);
+			""", transactionId, categoryId, role);
 	}
 
 	private static String direction(LedgerDirection direction) {

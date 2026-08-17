@@ -35,7 +35,7 @@ import app.ziji.ledger.domain.TransactionStatus;
 import app.ziji.ledger.domain.TransactionType;
 import app.ziji.shared.application.TransactionRunner;
 
-/** 五类账务语义命令的应用编排；不包含 HTTP、Spring、jOOQ 或余额投影。 */
+/** 账务语义命令的应用编排；不包含 HTTP、Spring、jOOQ 或余额投影。 */
 public final class LedgerCommandApplicationService implements LedgerSyncCommandPort {
 
 	private final TransactionRunner transactions;
@@ -167,9 +167,18 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 	private Transaction postExpenseInTransaction(ExpenseCommand command, UUID transactionId, TransactionSource source) {
 		AccountPostingReference account = editableAccount(command.userId(), command.accountId(), command.businessAt());
 		LedgerAccountReference accountLedger = primary(account);
+		if ("LIABILITY".equals(account.accountClass())) {
+			if (!"CREDIT_CARD".equals(account.accountType())) {
+				throw invalid("只有信用卡负债账户可以使用支出语义。");
+			}
+		} else {
+			requireAssetAccount(account, "支出");
+		}
 		validateAmount(command.amount(), accountLedger.currency());
 		requireCategory(command.categoryId(), command.userId(), command.accountId(), CategoryType.EXPENSE);
-		requireSystem(command.expenseLedgerAccountId(), command.userId(), accountLedger.currency(), LedgerAccountNature.EXPENSE);
+		LedgerAccountReference expenseLedger = command.expenseLedgerAccountId() == null
+			? ensureCategoryCounter(command.userId(), command.categoryId(), LedgerAccountNature.EXPENSE, accountLedger.currency())
+			: requireSystem(command.expenseLedgerAccountId(), command.userId(), accountLedger.currency(), LedgerAccountNature.EXPENSE);
 
 		Transaction transaction = transactionFactory.createPosted(
 			transactionId,
@@ -180,12 +189,101 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 			command.timezone(),
 			clock.instant(),
 			List.of(
-				new LedgerEntrySpec(command.expenseLedgerAccountId(), LedgerDirection.DEBIT, command.amount()),
+				new LedgerEntrySpec(expenseLedger.id(), LedgerDirection.DEBIT, command.amount()),
 				new LedgerEntrySpec(accountLedger.id(), LedgerDirection.CREDIT, command.amount())));
 		completeInitialPosting(new PostedTransactionWrite(
 			transaction, command.userId(), null, command.merchant(), command.note(),
 			command.categoryId(), new NoTransactionDetails()));
 		return transaction;
+	}
+
+	/** 借款到账固定为资产借、负债贷；不走普通收入或可见转账的账户类别捷径。 */
+	public Transaction postLiabilityBorrowing(LiabilityBorrowingCommand command) {
+		require(command, "借款到账命令");
+		return transactions.required(() -> {
+			AccountPostingReference asset = editableAccount(command.userId(), command.assetAccountId(), command.businessAt());
+			AccountPostingReference liability = editableAccount(command.userId(), command.liabilityAccountId(), command.businessAt());
+			requireExactAccountClass(asset, "ASSET", "借款到账");
+			requireExactAccountClass(liability, "LIABILITY", "借款到账");
+			if (!Set.of("LOAN", "CONSUMER_LOAN", "OTHER").contains(liability.accountType())) {
+				throw invalid("借款到账不允许使用信用卡账户。");
+			}
+			LedgerAccountReference assetLedger = primary(asset);
+			LedgerAccountReference liabilityLedger = primary(liability);
+			if (assetLedger.currency() != liabilityLedger.currency()) {
+				throw invalid("借款到账两账户必须使用同一币种。");
+			}
+			validateAmount(command.amount(), assetLedger.currency());
+			Transaction transaction = transactionFactory.createPosted(
+				UUID.randomUUID(), TransactionType.TRANSFER, TransactionSource.MANUAL,
+				command.businessAt(), command.businessDate(), command.timezone(), clock.instant(),
+				List.of(
+					new LedgerEntrySpec(assetLedger.id(), LedgerDirection.DEBIT, command.amount()),
+					new LedgerEntrySpec(liabilityLedger.id(), LedgerDirection.CREDIT, command.amount())));
+			// 复用既有 transfer_details 作为本金来源/去向事实，不制造第二张借款表。
+			completeInitialPosting(new PostedTransactionWrite(
+				transaction, command.userId(), null, null, command.note(), null,
+				new LiabilityBorrowingWriteDetails(
+					command.assetAccountId(), command.liabilityAccountId(), command.amount())));
+			return transaction;
+		});
+	}
+
+	/** 还款本金不计支出，利息和手续费各自借费用系统科目并计入支出。 */
+	public Transaction postLiabilityRepayment(LiabilityRepaymentCommand command) {
+		require(command, "负债还款命令");
+		return transactions.required(() -> {
+			AccountPostingReference cash = editableAccount(command.userId(), command.cashAccountId(), command.businessAt());
+			AccountPostingReference liability = editableAccount(command.userId(), command.liabilityAccountId(), command.businessAt());
+			requireExactAccountClass(cash, "ASSET", "负债还款");
+			requireExactAccountClass(liability, "LIABILITY", "负债还款");
+			LedgerAccountReference cashLedger = primary(cash);
+			LedgerAccountReference liabilityLedger = primary(liability);
+			if (cashLedger.currency() != liabilityLedger.currency()) {
+				throw invalid("负债还款两账户必须使用同一币种。");
+			}
+			CurrencyCode currency = cashLedger.currency();
+			validateAmount(command.principalAmount(), currency);
+			validateNonNegativeAmount(command.interestAmount(), currency, "利息");
+			validateNonNegativeAmount(command.feeAmount(), currency, "手续费");
+			if (command.interestAmount().amount().signum() > 0) {
+				requireCategoryForAccounts(command.interestCategoryId(), command.userId(), CategoryType.EXPENSE,
+					command.cashAccountId(), command.liabilityAccountId());
+			} else if (command.interestCategoryId() != null) {
+				throw invalid("利息为零时不能提供利息分类。");
+			}
+			if (command.feeAmount().amount().signum() > 0) {
+				requireCategoryForAccounts(command.feeCategoryId(), command.userId(), CategoryType.EXPENSE,
+					command.cashAccountId(), command.liabilityAccountId());
+			} else if (command.feeCategoryId() != null) {
+				throw invalid("手续费为零时不能提供手续费分类。");
+			}
+
+			List<LedgerEntrySpec> entries = new ArrayList<>();
+			entries.add(new LedgerEntrySpec(liabilityLedger.id(), LedgerDirection.DEBIT, command.principalAmount()));
+			entries.add(new LedgerEntrySpec(cashLedger.id(), LedgerDirection.CREDIT, command.principalAmount()));
+			if (command.interestAmount().amount().signum() > 0) {
+				LedgerAccountReference interestLedger = ensureCategoryCounter(
+					command.userId(), command.interestCategoryId(), LedgerAccountNature.EXPENSE, currency);
+				entries.add(new LedgerEntrySpec(interestLedger.id(), LedgerDirection.DEBIT, command.interestAmount()));
+				entries.add(new LedgerEntrySpec(cashLedger.id(), LedgerDirection.CREDIT, command.interestAmount()));
+			}
+			if (command.feeAmount().amount().signum() > 0) {
+				LedgerAccountReference feeLedger = ensureCategoryCounter(
+					command.userId(), command.feeCategoryId(), LedgerAccountNature.EXPENSE, currency);
+				entries.add(new LedgerEntrySpec(feeLedger.id(), LedgerDirection.DEBIT, command.feeAmount()));
+				entries.add(new LedgerEntrySpec(cashLedger.id(), LedgerDirection.CREDIT, command.feeAmount()));
+			}
+			Transaction transaction = transactionFactory.createPosted(
+				UUID.randomUUID(), TransactionType.REPAYMENT, TransactionSource.MANUAL,
+				command.businessAt(), command.businessDate(), command.timezone(), clock.instant(), entries);
+			completeInitialPosting(new PostedTransactionWrite(
+				transaction, command.userId(), null, null, command.note(), null,
+				new RepaymentWriteDetails(command.liabilityAccountId(), command.cashAccountId(),
+					command.principalAmount(), command.interestAmount(), command.feeAmount(),
+					command.interestCategoryId(), command.feeCategoryId())));
+			return transaction;
+		});
 	}
 
 	public Transaction postRefund(RefundCommand command) {
@@ -926,6 +1024,20 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		}
 	}
 
+	private void requireCategoryForAccounts(
+		UUID categoryId, UUID userId, CategoryType type, UUID firstAccountId, UUID secondAccountId) {
+		CategoryReference category = categories.findById(categoryId)
+			.orElseThrow(() -> invalid("分类不存在。"));
+		// 双账户命令允许使用任一参与账户的专属分类，但不能借此引用第三个账户的分类。
+		if (!category.active() || category.type() != type
+			|| (category.ownerUserId() != null && !category.ownerUserId().equals(userId))
+			|| (category.accountId() != null
+				&& !category.accountId().equals(firstAccountId)
+				&& !category.accountId().equals(secondAccountId))) {
+			throw invalid("分类与交易语义或归属不匹配。");
+		}
+	}
+
 	private static void validateAmount(Money amount, CurrencyCode expectedCurrency) {
 		if (amount == null || amount.amount().signum() <= 0) {
 			throw invalid("金额必须大于零。");
@@ -935,6 +1047,18 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		}
 		if (!amount.hasPostingPrecision()) {
 			throw invalid("金额超出入账精度，必须先明确舍入。");
+		}
+	}
+
+	private static void validateNonNegativeAmount(Money amount, CurrencyCode expectedCurrency, String field) {
+		if (amount == null || amount.amount().signum() < 0) {
+			throw invalid(field + "不能为负数。");
+		}
+		if (amount.currency() != expectedCurrency) {
+			throw invalid(field + "币种与账户不一致。");
+		}
+		if (!amount.hasPostingPrecision()) {
+			throw invalid(field + "超出入账精度，必须先明确舍入。");
 		}
 	}
 
@@ -965,6 +1089,13 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 	private static void requireAssetAccount(AccountPostingReference account, String operation) {
 		if (!"ASSET".equals(account.accountClass()) && !"INVESTMENT".equals(account.accountClass())) {
 			throw invalid(operation + "只允许资产或投资账户。");
+		}
+	}
+
+	private static void requireExactAccountClass(
+		AccountPostingReference account, String expectedClass, String operation) {
+		if (!expectedClass.equals(account.accountClass())) {
+			throw invalid(operation + "账户类型不符合要求。");
 		}
 	}
 

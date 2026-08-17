@@ -6,11 +6,12 @@ import java.util.UUID;
 public record AccountPostingReference(
 	UUID id,
 	String accountClass,
+	String accountType,
 	String currency,
 	boolean active) {
 
 	public AccountPostingReference {
-		if (id == null || accountClass == null || currency == null) {
+		if (id == null || accountClass == null || accountType == null || currency == null) {
 			throw new IllegalArgumentException("账户账务快照不完整。");
 		}
 	}

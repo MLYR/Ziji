@@ -4,45 +4,38 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
 
+import app.ziji.ledger.domain.CurrencyCode;
 import app.ziji.ledger.domain.Money;
 
-/** 支出语义命令；费用科目必须以独立借方分录表达。 */
-public record ExpenseCommand(
+/** 借款到账语义命令；资产和负债科目由 Ledger 根据可见账户事实决定。 */
+public record LiabilityBorrowingCommand(
 	UUID userId,
-	UUID accountId,
-	UUID expenseLedgerAccountId,
-	UUID categoryId,
+	UUID assetAccountId,
+	UUID liabilityAccountId,
 	Money amount,
 	Instant businessAt,
 	LocalDate businessDate,
 	String timezone,
-	String merchant,
 	String note) {
 
-	public ExpenseCommand {
+	public LiabilityBorrowingCommand {
 		require(userId, "用户");
-		require(accountId, "账户");
-		require(categoryId, "支出分类");
+		require(assetAccountId, "收款资产账户");
+		require(liabilityAccountId, "借款负债账户");
 		require(amount, "金额");
 		require(businessAt, "业务时间");
 		require(businessDate, "业务日期");
 		requireText(timezone, "时区");
 		requireMax(timezone, 64, "时区");
-		requireMax(merchant, 200, "商户");
+		requireMax(note, 2000, "备注");
+		if (assetAccountId.equals(liabilityAccountId)) {
+			throw new LedgerCommandValidationException("收款资产账户和借款负债账户不能相同。");
+		}
 	}
 
-	/** 公开语义构造器不接收内部费用科目；Ledger 在事务内按分类惰性确保。 */
-	public ExpenseCommand(
-		UUID userId,
-		UUID accountId,
-		UUID categoryId,
-		Money amount,
-		Instant businessAt,
-		LocalDate businessDate,
-		String timezone,
-		String merchant,
-		String note) {
-		this(userId, accountId, null, categoryId, amount, businessAt, businessDate, timezone, merchant, note);
+	/** 请求层的 currency 语义由 Money 唯一携带，避免出现两份可不一致的币种来源。 */
+	public CurrencyCode currency() {
+		return amount.currency();
 	}
 
 	private static void require(Object value, String field) {

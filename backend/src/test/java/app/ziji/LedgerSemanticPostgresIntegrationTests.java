@@ -18,6 +18,9 @@ import app.ziji.ledger.application.LedgerPersistenceException;
 import app.ziji.ledger.application.LedgerTransactionStore;
 import app.ziji.ledger.application.LedgerAccountStore;
 import app.ziji.ledger.application.LedgerOutbox;
+import app.ziji.ledger.application.LiabilityBorrowingCommand;
+import app.ziji.ledger.application.LiabilityBorrowingWriteDetails;
+import app.ziji.ledger.application.LiabilityRepaymentCommand;
 import app.ziji.account.application.AccountPostingReferencePort;
 import app.ziji.accountmember.application.AccountPostingAccessPort;
 import app.ziji.audit.application.AuditLogWritePort;
@@ -37,6 +40,7 @@ import app.ziji.ledger.domain.TransactionType;
 import app.ziji.ledger.application.ExpenseCommand;
 import app.ziji.ledger.application.IncomeCommand;
 import app.ziji.ledger.application.RefundCommand;
+import app.ziji.ledger.application.RepaymentWriteDetails;
 import app.ziji.ledger.application.TransferCommand;
 import app.ziji.shared.application.TransactionRunner;
 import org.junit.jupiter.api.Test;
@@ -62,6 +66,8 @@ class LedgerSemanticPostgresIntegrationTests extends PostgresIntegrationTestSupp
 		UUID.fromString("00000000-0000-4000-8000-000000000101");
 	private static final UUID EXPENSE_CATEGORY_ID =
 		UUID.fromString("00000000-0000-4000-8000-000000000201");
+	private static final UUID FEE_CATEGORY_ID =
+		UUID.fromString("00000000-0000-4000-8000-000000000202");
 
 	@Autowired
 	private LedgerCommandApplicationService service;
@@ -120,6 +126,142 @@ class LedgerSemanticPostgresIntegrationTests extends PostgresIntegrationTestSupp
 	}
 
 	@Test
+	void liabilityCommandsPersistExactPostingsDetailsAndExpenseBoundary() {
+		Fixture fixture = fixture();
+		Transaction cardExpense = service.postExpense(new ExpenseCommand(
+			fixture.userId, fixture.creditCardAccountId, EXPENSE_CATEGORY_ID,
+			money("300.00", CurrencyCode.CNY), NOW, BUSINESS_DATE, "Asia/Shanghai", "商户", "信用卡消费"));
+		Transaction borrowing = service.postLiabilityBorrowing(new LiabilityBorrowingCommand(
+			fixture.userId, fixture.assetAccountId, fixture.loanAccountId, money("10000.00", CurrencyCode.CNY),
+			NOW, BUSINESS_DATE, "Asia/Shanghai", "借款到账"));
+		jdbc.update("""
+			INSERT INTO liability_details (account_id, current_amount_due, updated_at, version)
+			VALUES (?, 1234.00, ?, 1)
+			""", fixture.loanAccountId, timestamp());
+		Transaction repayment = service.postLiabilityRepayment(new LiabilityRepaymentCommand(
+			fixture.userId, fixture.assetAccountId, fixture.loanAccountId,
+			money("1000.00", CurrencyCode.CNY), money("50.00", CurrencyCode.CNY), money("2.00", CurrencyCode.CNY),
+			EXPENSE_CATEGORY_ID, FEE_CATEGORY_ID, NOW, BUSINESS_DATE, "Asia/Shanghai", "还款"));
+
+		assertEntry(cardExpense.transactionId(), 1, categoryLedger(fixture.userId, EXPENSE_CATEGORY_ID), "D", "300.00");
+		assertEntry(cardExpense.transactionId(), 2, fixture.creditCardLedgerId, "C", "300.00");
+		assertEquals("TRANSFER", transactionType(borrowing.transactionId()));
+		assertEntry(borrowing.transactionId(), 1, fixture.assetLedgerId, "D", "10000.00");
+		assertEntry(borrowing.transactionId(), 2, fixture.loanLedgerId, "C", "10000.00");
+		Map<String, Object> transfer = jdbc.queryForMap("""
+			SELECT from_account_id, to_account_id, from_amount, to_amount, fee_amount
+			FROM transfer_details WHERE transaction_id = ?
+			""", borrowing.transactionId());
+		assertEquals(fixture.loanAccountId, transfer.get("from_account_id"));
+		assertEquals(fixture.assetAccountId, transfer.get("to_account_id"));
+		assertMoney("10000.00", transfer.get("from_amount"));
+		assertMoney("10000.00", transfer.get("to_amount"));
+		assertMoney("0.00", transfer.get("fee_amount"));
+
+		assertEquals("REPAYMENT", transactionType(repayment.transactionId()));
+		assertEntry(repayment.transactionId(), 1, fixture.loanLedgerId, "D", "1000.00");
+		assertEntry(repayment.transactionId(), 2, fixture.assetLedgerId, "C", "1000.00");
+		assertEntry(repayment.transactionId(), 3, categoryLedger(fixture.userId, EXPENSE_CATEGORY_ID), "D", "50.00");
+		assertEntry(repayment.transactionId(), 4, fixture.assetLedgerId, "C", "50.00");
+		assertEntry(repayment.transactionId(), 5, categoryLedger(fixture.userId, FEE_CATEGORY_ID), "D", "2.00");
+		assertEntry(repayment.transactionId(), 6, fixture.assetLedgerId, "C", "2.00");
+		Map<String, Object> repaymentDetails = jdbc.queryForMap("""
+			SELECT liability_account_id, cash_account_id, principal_amount, interest_amount, fee_amount
+			FROM repayment_details WHERE transaction_id = ?
+			""", repayment.transactionId());
+		assertEquals(fixture.loanAccountId, repaymentDetails.get("liability_account_id"));
+		assertEquals(fixture.assetAccountId, repaymentDetails.get("cash_account_id"));
+		assertMoney("1000.00", repaymentDetails.get("principal_amount"));
+		assertMoney("50.00", repaymentDetails.get("interest_amount"));
+		assertMoney("2.00", repaymentDetails.get("fee_amount"));
+		assertMoney("1234.00", jdbc.queryForObject(
+			"SELECT current_amount_due FROM liability_details WHERE account_id = ?",
+			BigDecimal.class, fixture.loanAccountId));
+		assertEquals(LiabilityBorrowingWriteDetails.class,
+			ledgerTransactions.findPostedForMutation(borrowing.transactionId()).orElseThrow().details().getClass());
+		RepaymentWriteDetails restoredRepayment = (RepaymentWriteDetails) ledgerTransactions
+			.findPostedForMutation(repayment.transactionId()).orElseThrow().details();
+		assertEquals(EXPENSE_CATEGORY_ID, restoredRepayment.interestCategoryId());
+		assertEquals(FEE_CATEGORY_ID, restoredRepayment.feeCategoryId());
+
+		assertEquals(0, expenseTotal(cardExpense.transactionId()).compareTo(new BigDecimal("300.00")));
+		assertEquals(0, expenseTotal(borrowing.transactionId()).compareTo(BigDecimal.ZERO));
+		assertEquals(0, expenseTotal(repayment.transactionId()).compareTo(new BigDecimal("52.00")));
+		assertEquals(0, incomeTotal(borrowing.transactionId()).compareTo(BigDecimal.ZERO));
+		assertEquals(0, incomeTotal(repayment.transactionId()).compareTo(BigDecimal.ZERO));
+		assertEquals(3, count("SELECT count(*) FROM audit_logs WHERE actor_user_id = ? AND action = 'TRANSACTION_POSTED'",
+			fixture.userId));
+		assertEquals(3, count("SELECT count(*) FROM outbox_events WHERE aggregate_id IN (?, ?, ?) AND event_type = 'TransactionPosted'",
+			cardExpense.transactionId(), borrowing.transactionId(), repayment.transactionId()));
+	}
+
+	@Test
+	void liabilityCommandFailuresRollBackFactsAndDerivedCategoryAccounts() {
+		Fixture fixture = fixture();
+		int transactionsBefore = count("SELECT count(*) FROM transactions WHERE created_by = ?", fixture.userId);
+		int auditsBefore = count("SELECT count(*) FROM audit_logs WHERE actor_user_id = ?", fixture.userId);
+		int outboxBefore = count("SELECT count(*) FROM outbox_events");
+		int categoryLedgersBefore = categoryLedgerCount(fixture.userId);
+
+		AuditLogWritePort failingAudit = entry -> { throw new IllegalStateException("测试 audit 写入失败。"); };
+		assertThrows(IllegalStateException.class, () -> service(fixture, ledgerTransactions, failingAudit, ledgerOutbox)
+			.postLiabilityRepayment(repaymentCommand(fixture)));
+		assertLiabilityFactCounts(fixture, transactionsBefore, auditsBefore, outboxBefore, categoryLedgersBefore);
+
+		LedgerOutbox failingOutbox = event -> { throw new IllegalStateException("测试 outbox 写入失败。"); };
+		assertThrows(IllegalStateException.class, () -> service(fixture, ledgerTransactions, auditLogs, failingOutbox)
+			.postLiabilityRepayment(repaymentCommand(fixture)));
+		assertLiabilityFactCounts(fixture, transactionsBefore, auditsBefore, outboxBefore, categoryLedgersBefore);
+
+		LedgerTransactionStore failingLedger = mock(LedgerTransactionStore.class);
+		doThrow(new LedgerPersistenceException(new IllegalStateException("测试账务写入失败。")))
+			.when(failingLedger).persistPosted(any());
+		assertThrows(LedgerPersistenceException.class, () -> service(fixture, failingLedger, auditLogs, ledgerOutbox)
+			.postLiabilityRepayment(repaymentCommand(fixture)));
+		assertLiabilityFactCounts(fixture, transactionsBefore, auditsBefore, outboxBefore, categoryLedgersBefore);
+	}
+
+	@Test
+	void dualAccountLiabilityCommandsRequireCurrentOwnerOrEditorMembershipOnBothAccounts() {
+		Fixture fixture = fixture();
+		UUID owner = UUID.randomUUID();
+		UUID editor = UUID.randomUUID();
+		UUID viewer = UUID.randomUUID();
+		UUID left = UUID.randomUUID();
+		UUID removed = UUID.randomUUID();
+		UUID ended = UUID.randomUUID();
+		UUID oneSideOnly = UUID.randomUUID();
+		UUID creatorOnly = UUID.randomUUID();
+		UUID unrelated = UUID.randomUUID();
+		for (UUID userId : List.of(owner, editor, viewer, left, removed, ended, oneSideOnly, creatorOnly, unrelated)) {
+			insertUser(userId);
+		}
+		membership(fixture.assetAccountId, owner, "OWNER", "ACTIVE", null);
+		membership(fixture.loanAccountId, owner, "OWNER", "ACTIVE", null);
+		membership(fixture.assetAccountId, editor, "EDITOR", "ACTIVE", null);
+		membership(fixture.loanAccountId, editor, "EDITOR", "ACTIVE", null);
+		membership(fixture.assetAccountId, viewer, "VIEWER", "ACTIVE", null);
+		membership(fixture.loanAccountId, viewer, "VIEWER", "ACTIVE", null);
+		membership(fixture.assetAccountId, left, "EDITOR", "LEFT", NOW.minusSeconds(60));
+		membership(fixture.loanAccountId, left, "EDITOR", "LEFT", NOW.minusSeconds(60));
+		membership(fixture.assetAccountId, removed, "EDITOR", "REMOVED", NOW.minusSeconds(60));
+		membership(fixture.loanAccountId, removed, "EDITOR", "REMOVED", NOW.minusSeconds(60));
+		membership(fixture.assetAccountId, ended, "OWNER", "LEFT", NOW.minusSeconds(1));
+		membership(fixture.loanAccountId, ended, "OWNER", "LEFT", NOW.minusSeconds(1));
+		membership(fixture.assetAccountId, oneSideOnly, "EDITOR", "ACTIVE", null);
+		jdbc.update("UPDATE accounts SET created_by = ? WHERE id IN (?, ?)",
+			creatorOnly, fixture.assetAccountId, fixture.loanAccountId);
+
+		assertEquals(TransactionType.TRANSFER, postBorrowing(fixture, owner).type());
+		assertEquals(TransactionType.TRANSFER, postBorrowing(fixture, editor).type());
+		for (UUID denied : List.of(viewer, left, removed, ended, oneSideOnly, creatorOnly, unrelated)) {
+			int before = count("SELECT count(*) FROM transactions WHERE created_by = ?", denied);
+			assertThrows(LedgerCommandValidationException.class, () -> postBorrowing(fixture, denied));
+			assertEquals(before, count("SELECT count(*) FROM transactions WHERE created_by = ?", denied));
+		}
+	}
+
+	@Test
 	void ledgerAuditAndOutboxFailuresRollBackAllFourFactKinds() {
 		Fixture fixture = fixture();
 		int transactionsBefore = count("SELECT count(*) FROM transactions WHERE created_by = ?", fixture.userId);
@@ -157,11 +299,32 @@ class LedgerSemanticPostgresIntegrationTests extends PostgresIntegrationTestSupp
 			money("1.00", CurrencyCode.CNY), NOW, BUSINESS_DATE, "Asia/Shanghai", "失败注入", "敏感正文不出边界");
 	}
 
+	private LiabilityRepaymentCommand repaymentCommand(Fixture fixture) {
+		return new LiabilityRepaymentCommand(
+			fixture.userId, fixture.assetAccountId, fixture.loanAccountId,
+			money("1.00", CurrencyCode.CNY), money("0.01", CurrencyCode.CNY), money("0.01", CurrencyCode.CNY),
+			EXPENSE_CATEGORY_ID, FEE_CATEGORY_ID, NOW, BUSINESS_DATE, "Asia/Shanghai", "失败注入");
+	}
+
+	private Transaction postBorrowing(Fixture fixture, UUID userId) {
+		return service.postLiabilityBorrowing(new LiabilityBorrowingCommand(
+			userId, fixture.assetAccountId, fixture.loanAccountId, money("10.00", CurrencyCode.CNY),
+			NOW, BUSINESS_DATE, "Asia/Shanghai", "权限测试"));
+	}
+
 	private void assertFactCounts(Fixture fixture, int transactions, int audits, int outbox) {
 		assertEquals(transactions, count("SELECT count(*) FROM transactions WHERE created_by = ?", fixture.userId));
 		assertEquals(0, count("SELECT count(*) FROM ledger_entries e JOIN transactions t ON t.id = e.transaction_id WHERE t.created_by = ?", fixture.userId));
 		assertEquals(audits, count("SELECT count(*) FROM audit_logs WHERE actor_user_id = ?", fixture.userId));
 		assertEquals(outbox, count("SELECT count(*) FROM outbox_events"));
+	}
+
+	private void assertLiabilityFactCounts(
+		Fixture fixture, int transactions, int audits, int outbox, int categoryLedgers) {
+		assertFactCounts(fixture, transactions, audits, outbox);
+		assertEquals(categoryLedgers, categoryLedgerCount(fixture.userId));
+		assertEquals(0, count("SELECT count(*) FROM repayment_details r JOIN transactions t ON t.id = r.transaction_id WHERE t.created_by = ?",
+			fixture.userId));
 	}
 
 	@Test
@@ -290,12 +453,41 @@ class LedgerSemanticPostgresIntegrationTests extends PostgresIntegrationTestSupp
 			insertVisibleAccountWithPrimary(fixture.userId, fixture.assetAccountId, fixture.assetLedgerId, "CNY", "BANK");
 			insertVisibleAccountWithPrimary(fixture.userId, fixture.secondAssetAccountId,
 				fixture.secondAssetLedgerId, "CNY", "ALIPAY");
+			insertLiabilityAccountWithPrimary(fixture.userId, fixture.creditCardAccountId,
+				fixture.creditCardLedgerId, "CNY", "CREDIT_CARD");
+			insertLiabilityAccountWithPrimary(fixture.userId, fixture.loanAccountId,
+				fixture.loanLedgerId, "CNY", "LOAN");
 			insertSystemLedger(fixture.userId, fixture.incomeLedgerId, "INCOME_WAGE", "INCOME", "CNY");
 			insertSystemLedger(fixture.userId, fixture.expenseLedgerId, "EXPENSE_FOOD", "EXPENSE", "CNY");
 			insertSystemLedger(fixture.userId, fixture.equityLedgerId,
 				"EQUITY_BALANCE_ADJUSTMENT", "EQUITY", "CNY");
 		});
 		return fixture;
+	}
+
+	private void insertLiabilityAccountWithPrimary(
+		UUID userId, UUID accountId, UUID ledgerId, String currency, String accountType) {
+		jdbc.update("""
+			INSERT INTO accounts
+				(id, account_class, account_type, name, currency, status, created_by, created_at, updated_at, version)
+			VALUES (?, 'LIABILITY', ?, ?, ?, 'ACTIVE', ?, ?, ?, 1)
+			""", accountId, accountType, "负债语义账户-" + accountId, currency, userId, timestamp(), timestamp());
+		UUID membershipId = UUID.randomUUID();
+		jdbc.update("""
+			INSERT INTO account_members
+				(id, account_id, user_id, role, status, joined_at, membership_no, version)
+			VALUES (?, ?, ?, 'OWNER', 'ACTIVE', ?, 1, 1)
+			""", membershipId, accountId, userId, timestamp());
+		jdbc.update("""
+			INSERT INTO account_inclusion_settings
+				(id, membership_id, included, ratio, valid_from, created_by, created_at)
+			VALUES (?, ?, TRUE, 1.000000, ?, ?, ?)
+			""", UUID.randomUUID(), membershipId, timestamp(), userId, timestamp());
+		jdbc.update("""
+			INSERT INTO ledger_accounts
+				(id, visible_account_id, code, ledger_role, account_nature, currency, status, created_at)
+			VALUES (?, ?, ?, 'PRIMARY', 'LIABILITY', ?, 'ACTIVE', ?)
+			""", ledgerId, accountId, "PRIMARY_" + ledgerId, currency, timestamp());
 	}
 
 	private void insertUser(UUID userId) {
@@ -308,6 +500,24 @@ class LedgerSemanticPostgresIntegrationTests extends PostgresIntegrationTestSupp
 				'STANDARD', 'ACTIVE', ?, ?, 1)
 			""", userId, userId + "@example.test", userId + "@example.test",
 			timestamp(), timestamp(), timestamp());
+	}
+
+	private void membership(UUID accountId, UUID userId, String role, String status, Instant endedAt) {
+		UUID membershipId = UUID.randomUUID();
+		Instant joinedAt = NOW.minusSeconds(3600);
+		transactionRunner.required(() -> {
+			jdbc.update("""
+				INSERT INTO account_members
+					(id, account_id, user_id, role, status, joined_at, ended_at, membership_no, version)
+				VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)
+				""", membershipId, accountId, userId, role, status, Timestamp.from(joinedAt),
+				endedAt == null ? null : Timestamp.from(endedAt));
+			jdbc.update("""
+				INSERT INTO account_inclusion_settings
+					(id, membership_id, included, ratio, valid_from, created_by, created_at)
+				VALUES (?, ?, TRUE, 1.000000, ?, ?, ?)
+				""", UUID.randomUUID(), membershipId, Timestamp.from(joinedAt), userId, Timestamp.from(joinedAt));
+		});
 	}
 
 	private void insertVisibleAccountWithPrimary(
@@ -354,6 +564,49 @@ class LedgerSemanticPostgresIntegrationTests extends PostgresIntegrationTestSupp
 		assertEquals(0, new BigDecimal(amount).compareTo((BigDecimal) entry.get("amount")));
 	}
 
+	private UUID categoryLedger(UUID userId, UUID categoryId) {
+		return jdbc.queryForObject("""
+			SELECT id FROM ledger_accounts
+			WHERE owner_user_id = ? AND code = ? AND currency = 'CNY' AND ledger_role = 'SYSTEM'
+			""", UUID.class, userId, "EXPENSE_CATEGORY_" + categoryId);
+	}
+
+	private String transactionType(UUID transactionId) {
+		return jdbc.queryForObject(
+			"SELECT transaction_type FROM transactions WHERE id = ?", String.class, transactionId);
+	}
+
+	private BigDecimal expenseTotal(UUID transactionId) {
+		BigDecimal total = jdbc.queryForObject("""
+			SELECT COALESCE(SUM(e.amount), 0)
+			FROM ledger_entries e
+			JOIN ledger_accounts la ON la.id = e.ledger_account_id
+			WHERE e.transaction_id = ? AND e.direction = 'D' AND la.account_nature = 'EXPENSE'
+			""", BigDecimal.class, transactionId);
+		return total == null ? BigDecimal.ZERO : total;
+	}
+
+	private BigDecimal incomeTotal(UUID transactionId) {
+		BigDecimal total = jdbc.queryForObject("""
+			SELECT COALESCE(SUM(e.amount), 0)
+			FROM ledger_entries e
+			JOIN ledger_accounts la ON la.id = e.ledger_account_id
+			WHERE e.transaction_id = ? AND e.direction = 'C' AND la.account_nature = 'INCOME'
+			""", BigDecimal.class, transactionId);
+		return total == null ? BigDecimal.ZERO : total;
+	}
+
+	private int categoryLedgerCount(UUID userId) {
+		return count("""
+			SELECT count(*) FROM ledger_accounts
+			WHERE owner_user_id = ? AND code IN (?, ?)
+			""", userId, "EXPENSE_CATEGORY_" + EXPENSE_CATEGORY_ID, "EXPENSE_CATEGORY_" + FEE_CATEGORY_ID);
+	}
+
+	private static void assertMoney(String expected, Object actual) {
+		assertEquals(0, new BigDecimal(expected).compareTo((BigDecimal) actual));
+	}
+
 	private void assertAdjustment(
 		UUID transactionId, String before, String actual, String difference, String reason) {
 		Map<String, Object> row = jdbc.queryForMap("""
@@ -384,8 +637,12 @@ class LedgerSemanticPostgresIntegrationTests extends PostgresIntegrationTestSupp
 		private final UUID userId;
 		private final UUID assetAccountId = UUID.randomUUID();
 		private final UUID secondAssetAccountId = UUID.randomUUID();
+		private final UUID creditCardAccountId = UUID.randomUUID();
+		private final UUID loanAccountId = UUID.randomUUID();
 		private final UUID assetLedgerId = UUID.randomUUID();
 		private final UUID secondAssetLedgerId = UUID.randomUUID();
+		private final UUID creditCardLedgerId = UUID.randomUUID();
+		private final UUID loanLedgerId = UUID.randomUUID();
 		private final UUID incomeLedgerId = UUID.randomUUID();
 		private final UUID expenseLedgerId = UUID.randomUUID();
 		private final UUID equityLedgerId = UUID.randomUUID();

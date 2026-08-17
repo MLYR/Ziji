@@ -39,21 +39,24 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 五类账务语义命令的应用编排和边界测试，不替代 PostgreSQL 约束测试。 */
+/** 账务语义命令的应用编排和边界测试，不替代 PostgreSQL 约束测试。 */
 class LedgerCommandApplicationServiceTests {
 
 	private static final UUID USER_ID = UUID.fromString("00000000-0000-0000-0000-000000001001");
 	private static final UUID ASSET_ACCOUNT_ID = UUID.fromString("00000000-0000-0000-0000-000000001002");
 	private static final UUID SECOND_ASSET_ACCOUNT_ID = UUID.fromString("00000000-0000-0000-0000-000000001003");
 	private static final UUID LIABILITY_ACCOUNT_ID = UUID.fromString("00000000-0000-0000-0000-000000001004");
+	private static final UUID LOAN_ACCOUNT_ID = UUID.fromString("00000000-0000-0000-0000-000000001005");
 	private static final UUID ASSET_LEDGER_ID = UUID.fromString("00000000-0000-0000-0000-000000001012");
 	private static final UUID SECOND_ASSET_LEDGER_ID = UUID.fromString("00000000-0000-0000-0000-000000001013");
 	private static final UUID LIABILITY_LEDGER_ID = UUID.fromString("00000000-0000-0000-0000-000000001014");
+	private static final UUID LOAN_LEDGER_ID = UUID.fromString("00000000-0000-0000-0000-000000001018");
 	private static final UUID INCOME_LEDGER_ID = UUID.fromString("00000000-0000-0000-0000-000000001015");
 	private static final UUID EXPENSE_LEDGER_ID = UUID.fromString("00000000-0000-0000-0000-000000001016");
 	private static final UUID EQUITY_LEDGER_ID = UUID.fromString("00000000-0000-0000-0000-000000001017");
 	private static final UUID INCOME_CATEGORY_ID = UUID.fromString("00000000-0000-0000-0000-000000001021");
 	private static final UUID EXPENSE_CATEGORY_ID = UUID.fromString("00000000-0000-0000-0000-000000001022");
+	private static final UUID FEE_CATEGORY_ID = UUID.fromString("00000000-0000-0000-0000-000000001023");
 	private static final Instant BUSINESS_AT = Instant.parse("2026-08-15T01:00:00Z");
 	private static final LocalDate BUSINESS_DATE = LocalDate.of(2026, 8, 15);
 	private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-08-15T02:00:00Z"), ZoneOffset.UTC);
@@ -114,6 +117,146 @@ class LedgerCommandApplicationServiceTests {
 	}
 
 	@Test
+	void semanticExpenseDerivesCategoryCounterForCreditCardAndRejectsOtherLiability() {
+		Fixture fixture = fixture();
+
+		Transaction transaction = fixture.service.postExpense(new ExpenseCommand(
+			USER_ID, LIABILITY_ACCOUNT_ID, EXPENSE_CATEGORY_ID, money("300.00", CurrencyCode.CNY),
+			BUSINESS_AT, BUSINESS_DATE, "Asia/Shanghai", "餐厅", "信用卡消费"));
+		UUID derivedExpenseLedger = transaction.entries().getFirst().ledgerAccountId();
+		assertEquals(TransactionType.EXPENSE, transaction.type());
+		assertEquals(LedgerDirection.DEBIT, transaction.entries().getFirst().direction());
+		assertEquals(derivedExpenseLedger, transaction.entries().getFirst().ledgerAccountId());
+		assertEquals(LIABILITY_LEDGER_ID, transaction.entries().get(1).ledgerAccountId());
+		assertEquals("EXPENSE_CATEGORY_" + EXPENSE_CATEGORY_ID,
+			fixture.ledgerAccounts.references.get(derivedExpenseLedger).code());
+
+		fixture.accounts.accounts.put(LIABILITY_ACCOUNT_ID,
+			new AccountPostingReference(LIABILITY_ACCOUNT_ID, "LIABILITY", "LOAN", "CNY", true));
+		assertThrows(LedgerCommandValidationException.class, () -> fixture.service.postExpense(new ExpenseCommand(
+			USER_ID, LIABILITY_ACCOUNT_ID, EXPENSE_CATEGORY_ID, money("1.00", CurrencyCode.CNY),
+			BUSINESS_AT, BUSINESS_DATE, "Asia/Shanghai", null, null)));
+	}
+
+	@Test
+	void liabilityBorrowingUsesAssetDebitLiabilityCreditAndTransferDetail() {
+		Fixture fixture = fixture();
+		Transaction transaction = fixture.service.postLiabilityBorrowing(new LiabilityBorrowingCommand(
+			USER_ID, ASSET_ACCOUNT_ID, LOAN_ACCOUNT_ID, money("10000.00", CurrencyCode.CNY),
+			BUSINESS_AT, BUSINESS_DATE, "Asia/Shanghai", "借款到账"));
+
+		assertEquals(TransactionType.TRANSFER, transaction.type());
+		assertEquals(2, transaction.entries().size());
+		assertEquals(ASSET_LEDGER_ID, transaction.entries().get(0).ledgerAccountId());
+		assertEquals(LedgerDirection.DEBIT, transaction.entries().get(0).direction());
+		assertEquals(LOAN_LEDGER_ID, transaction.entries().get(1).ledgerAccountId());
+		assertEquals(LedgerDirection.CREDIT, transaction.entries().get(1).direction());
+		LiabilityBorrowingWriteDetails details = (LiabilityBorrowingWriteDetails) fixture.store.write.details();
+		assertEquals(LOAN_ACCOUNT_ID, details.liabilityAccountId());
+		assertEquals(ASSET_ACCOUNT_ID, details.assetAccountId());
+		assertEquals(money("10000.00", CurrencyCode.CNY), details.amount());
+	}
+
+	@Test
+	void liabilityRepaymentSeparatesPrincipalInterestAndFeeAndEnforcesCategoryIffPositive() {
+		Fixture fixture = fixture();
+		Transaction transaction = fixture.service.postLiabilityRepayment(new LiabilityRepaymentCommand(
+			USER_ID, ASSET_ACCOUNT_ID, LIABILITY_ACCOUNT_ID,
+			money("1000.00", CurrencyCode.CNY), money("50.00", CurrencyCode.CNY), money("2.00", CurrencyCode.CNY),
+			EXPENSE_CATEGORY_ID, FEE_CATEGORY_ID, BUSINESS_AT, BUSINESS_DATE, "Asia/Shanghai", "还款"));
+
+		assertEquals(TransactionType.REPAYMENT, transaction.type());
+		assertEquals(6, transaction.entries().size());
+		assertEquals(LIABILITY_LEDGER_ID, transaction.entries().get(0).ledgerAccountId());
+		assertEquals(LedgerDirection.DEBIT, transaction.entries().get(0).direction());
+		assertEquals(ASSET_LEDGER_ID, transaction.entries().get(1).ledgerAccountId());
+		assertEquals(LedgerDirection.CREDIT, transaction.entries().get(1).direction());
+		assertEquals(LedgerDirection.DEBIT, transaction.entries().get(2).direction());
+		assertEquals(LedgerDirection.CREDIT, transaction.entries().get(3).direction());
+		assertEquals(LedgerDirection.DEBIT, transaction.entries().get(4).direction());
+		assertEquals(LedgerDirection.CREDIT, transaction.entries().get(5).direction());
+		assertTrue(fixture.store.write.details() instanceof RepaymentWriteDetails);
+		assertEquals(EXPENSE_CATEGORY_ID, ((RepaymentWriteDetails) fixture.store.write.details()).interestCategoryId());
+		assertEquals(FEE_CATEGORY_ID, ((RepaymentWriteDetails) fixture.store.write.details()).feeCategoryId());
+
+		assertThrows(LedgerCommandValidationException.class, () -> fixture.service.postLiabilityRepayment(
+			new LiabilityRepaymentCommand(USER_ID, ASSET_ACCOUNT_ID, LIABILITY_ACCOUNT_ID,
+				money("1.00", CurrencyCode.CNY), money("0.00", CurrencyCode.CNY), money("0.00", CurrencyCode.CNY),
+				EXPENSE_CATEGORY_ID, null, BUSINESS_AT, BUSINESS_DATE, "Asia/Shanghai", null)));
+		assertThrows(LedgerCommandValidationException.class, () -> fixture.service.postLiabilityRepayment(
+			new LiabilityRepaymentCommand(USER_ID, ASSET_ACCOUNT_ID, LIABILITY_ACCOUNT_ID,
+				money("1.00", CurrencyCode.CNY), money("-0.01", CurrencyCode.CNY), money("0.00", CurrencyCode.CNY),
+				null, null, BUSINESS_AT, BUSINESS_DATE, "Asia/Shanghai", null)));
+	}
+
+	@Test
+	void liabilityCommandsFailClosedWhenEitherAccountIsNotWritableOrCurrencyIsMismatched() {
+		Fixture fixture = fixture();
+		fixture.access.deniedAccountId = LOAN_ACCOUNT_ID;
+		assertThrows(LedgerCommandValidationException.class, () -> fixture.service.postLiabilityBorrowing(
+			new LiabilityBorrowingCommand(USER_ID, ASSET_ACCOUNT_ID, LOAN_ACCOUNT_ID,
+				money("10.00", CurrencyCode.CNY), BUSINESS_AT, BUSINESS_DATE, "Asia/Shanghai", null)));
+		assertFalse(fixture.store.persisted);
+
+		fixture.access.deniedAccountId = null;
+		fixture.accounts.accounts.put(LOAN_ACCOUNT_ID,
+			new AccountPostingReference(LOAN_ACCOUNT_ID, "LIABILITY", "LOAN", "HKD", true));
+		assertThrows(LedgerCommandValidationException.class, () -> fixture.service.postLiabilityRepayment(
+			new LiabilityRepaymentCommand(USER_ID, ASSET_ACCOUNT_ID, LOAN_ACCOUNT_ID,
+				money("1.00", CurrencyCode.CNY), money("0.00", CurrencyCode.CNY), money("0.00", CurrencyCode.CNY),
+				null, null, BUSINESS_AT, BUSINESS_DATE, "Asia/Shanghai", null)));
+		assertFalse(fixture.store.persisted);
+	}
+
+	@Test
+	void liabilityBorrowingRejectsCreditCardInvestmentAndUnsupportedPrecision() {
+		Fixture fixture = fixture();
+		fixture.accounts.accounts.put(LOAN_ACCOUNT_ID,
+			new AccountPostingReference(LOAN_ACCOUNT_ID, "LIABILITY", "CREDIT_CARD", "CNY", true));
+		assertThrows(LedgerCommandValidationException.class, () -> fixture.service.postLiabilityBorrowing(
+			new LiabilityBorrowingCommand(USER_ID, ASSET_ACCOUNT_ID, LOAN_ACCOUNT_ID,
+				money("10.00", CurrencyCode.CNY), BUSINESS_AT, BUSINESS_DATE, "Asia/Shanghai", null)));
+
+		fixture.accounts.accounts.put(LOAN_ACCOUNT_ID,
+			new AccountPostingReference(LOAN_ACCOUNT_ID, "LIABILITY", "LOAN", "CNY", true));
+		fixture.accounts.accounts.put(ASSET_ACCOUNT_ID,
+			new AccountPostingReference(ASSET_ACCOUNT_ID, "INVESTMENT", "BROKERAGE", "CNY", true));
+		assertThrows(LedgerCommandValidationException.class, () -> fixture.service.postLiabilityBorrowing(
+			new LiabilityBorrowingCommand(USER_ID, ASSET_ACCOUNT_ID, LOAN_ACCOUNT_ID,
+				money("10.00", CurrencyCode.CNY), BUSINESS_AT, BUSINESS_DATE, "Asia/Shanghai", null)));
+
+		fixture.accounts.accounts.put(ASSET_ACCOUNT_ID,
+			new AccountPostingReference(ASSET_ACCOUNT_ID, "ASSET", "BANK", "CNY", true));
+		assertThrows(LedgerCommandValidationException.class, () -> fixture.service.postLiabilityBorrowing(
+			new LiabilityBorrowingCommand(USER_ID, ASSET_ACCOUNT_ID, LOAN_ACCOUNT_ID,
+				money("10.001", CurrencyCode.CNY), BUSINESS_AT, BUSINESS_DATE, "Asia/Shanghai", null)));
+	}
+
+	@Test
+	void liabilityRepaymentCoversPrincipalInterestFeeAndCategoryMatrix() {
+		Fixture fixture = fixture();
+		assertThrows(LedgerCommandValidationException.class, () -> fixture.service.postLiabilityRepayment(
+			repayment("0.00", "0.00", "0.00", null, null)));
+		assertThrows(LedgerCommandValidationException.class, () -> fixture.service.postLiabilityRepayment(
+			repayment("1.00", "1.00", "0.00", null, null)));
+		assertThrows(LedgerCommandValidationException.class, () -> fixture.service.postLiabilityRepayment(
+			repayment("1.00", "0.00", "0.00", EXPENSE_CATEGORY_ID, null)));
+		assertThrows(LedgerCommandValidationException.class, () -> fixture.service.postLiabilityRepayment(
+			repayment("1.00", "0.00", "1.00", null, null)));
+		assertThrows(LedgerCommandValidationException.class, () -> fixture.service.postLiabilityRepayment(
+			repayment("1.00", "0.00", "0.00", null, FEE_CATEGORY_ID)));
+		assertThrows(LedgerCommandValidationException.class, () -> fixture.service.postLiabilityRepayment(
+			repayment("1.00", "0.001", "0.00", EXPENSE_CATEGORY_ID, null)));
+
+		assertEquals(2, fixture.service.postLiabilityRepayment(
+			repayment("1.00", "0.00", "0.00", null, null)).entries().size());
+		assertEquals(4, fixture.service.postLiabilityRepayment(
+			repayment("1.00", "1.00", "0.00", EXPENSE_CATEGORY_ID, null)).entries().size());
+		assertEquals(4, fixture.service.postLiabilityRepayment(
+			repayment("1.00", "0.00", "1.00", null, FEE_CATEGORY_ID)).entries().size());
+	}
+
+	@Test
 	void refundCreditsOriginalExpenseAndRejectsOverRefund() {
 		Fixture fixture = fixture();
 		UUID originalTransactionId = UUID.fromString("00000000-0000-0000-0000-000000001031");
@@ -163,7 +306,7 @@ class LedgerCommandApplicationServiceTests {
 	void transferRejectsDifferentCurrenciesBeforePersistence() {
 		Fixture fixture = fixture();
 		fixture.accounts.accounts.put(SECOND_ASSET_ACCOUNT_ID,
-			new AccountPostingReference(SECOND_ASSET_ACCOUNT_ID, "ASSET", "HKD", true));
+			new AccountPostingReference(SECOND_ASSET_ACCOUNT_ID, "ASSET", "OTHER", "HKD", true));
 		fixture.ledgerAccounts.references.put(SECOND_ASSET_LEDGER_ID, reference(
 			SECOND_ASSET_LEDGER_ID, SECOND_ASSET_ACCOUNT_ID, null, "SECOND_ASSET", LedgerAccountRole.PRIMARY,
 			LedgerAccountNature.ASSET, CurrencyCode.HKD));
@@ -354,11 +497,13 @@ class LedgerCommandApplicationServiceTests {
 	private static Fixture fixture() {
 		Fixture fixture = new Fixture();
 		fixture.accounts.accounts.put(ASSET_ACCOUNT_ID,
-			new AccountPostingReference(ASSET_ACCOUNT_ID, "ASSET", "CNY", true));
+			new AccountPostingReference(ASSET_ACCOUNT_ID, "ASSET", "BANK", "CNY", true));
 		fixture.accounts.accounts.put(SECOND_ASSET_ACCOUNT_ID,
-			new AccountPostingReference(SECOND_ASSET_ACCOUNT_ID, "ASSET", "CNY", true));
+			new AccountPostingReference(SECOND_ASSET_ACCOUNT_ID, "ASSET", "ALIPAY", "CNY", true));
 		fixture.accounts.accounts.put(LIABILITY_ACCOUNT_ID,
-			new AccountPostingReference(LIABILITY_ACCOUNT_ID, "LIABILITY", "CNY", true));
+			new AccountPostingReference(LIABILITY_ACCOUNT_ID, "LIABILITY", "CREDIT_CARD", "CNY", true));
+		fixture.accounts.accounts.put(LOAN_ACCOUNT_ID,
+			new AccountPostingReference(LOAN_ACCOUNT_ID, "LIABILITY", "LOAN", "CNY", true));
 		fixture.ledgerAccounts.references.put(ASSET_LEDGER_ID, reference(
 			ASSET_LEDGER_ID, ASSET_ACCOUNT_ID, null, "ASSET", LedgerAccountRole.PRIMARY,
 			LedgerAccountNature.ASSET, CurrencyCode.CNY));
@@ -367,6 +512,9 @@ class LedgerCommandApplicationServiceTests {
 			LedgerAccountNature.ASSET, CurrencyCode.CNY));
 		fixture.ledgerAccounts.references.put(LIABILITY_LEDGER_ID, reference(
 			LIABILITY_LEDGER_ID, LIABILITY_ACCOUNT_ID, null, "LIABILITY", LedgerAccountRole.PRIMARY,
+			LedgerAccountNature.LIABILITY, CurrencyCode.CNY));
+		fixture.ledgerAccounts.references.put(LOAN_LEDGER_ID, reference(
+			LOAN_LEDGER_ID, LOAN_ACCOUNT_ID, null, "LOAN", LedgerAccountRole.PRIMARY,
 			LedgerAccountNature.LIABILITY, CurrencyCode.CNY));
 		fixture.ledgerAccounts.references.put(INCOME_LEDGER_ID, reference(
 			INCOME_LEDGER_ID, null, USER_ID, "INCOME_WAGE", LedgerAccountRole.SYSTEM,
@@ -381,6 +529,8 @@ class LedgerCommandApplicationServiceTests {
 			new CategoryReference(INCOME_CATEGORY_ID, null, null, CategoryType.INCOME, true));
 		fixture.categories.categories.put(EXPENSE_CATEGORY_ID,
 			new CategoryReference(EXPENSE_CATEGORY_ID, null, null, CategoryType.EXPENSE, true));
+		fixture.categories.categories.put(FEE_CATEGORY_ID,
+			new CategoryReference(FEE_CATEGORY_ID, null, null, CategoryType.EXPENSE, true));
 		fixture.service = new LedgerCommandApplicationService(
 			fixture.transactions, fixture.accounts, fixture.access, fixture.categories,
 			fixture.ledgerAccounts, fixture.store, fixture.audits, fixture.outbox, () -> "ledger-unit-request",
@@ -409,6 +559,14 @@ class LedgerCommandApplicationServiceTests {
 
 	private static Money money(String amount, CurrencyCode currency) {
 		return new Money(new BigDecimal(amount), currency);
+	}
+
+	private static LiabilityRepaymentCommand repayment(
+		String principal, String interest, String fee, UUID interestCategoryId, UUID feeCategoryId) {
+		return new LiabilityRepaymentCommand(
+			USER_ID, ASSET_ACCOUNT_ID, LIABILITY_ACCOUNT_ID,
+			money(principal, CurrencyCode.CNY), money(interest, CurrencyCode.CNY), money(fee, CurrencyCode.CNY),
+			interestCategoryId, feeCategoryId, BUSINESS_AT, BUSINESS_DATE, "Asia/Shanghai", null);
 	}
 
 	private static Transaction postedExpense(
@@ -471,10 +629,11 @@ class LedgerCommandApplicationServiceTests {
 
 	private static final class FakeAccess implements AccountPostingAccessPort {
 		private boolean allowed = true;
+		private UUID deniedAccountId;
 
 		@Override
 		public boolean mayPost(UUID userId, UUID accountId, Instant effectiveAt) {
-			return allowed;
+			return allowed && !accountId.equals(deniedAccountId);
 		}
 	}
 

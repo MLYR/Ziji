@@ -4,45 +4,44 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
 
+import app.ziji.ledger.domain.CurrencyCode;
 import app.ziji.ledger.domain.Money;
 
-/** 支出语义命令；费用科目必须以独立借方分录表达。 */
-public record ExpenseCommand(
+/** 负债还款语义命令；本金、利息和手续费在同一笔平衡交易内表达。 */
+public record LiabilityRepaymentCommand(
 	UUID userId,
-	UUID accountId,
-	UUID expenseLedgerAccountId,
-	UUID categoryId,
-	Money amount,
+	UUID cashAccountId,
+	UUID liabilityAccountId,
+	Money principalAmount,
+	Money interestAmount,
+	Money feeAmount,
+	UUID interestCategoryId,
+	UUID feeCategoryId,
 	Instant businessAt,
 	LocalDate businessDate,
 	String timezone,
-	String merchant,
 	String note) {
 
-	public ExpenseCommand {
+	public LiabilityRepaymentCommand {
 		require(userId, "用户");
-		require(accountId, "账户");
-		require(categoryId, "支出分类");
-		require(amount, "金额");
+		require(cashAccountId, "付款资产账户");
+		require(liabilityAccountId, "负债账户");
+		require(principalAmount, "本金");
+		require(interestAmount, "利息");
+		require(feeAmount, "手续费");
 		require(businessAt, "业务时间");
 		require(businessDate, "业务日期");
 		requireText(timezone, "时区");
 		requireMax(timezone, 64, "时区");
-		requireMax(merchant, 200, "商户");
+		requireMax(note, 2000, "备注");
+		if (cashAccountId.equals(liabilityAccountId)) {
+			throw new LedgerCommandValidationException("付款资产账户和负债账户不能相同。");
+		}
 	}
 
-	/** 公开语义构造器不接收内部费用科目；Ledger 在事务内按分类惰性确保。 */
-	public ExpenseCommand(
-		UUID userId,
-		UUID accountId,
-		UUID categoryId,
-		Money amount,
-		Instant businessAt,
-		LocalDate businessDate,
-		String timezone,
-		String merchant,
-		String note) {
-		this(userId, accountId, null, categoryId, amount, businessAt, businessDate, timezone, merchant, note);
+	/** 三个金额必须共享同一 currency；服务在账户边界再次校验该不变量。 */
+	public CurrencyCode currency() {
+		return principalAmount.currency();
 	}
 
 	private static void require(Object value, String field) {
