@@ -364,6 +364,8 @@ V1 用户状态 `User.status` 固定为 `ACTIVE`、`LOCKED`、`CLOSING`、`CLOSE
 
 创建成功返回账户以及 `openingTransactionId`。没有期初余额时该字段为 null。
 
+账户 ID 由服务端在原子创建事务内生成并在响应中返回；客户端不得提交 `id`。由于请求 schema 禁止额外字段，提交 `id` 返回 `400 VALIDATION_ERROR`，服务端不得静默接受或忽略客户端账户 ID。V1 不支持离线创建账户或客户端指定账户 UUID。
+
 `openingBalance` 只能在 `POST /accounts` 的原子创建事务中生成内部 `OPENING` 交易；`POST /transactions` 不接受 `OPENING`。字段缺失或为 `null` 时不创建期初交易；存在时 `amount` 必须为账户币种入账精度内的正十进制字符串，零、负数、额外字段以及不合法 class/type 组合均返回 `400 VALIDATION_ERROR`。服务端使用 `businessAt` 按当前用户 IANA 时区派生并固化 `businessDate` 和交易时区。
 
 期初分录固定为：

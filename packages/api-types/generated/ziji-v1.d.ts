@@ -1638,8 +1638,6 @@ export interface components {
         };
         /** @description 可选 openingBalance 只能在本次原子账户创建中生成内部 OPENING 交易；其 businessDate/timezone 由 businessAt 按当前用户 IANA 时区派生并固化。缺失或 null 不创建交易；存在时必须为账户币种精度内的正数。 */
         CreateAccountRequest: {
-            /** Format: uuid */
-            id?: string;
             /** @enum {string} */
             accountClass: "ASSET" | "LIABILITY" | "INVESTMENT";
             /** @enum {string} */

@@ -1762,7 +1762,6 @@ components:
       required: [accountClass, accountType, name, currency]
       description: 可选 openingBalance 只能在本次原子账户创建中生成内部 OPENING 交易；其 businessDate/timezone 由 businessAt 按当前用户 IANA 时区派生并固化。缺失或 null 不创建交易；存在时必须为账户币种精度内的正数。
       properties:
-        id: { type: string, format: uuid }
         accountClass: { type: string, enum: [ASSET, LIABILITY, INVESTMENT] }
         accountType: { type: string, enum: [BANK, WECHAT, ALIPAY, CASH, BROKERAGE, FUND, CREDIT_CARD, LOAN, CONSUMER_LOAN, OTHER] }
         name: { type: string, minLength: 1, maxLength: 100 }

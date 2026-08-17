@@ -29,7 +29,13 @@ try {
   assert.equal(postTransaction.operationId, 'postTransaction')
   assert.equal(createAccount.responses['400'].$ref, '#/components/responses/BadRequest')
   assert.equal('creditLimit' in createAccountRequest.properties, false, 'V1 CreateAccountRequest 不得接收无持久化落点的 creditLimit')
+  assert.equal('id' in createAccountRequest.properties, false, 'V1 账户 ID 必须由服务端生成，CreateAccountRequest 不得接收客户端 id')
   assert.equal(createAccountRequest.additionalProperties, false)
+  // `id` 不在本体或 class/type 分支属性中且禁止额外字段，提交它必须走 400 VALIDATION_ERROR，不能被 HTTP 层静默忽略。
+  const idIsRejectedAsAdditionalProperty = !('id' in createAccountRequest.properties)
+    && createAccountRequest.allOf.every((item) => item.oneOf.every((branch) => !('id' in branch.properties)))
+    && createAccountRequest.additionalProperties === false
+  assert.equal(idIsRejectedAsAdditionalProperty, true, '提交 CreateAccountRequest.id 必须因额外字段被拒绝')
   assert.equal(openingBalance.additionalProperties, false)
   assert.equal(openingBalance.properties.amount.$ref, '#/components/schemas/PositiveMoney')
   assert.equal('oneOf' in positiveOpeningAmount, false, '期初余额金额不得复用重叠 oneOf schema')
