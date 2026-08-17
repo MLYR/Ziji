@@ -10,6 +10,8 @@ import app.ziji.accountmember.application.AccountMembershipReadPort;
 import app.ziji.audit.application.AuditLogWritePort;
 import app.ziji.category.application.CategoryStore;
 import app.ziji.ledger.application.LedgerAccountStore;
+import app.ziji.ledger.application.BalanceProjectionService;
+import app.ziji.ledger.application.BalanceProjectionStore;
 import app.ziji.ledger.application.LedgerCommandApplicationService;
 import app.ziji.ledger.application.LedgerCommandValidationException;
 import app.ziji.ledger.application.LedgerOutbox;
@@ -59,6 +61,14 @@ class LedgerInfrastructureConfiguration {
 			requestIds,
 			postingService,
 			clock);
+	}
+
+	@Bean
+	BalanceProjectionService balanceProjectionService(
+		TransactionRunner transactions,
+		BalanceProjectionStore snapshots,
+		Clock clock) {
+		return new BalanceProjectionService(transactions, snapshots, clock);
 	}
 
 	@Bean

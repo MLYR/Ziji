@@ -15,6 +15,8 @@ import app.ziji.accountmember.application.AccountPostingAccessPort;
 import app.ziji.audit.application.AuditLogWritePort;
 import app.ziji.category.application.CategoryStore;
 import app.ziji.ledger.application.BalanceAdjustmentCommand;
+import app.ziji.ledger.application.BalanceProjectionRebuildResult;
+import app.ziji.ledger.application.BalanceProjectionService;
 import app.ziji.ledger.application.ExpenseCommand;
 import app.ziji.ledger.application.LedgerAccountStore;
 import app.ziji.ledger.application.LedgerCommandApplicationService;
@@ -65,6 +67,9 @@ class LedgerReversalPostgresIntegrationTests extends PostgresIntegrationTestSupp
 
 	@Autowired
 	private LedgerCommandApplicationService service;
+
+	@Autowired
+	private BalanceProjectionService balanceProjection;
 
 	@Autowired
 	private LedgerTransactionStore ledgerTransactions;
@@ -299,6 +304,29 @@ class LedgerReversalPostgresIntegrationTests extends PostgresIntegrationTestSupp
 		assertThrows(LedgerCommandValidationException.class, () -> service.voidPostedTransaction(
 			new VoidPostedTransactionCommand(fixture.userId, result.reversal().transactionId(), 1, "不能作废冲正")));
 		assertEquals(transactionCount, count("SELECT count(*) FROM transactions WHERE created_by = ?", fixture.userId));
+	}
+
+	@Test
+	void balanceProjectionKeepsRevisionVoidAndAdjustmentFactsInRebuild() {
+		Fixture fixture = fixture();
+		Transaction original = postExpense(fixture, "50.00");
+		TransactionRevisionResult revised = service.revisePostedTransaction(new RevisePostedTransactionCommand(
+			fixture.userId, original.transactionId(), 1, NOW.plusSeconds(60), BUSINESS_DATE,
+			"Asia/Shanghai", null, "修订商户", "修订支出", "金额修正",
+			new TransactionRevisionDetails.Expense(
+				money("60.00"), fixture.expenseLedgerId, fixture.correctedCategoryId)));
+		service.voidPostedTransaction(new VoidPostedTransactionCommand(
+			fixture.userId, revised.replacement().transactionId(), 1, "作废修订支出"));
+		service.postBalanceAdjustment(new BalanceAdjustmentCommand(
+			fixture.userId, fixture.assetAccountId, fixture.equityLedgerId, money("30.00"),
+			NOW.plusSeconds(120), BUSINESS_DATE, "Asia/Shanghai", "盘点后调整"));
+
+		BalanceProjectionRebuildResult result = balanceProjection.rebuildAll();
+
+		assertEquals(0, result.differenceCount());
+		assertBalanceSnapshot(fixture.assetLedgerId, "30.00");
+		assertBalanceSnapshot(fixture.expenseLedgerId, "0.00");
+		assertBalanceSnapshot(fixture.equityLedgerId, "30.00");
 	}
 
 	@Test
@@ -706,6 +734,14 @@ class LedgerReversalPostgresIntegrationTests extends PostgresIntegrationTestSupp
 			JOIN transactions t ON t.id = e.transaction_id
 			WHERE e.ledger_account_id = ? AND t.posted_at IS NOT NULL
 			""", BigDecimal.class, ledgerAccountId);
+		assertEquals(0, new BigDecimal(amount).compareTo(balance));
+	}
+
+	private void assertBalanceSnapshot(UUID ledgerAccountId, String amount) {
+		BigDecimal balance = jdbc.queryForObject("""
+			SELECT balance FROM account_balance_snapshots
+			WHERE ledger_account_id = ? AND business_date = ?
+			""", BigDecimal.class, ledgerAccountId, BUSINESS_DATE);
 		assertEquals(0, new BigDecimal(amount).compareTo(balance));
 	}
 
