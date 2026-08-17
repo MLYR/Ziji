@@ -364,6 +364,18 @@ V1 用户状态 `User.status` 固定为 `ACTIVE`、`LOCKED`、`CLOSING`、`CLOSE
 
 创建成功返回账户以及 `openingTransactionId`。没有期初余额时该字段为 null。
 
+`openingBalance` 只能在 `POST /accounts` 的原子创建事务中生成内部 `OPENING` 交易；`POST /transactions` 不接受 `OPENING`。字段缺失或为 `null` 时不创建期初交易；存在时 `amount` 必须为账户币种入账精度内的正十进制字符串，零、负数、额外字段以及不合法 class/type 组合均返回 `400 VALIDATION_ERROR`。服务端使用 `businessAt` 按当前用户 IANA 时区派生并固化 `businessDate` 和交易时区。
+
+期初分录固定为：
+
+| accountClass | 借方 | 贷方 | 边界 |
+| --- | --- | --- | --- |
+| ASSET | 账户 `PRIMARY` | `EQUITY_OPENING_BALANCE` | 不计收入或支出 |
+| INVESTMENT | 账户 `PRIMARY` | `EQUITY_OPENING_BALANCE` | 仅券商现金；不写 `POSITION_COST`，不创建持仓 |
+| LIABILITY | `EQUITY_OPENING_BALANCE` | 账户 `PRIMARY` | 正数表示已有债务；不计收入或支出 |
+
+`openingTransactionId` 仅在期初交易已随账户创建成功入账时返回 UUID；没有期初余额时返回 `null`。当前 V1 不接收 `creditLimit`：它没有可审计的持久化事实落点，且不得映射为 `current_amount_due`、余额或其他负债事实。
+
 `accountClass` 与 `accountType` 必须符合冻结矩阵：
 
 | accountClass | accountType |
@@ -449,6 +461,8 @@ AND (expires_at IS NULL OR expires_at > asOf)
 | POST | `/accounts/{accountId}/balance-adjustments` | 创建余额调整 | ACC-005 |
 
 `listTransactions` 与 `getTransaction` 的 `operationId` 固定不变。列表筛选、排序、游标绑定和 ACTIVE membership 可见性遵循 §2.6；两条读取接口的 `400/401/403/404/200` 响应分别对应 `Problem` 或相应的交易 envelope。交易类型筛选只复用领域 `TransactionType`，分类筛选只接受分类 UUID；客户端不得提交内部 `LedgerAccount`、`LedgerEntry` 或系统科目标识。
+
+`postTransaction` 不接受 `OPENING`；期初余额只能通过 `createAccount` 原子创建。`LIABILITY_REPAYMENT` 是公共请求 discriminator，Ledger 与数据库固定持久化为内部 `TransactionType.REPAYMENT`，不增加第二种交易事实。请求联合、类型、金额正负和可由 schema 表达的 class/type 组合违反时返回 `400 VALIDATION_ERROR`；通过 schema 后的资源可见性、成员权限和业务状态仍分别遵循既有 `404`、`403`、`422` 语义。
 
 创建交易使用判别联合体：
 

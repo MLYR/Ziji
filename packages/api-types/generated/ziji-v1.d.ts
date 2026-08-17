@@ -239,7 +239,10 @@ export interface paths {
         /** 查询当前用户可见账户 */
         get: operations["listAccounts"];
         put?: never;
-        /** 原子创建账户、OWNER、计入设置、科目及可选期初余额 */
+        /**
+         * 原子创建账户、OWNER、计入设置、科目及可选期初余额
+         * @description openingBalance 仅在本操作的同一事务中创建内部 OPENING 交易；ASSET/INVESTMENT 借 PRIMARY、贷 EQUITY_OPENING_BALANCE，LIABILITY 借 EQUITY_OPENING_BALANCE、贷 PRIMARY。INVESTMENT 只登记期初现金，不写 POSITION_COST 或持仓。
+         */
         post: operations["createAccount"];
         delete?: never;
         options?: never;
@@ -1535,8 +1538,6 @@ export interface components {
         NonNegativeMoney: string;
         /** @description 正 API 金额字符串；JPY 由同一对象的 currency 进一步限制为 0 位。 */
         PositiveMoney: string;
-        /** @description 已按关联 currency 校验最小单位的入账金额；CNY/USD/HKD/EUR 最多 2 位，JPY 不允许小数。 */
-        PostedMoney: string;
         /** @description 非负入账金额，实际小数位由同一对象的 currency 决定。 */
         NonNegativePostedMoney: string;
         /** @description 正入账金额，实际小数位由同一对象的 currency 决定。 */
@@ -1635,6 +1636,7 @@ export interface components {
             /** @enum {string} */
             amountFormat?: "STANDARD" | "ACCOUNTING";
         };
+        /** @description 可选 openingBalance 只能在本次原子账户创建中生成内部 OPENING 交易；其 businessDate/timezone 由 businessAt 按当前用户 IANA 时区派生并固化。缺失或 null 不创建交易；存在时必须为账户币种精度内的正数。 */
         CreateAccountRequest: {
             /** Format: uuid */
             id?: string;
@@ -1646,13 +1648,29 @@ export interface components {
             currency: components["schemas"]["Currency"];
             institution?: string | null;
             note?: string | null;
-            openingBalance?: null | {
-                amount: components["schemas"]["PostedMoney"];
-                /** Format: date-time */
-                businessAt: string;
-                note?: string | null;
-            };
-            creditLimit?: components["schemas"]["NonNegativeMoney"];
+            openingBalance?: null | components["schemas"]["AccountOpeningBalance"];
+        } & ({
+            /** @constant */
+            accountClass: "ASSET";
+            /** @enum {unknown} */
+            accountType: "BANK" | "WECHAT" | "ALIPAY" | "CASH" | "OTHER";
+        } | {
+            /** @constant */
+            accountClass: "INVESTMENT";
+            /** @enum {unknown} */
+            accountType: "BROKERAGE" | "FUND" | "OTHER";
+        } | {
+            /** @constant */
+            accountClass: "LIABILITY";
+            /** @enum {unknown} */
+            accountType: "CREDIT_CARD" | "LOAN" | "CONSUMER_LOAN" | "OTHER";
+        });
+        /** @description 账户创建期初余额；正数金额在入账时按账户币种精度校验。ASSET/INVESTMENT 只登记 PRIMARY 期初现金，LIABILITY 登记正债务；不接收业务日期、时区、分录或系统科目。 */
+        AccountOpeningBalance: {
+            amount: components["schemas"]["PositiveMoney"];
+            /** Format: date-time */
+            businessAt: string;
+            note?: string | null;
         };
         UpdateAccountRequest: {
             name?: string;
@@ -1712,12 +1730,12 @@ export interface components {
             /** @constant */
             currency: "JPY";
         };
-        PostTransactionRequest: components["schemas"]["OpeningTransactionRequest"] | components["schemas"]["IncomeTransactionRequest"] | components["schemas"]["ExpenseTransactionRequest"] | components["schemas"]["RefundTransactionRequest"] | components["schemas"]["TransferTransactionRequest"] | components["schemas"]["LiabilityRepaymentTransactionRequest"];
+        PostTransactionRequest: components["schemas"]["IncomeTransactionRequest"] | components["schemas"]["ExpenseTransactionRequest"] | components["schemas"]["RefundTransactionRequest"] | components["schemas"]["TransferTransactionRequest"] | components["schemas"]["LiabilityRepaymentTransactionRequest"];
         TransactionCommandBase: {
             /** Format: uuid */
             id?: string;
             /** @enum {string} */
-            type: "OPENING" | "INCOME" | "EXPENSE" | "REFUND" | "TRANSFER" | "LIABILITY_REPAYMENT";
+            type: "INCOME" | "EXPENSE" | "REFUND" | "TRANSFER" | "LIABILITY_REPAYMENT";
             /** Format: date-time */
             businessAt: string;
             /** Format: date */
@@ -1725,20 +1743,6 @@ export interface components {
             timezone?: string | null;
             note?: string | null;
             tagIds?: string[];
-        };
-        OpeningTransactionRequest: components["schemas"]["TransactionCommandBase"] & {
-            /** @constant */
-            type: "OPENING";
-            /** Format: uuid */
-            accountId: string;
-            amount: components["schemas"]["PostedMoney"];
-            currency: components["schemas"]["Currency"];
-        } & {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            type: "OPENING";
         };
         IncomeTransactionRequest: components["schemas"]["TransactionCommandBase"] & {
             /** @constant */
@@ -1813,6 +1817,7 @@ export interface components {
              */
             type: "TRANSFER";
         };
+        /** @description 公共 discriminator LIABILITY_REPAYMENT 固定映射为领域和数据库 TransactionType.REPAYMENT。 */
         LiabilityRepaymentTransactionRequest: components["schemas"]["TransactionCommandBase"] & {
             /** @constant */
             type: "LIABILITY_REPAYMENT";
@@ -2939,7 +2944,10 @@ export interface components {
         AccountCreatedEnvelope: {
             data: {
                 account: components["schemas"]["Account"];
-                /** Format: uuid */
+                /**
+                 * Format: uuid
+                 * @description 仅 openingBalance 已成功入账时返回内部 OPENING 交易 UUID；缺失或 null openingBalance 时为 null。
+                 */
                 openingTransactionId: string | null;
             };
             meta: components["schemas"]["ResponseMeta"];

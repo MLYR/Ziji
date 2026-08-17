@@ -237,7 +237,16 @@ paths:
       tags: [Accounts]
       operationId: createAccount
       summary: 原子创建账户、OWNER、计入设置、科目及可选期初余额
+      description: openingBalance 仅在本操作的同一事务中创建内部 OPENING 交易；ASSET/INVESTMENT 借 PRIMARY、贷 EQUITY_OPENING_BALANCE，LIABILITY 借 EQUITY_OPENING_BALANCE、贷 PRIMARY。INVESTMENT 只登记期初现金，不写 POSITION_COST 或持仓。
       x-requirement-ids: [ACC-001, ACC-002, ACC-003, ACC-010]
+      x-opening-balance:
+        scope: CREATE_ACCOUNT_ONLY
+        internalTransactionType: OPENING
+        businessTime: DERIVE_BUSINESS_DATE_AND_IANA_TIMEZONE_FROM_BUSINESS_AT_AND_CURRENT_USER
+        postings:
+          ASSET: DEBIT_PRIMARY_CREDIT_EQUITY_OPENING_BALANCE
+          INVESTMENT: DEBIT_PRIMARY_CREDIT_EQUITY_OPENING_BALANCE_NO_POSITION_COST
+          LIABILITY: DEBIT_EQUITY_OPENING_BALANCE_CREDIT_PRIMARY
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
       requestBody:
         required: true
@@ -1591,11 +1600,6 @@ components:
       description: 正 API 金额字符串；JPY 由同一对象的 currency 进一步限制为 0 位。
       type: string
       pattern: '^(0*[1-9][0-9]{0,21})(\.[0-9]{1,2})?$|^0\.(0[1-9]|[1-9][0-9]?)$'
-    PostedMoney:
-      description: 已按关联 currency 校验最小单位的入账金额；CNY/USD/HKD/EUR 最多 2 位，JPY 不允许小数。
-      oneOf:
-        - { type: string, pattern: '^-?(0|[1-9][0-9]{0,21})(\.[0-9]{1,2})?$' }
-        - { type: string, pattern: '^-?(0|[1-9][0-9]{0,21})$' }
     NonNegativePostedMoney:
       description: 非负入账金额，实际小数位由同一对象的 currency 决定。
       oneOf:
@@ -1756,6 +1760,7 @@ components:
       type: object
       additionalProperties: false
       required: [accountClass, accountType, name, currency]
+      description: 可选 openingBalance 只能在本次原子账户创建中生成内部 OPENING 交易；其 businessDate/timezone 由 businessAt 按当前用户 IANA 时区派生并固化。缺失或 null 不创建交易；存在时必须为账户币种精度内的正数。
       properties:
         id: { type: string, format: uuid }
         accountClass: { type: string, enum: [ASSET, LIABILITY, INVESTMENT] }
@@ -1767,14 +1772,30 @@ components:
         openingBalance:
           oneOf:
             - type: 'null'
-            - type: object
-              additionalProperties: false
-              required: [amount, businessAt]
-              properties:
-                amount: { $ref: '#/components/schemas/PostedMoney' }
-                businessAt: { type: string, format: date-time }
-                note: { type: [string, 'null'], maxLength: 500 }
-        creditLimit: { $ref: '#/components/schemas/NonNegativeMoney' }
+            - { $ref: '#/components/schemas/AccountOpeningBalance' }
+      allOf:
+        - oneOf:
+            - properties:
+                accountClass: { const: ASSET }
+                accountType: { enum: [BANK, WECHAT, ALIPAY, CASH, OTHER] }
+              required: [accountClass, accountType]
+            - properties:
+                accountClass: { const: INVESTMENT }
+                accountType: { enum: [BROKERAGE, FUND, OTHER] }
+              required: [accountClass, accountType]
+            - properties:
+                accountClass: { const: LIABILITY }
+                accountType: { enum: [CREDIT_CARD, LOAN, CONSUMER_LOAN, OTHER] }
+              required: [accountClass, accountType]
+    AccountOpeningBalance:
+      type: object
+      additionalProperties: false
+      required: [amount, businessAt]
+      description: 账户创建期初余额；正数金额在入账时按账户币种精度校验。ASSET/INVESTMENT 只登记 PRIMARY 期初现金，LIABILITY 登记正债务；不接收业务日期、时区、分录或系统科目。
+      properties:
+        amount: { $ref: '#/components/schemas/PositiveMoney' }
+        businessAt: { type: string, format: date-time }
+        note: { type: [string, 'null'], maxLength: 500 }
     UpdateAccountRequest:
       type: object
       additionalProperties: false
@@ -1848,7 +1869,6 @@ components:
       properties: { amount: { $ref: '#/components/schemas/NonNegativeJpyMoney' }, currency: { type: string, const: JPY } }
     PostTransactionRequest:
       oneOf:
-        - { $ref: '#/components/schemas/OpeningTransactionRequest' }
         - { $ref: '#/components/schemas/IncomeTransactionRequest' }
         - { $ref: '#/components/schemas/ExpenseTransactionRequest' }
         - { $ref: '#/components/schemas/RefundTransactionRequest' }
@@ -1857,7 +1877,6 @@ components:
       discriminator:
         propertyName: type
         mapping:
-          OPENING: '#/components/schemas/OpeningTransactionRequest'
           INCOME: '#/components/schemas/IncomeTransactionRequest'
           EXPENSE: '#/components/schemas/ExpenseTransactionRequest'
           REFUND: '#/components/schemas/RefundTransactionRequest'
@@ -1868,23 +1887,12 @@ components:
       required: [type, businessAt]
       properties:
         id: { type: string, format: uuid }
-        type: { type: string, enum: [OPENING, INCOME, EXPENSE, REFUND, TRANSFER, LIABILITY_REPAYMENT] }
+        type: { type: string, enum: [INCOME, EXPENSE, REFUND, TRANSFER, LIABILITY_REPAYMENT] }
         businessAt: { type: string, format: date-time }
         businessDate: { type: string, format: date }
         timezone: { type: [string, 'null'], minLength: 1, maxLength: 64 }
         note: { type: [string, 'null'], maxLength: 2000 }
         tagIds: { type: array, uniqueItems: true, maxItems: 20, items: { type: string, format: uuid } }
-    OpeningTransactionRequest:
-      unevaluatedProperties: false
-      allOf:
-        - { $ref: '#/components/schemas/TransactionCommandBase' }
-        - type: object
-          required: [type, accountId, amount, currency]
-          properties:
-            type: { type: string, const: OPENING }
-            accountId: { type: string, format: uuid }
-            amount: { $ref: '#/components/schemas/PostedMoney' }
-            currency: { $ref: '#/components/schemas/Currency' }
     IncomeTransactionRequest:
       unevaluatedProperties: false
       allOf:
@@ -1939,6 +1947,8 @@ components:
             feeCategoryId: { type: [string, 'null'], format: uuid }
             exchangeRate: { type: [string, 'null'], pattern: '^(0*[1-9][0-9]{0,27})(\.[0-9]{1,12})?$|^0\.[0-9]*[1-9][0-9]{0,11}$' }
     LiabilityRepaymentTransactionRequest:
+      description: 公共 discriminator LIABILITY_REPAYMENT 固定映射为领域和数据库 TransactionType.REPAYMENT。
+      x-domain-transaction-type: REPAYMENT
       unevaluatedProperties: false
       allOf:
         - { $ref: '#/components/schemas/TransactionCommandBase' }
@@ -3149,7 +3159,7 @@ components:
           required: [account, openingTransactionId]
           properties:
             account: { $ref: '#/components/schemas/Account' }
-            openingTransactionId: { type: [string, 'null'], format: uuid }
+            openingTransactionId: { type: [string, 'null'], format: uuid, description: 仅 openingBalance 已成功入账时返回内部 OPENING 交易 UUID；缺失或 null openingBalance 时为 null。 }
         meta: { $ref: '#/components/schemas/ResponseMeta' }
     AccountListEnvelope:
       type: object
