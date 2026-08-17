@@ -20,6 +20,45 @@ try {
   const listTransactions = contract.paths['/transactions'].get
   const getTransaction = contract.paths['/transactions/{transactionId}'].get
   const schemas = contract.components.schemas
+  const nonNegativePostedMoney = schemas.NonNegativePostedMoney
+  const positivePostedMoney = schemas.PositivePostedMoney
+
+  assert.equal(nonNegativePostedMoney.type, 'string')
+  assert.equal(positivePostedMoney.type, 'string')
+  assert.equal('oneOf' in nonNegativePostedMoney, false, 'NonNegativePostedMoney 不得用重叠 oneOf')
+  assert.equal('oneOf' in positivePostedMoney, false, 'PositivePostedMoney 不得用重叠 oneOf')
+  const matchesPostedMoney = (schema, value) => typeof value === 'string' && new RegExp(schema.pattern).test(value)
+  for (const value of ['1', '100', '100.00', '0.01', '0001']) {
+    assert.equal(matchesPostedMoney(positivePostedMoney, value), true, `PositivePostedMoney 应接受：${value}`)
+  }
+  for (const value of ['0', '0.00', '-1', '1.001', 'not-a-number', '00.01', 100, null]) {
+    assert.equal(matchesPostedMoney(positivePostedMoney, value), false, `PositivePostedMoney 应拒绝：${value}`)
+  }
+  for (const value of ['0', '0.00', '1', '100.00']) {
+    assert.equal(matchesPostedMoney(nonNegativePostedMoney, value), true, `NonNegativePostedMoney 应接受：${value}`)
+  }
+  for (const value of ['-1', '1.001', 'not-a-number', '00', 100, null]) {
+    assert.equal(matchesPostedMoney(nonNegativePostedMoney, value), false, `NonNegativePostedMoney 应拒绝：${value}`)
+  }
+  // JPY 的 0 位精度仍由携带 currency 的入账边界校验；公共字符串 schema 必须先接受合法整数。
+  assert.equal(matchesPostedMoney(positivePostedMoney, '100'), true, 'JPY 合法整数不得被 PositivePostedMoney 拒绝')
+
+  // 统一检查所有公共收入/支出/退款/同步和负债还款调用方仍引用对应的 PostedMoney schema。
+  for (const schemaName of [
+    'IncomeTransactionRequest', 'ExpenseTransactionRequest', 'RefundTransactionRequest',
+    'SyncIncomeTransactionRequest', 'SyncExpenseTransactionRequest', 'SyncRefundTransactionRequest',
+  ]) {
+    const amount = schemas[schemaName].allOf?.[1]?.properties?.amount ?? schemas[schemaName].properties?.amount
+    assert.equal(amount.$ref, '#/components/schemas/PositivePostedMoney', `${schemaName}.amount 引用错误`)
+  }
+  const liabilityAmounts = schemas.LiabilityRepaymentTransactionRequest.allOf[1].properties
+  assert.equal(liabilityAmounts.principalAmount.$ref, '#/components/schemas/PositivePostedMoney')
+  assert.equal(liabilityAmounts.interestAmount.$ref, '#/components/schemas/NonNegativePostedMoney')
+  assert.equal(liabilityAmounts.feeAmount.$ref, '#/components/schemas/NonNegativePostedMoney')
+  assert.equal(schemas.ReviseTransactionRequest.properties.replacement.$ref, '#/components/schemas/PostTransactionRequest')
+  assert.equal(schemas.SyncCreateTransactionOperation.properties.payload.$ref, '#/components/schemas/SyncCreateTransactionPayload')
+  assert.equal(schemas.SyncUpdateTransactionOperation.properties.payload.$ref, '#/components/schemas/SyncUpdateTransactionPayload')
+  assert.equal(schemas.SyncUpdateTransactionPayload.properties.replacement.$ref, '#/components/schemas/SyncCreateTransactionPayload')
 
   assert.equal(listTransactions.operationId, 'listTransactions')
   assert.equal(getTransaction.operationId, 'getTransaction')
