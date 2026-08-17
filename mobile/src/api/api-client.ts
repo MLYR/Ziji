@@ -4,6 +4,14 @@ import type { components, paths } from '@ziji/api-types';
 export type MobileApiPaths = paths;
 
 export type ApiProblem = components['schemas']['Problem'];
+export type SyncChangesEnvelope = components['schemas']['SyncChangeListEnvelope'];
+export type SyncOperationsRequest = components['schemas']['ApplySyncOperationsRequest'];
+export type SyncOperationsEnvelope = components['schemas']['SyncOperationResultsEnvelope'];
+
+export interface MobileSyncApiClient {
+  listSyncChanges(cursor: string | null): Promise<SyncChangesEnvelope>;
+  applySyncOperations(request: SyncOperationsRequest): Promise<SyncOperationsEnvelope>;
+}
 
 export class ApiClientError extends Error {
   constructor(public readonly problem: ApiProblem) {
@@ -48,5 +56,22 @@ export function createMobileApiClient({ baseUrl, readAccessToken }: MobileApiCli
 
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
+  };
+}
+
+export function createMobileSyncApiClient(options: MobileApiClientOptions): MobileSyncApiClient {
+  const request = createMobileApiClient(options);
+
+  return {
+    listSyncChanges(cursor) {
+      const query = cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`;
+      return request<SyncChangesEnvelope>(`/api/v1/sync/changes${query}`, { method: 'GET' });
+    },
+    applySyncOperations(body) {
+      return request<SyncOperationsEnvelope>('/api/v1/sync/operations', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
   };
 }

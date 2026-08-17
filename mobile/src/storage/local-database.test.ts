@@ -156,6 +156,41 @@ describe('local database migration', () => {
       database.close();
     }
   });
+
+  it('将 v2 待上传队列原子升级到 v3 的持久重试时间，并允许重复迁移', async () => {
+    const database = createDatabase();
+
+    try {
+      await database.execAsync(`
+        CREATE TABLE pending_operations (
+          user_id TEXT NOT NULL,
+          operation_id TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          entity_type TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          operation_type TEXT NOT NULL,
+          base_version INTEGER,
+          payload_version INTEGER NOT NULL,
+          payload_json TEXT NOT NULL,
+          state TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (user_id, operation_id)
+        );
+        PRAGMA user_version = 2;
+      `);
+
+      await migrateLocalDatabase(database as unknown as SQLite.SQLiteDatabase);
+      const columns = await database.getAllAsync<{ name: string }>('PRAGMA table_info(pending_operations);');
+      expect(await readSchemaVersion(database)).toBe(LOCAL_DATABASE_SCHEMA_VERSION);
+      expect(columns.map((column) => column.name)).toContain('retry_after_at');
+
+      await migrateLocalDatabase(database as unknown as SQLite.SQLiteDatabase);
+      expect(await readSchemaVersion(database)).toBe(LOCAL_DATABASE_SCHEMA_VERSION);
+    } finally {
+      database.close();
+    }
+  });
 });
 
 describe('local sync storage', () => {
@@ -249,7 +284,7 @@ describe('local sync storage', () => {
       await migrateLocalDatabase(sqlite);
       await enqueuePendingOperation(sqlite, 'user-a', operation, '2026-08-16T00:00:00Z');
 
-      await expect(getPendingOperation(sqlite, 'user-a', operation.operationId)).resolves.toEqual({ ...operation, state: 'PENDING', updatedAt: '2026-08-16T00:00:00Z' });
+      await expect(getPendingOperation(sqlite, 'user-a', operation.operationId)).resolves.toEqual({ ...operation, retryAfterAt: null, state: 'PENDING', updatedAt: '2026-08-16T00:00:00Z' });
       await expect(enqueuePendingOperation(sqlite, 'user-a', operation, '2026-08-16T00:00:00Z')).rejects.toThrow();
       await expect(enqueuePendingOperation(sqlite, 'user-a', { ...operation, operationId: 'operation-2' }, '2026-08-16T00:00:00Z')).rejects.toThrow();
 

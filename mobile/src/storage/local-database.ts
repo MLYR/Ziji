@@ -4,7 +4,7 @@ import type { components } from '@ziji/api-types';
 
 const DATABASE_NAME = 'ziji-cache.db';
 
-export const LOCAL_DATABASE_SCHEMA_VERSION = 2;
+export const LOCAL_DATABASE_SCHEMA_VERSION = 3;
 
 type SyncChange = components['schemas']['SyncChange'];
 type SyncOperation = components['schemas']['SyncOperation'];
@@ -23,6 +23,7 @@ export interface CachedEntity extends SyncChange {
 
 export type PendingSyncOperation = SyncOperation & {
   state: PendingOperationState;
+  retryAfterAt: string | null;
   updatedAt: string;
 };
 
@@ -53,6 +54,7 @@ interface PendingOperationRow {
   operation_type: string;
   payload_json: string;
   payload_version: 1;
+  retry_after_at: string | null;
   state: PendingOperationState;
   updated_at: string;
 }
@@ -127,6 +129,7 @@ function toPendingOperation(row: PendingOperationRow): PendingSyncOperation {
     idempotencyKey: row.idempotency_key,
     operationId: row.operation_id,
     payloadVersion: 1 as const,
+    retryAfterAt: row.retry_after_at,
     state: row.state,
     updatedAt: row.updated_at,
   };
@@ -233,6 +236,8 @@ async function createV2Schema(database: SQLite.SQLiteDatabase): Promise<void> {
       payload_version INTEGER NOT NULL CHECK (payload_version = 1),
       payload_json TEXT NOT NULL,
       state TEXT NOT NULL CHECK (state IN ('PENDING', 'SENDING', 'CONFLICT', 'REJECTED')),
+      -- RETRYABLE/网络恢复的最早重试时间，避免重启后热循环请求服务端。
+      retry_after_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       -- 同一用户内操作和幂等键均不能重复入队；不同用户彼此隔离。
@@ -270,6 +275,14 @@ async function migrateV1ToV2(database: SQLite.SQLiteDatabase): Promise<void> {
   });
 }
 
+async function migrateV2ToV3(database: SQLite.SQLiteDatabase): Promise<void> {
+  await database.withExclusiveTransactionAsync(async (transaction) => {
+    // v3 只为待上传队列增加重试时间；不改变 SQLite 表的事实语义或用户隔离键。
+    await transaction.execAsync('ALTER TABLE pending_operations ADD COLUMN retry_after_at TEXT;');
+    await transaction.execAsync(`PRAGMA user_version = ${LOCAL_DATABASE_SCHEMA_VERSION};`);
+  });
+}
+
 export async function migrateLocalDatabase(database: SQLite.SQLiteDatabase): Promise<void> {
   await platformDatabaseSecurity.prepare(database);
   await database.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
@@ -290,6 +303,10 @@ export async function migrateLocalDatabase(database: SQLite.SQLiteDatabase): Pro
 
   if (version === 1) {
     await migrateV1ToV2(database);
+  }
+
+  if (version === 2) {
+    await migrateV2ToV3(database);
   }
 }
 
@@ -364,8 +381,8 @@ export async function enqueuePendingOperation(database: SQLite.SQLiteDatabase, u
   await database.runAsync(
     `INSERT INTO pending_operations (
        user_id, operation_id, idempotency_key, entity_type, entity_id, operation_type, base_version,
-       payload_version, payload_json, state, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?);`,
+       payload_version, payload_json, state, retry_after_at, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NULL, ?, ?);`,
     [
       userId,
       operation.operationId,
@@ -387,7 +404,7 @@ export async function getPendingOperation(database: SQLite.SQLiteDatabase, userI
 
   const row = await database.getFirstAsync<PendingOperationRow>(
     `SELECT operation_id, idempotency_key, entity_type, entity_id, operation_type, base_version,
-       payload_version, payload_json, state, created_at, updated_at
+       payload_version, payload_json, retry_after_at, state, created_at, updated_at
      FROM pending_operations
      WHERE user_id = ? AND operation_id = ?;`,
     [userId, operationId],
@@ -401,7 +418,7 @@ export async function listPendingOperations(database: SQLite.SQLiteDatabase, use
 
   const rows = await database.getAllAsync<PendingOperationRow>(
     `SELECT operation_id, idempotency_key, entity_type, entity_id, operation_type, base_version,
-       payload_version, payload_json, state, created_at, updated_at
+       payload_version, payload_json, retry_after_at, state, created_at, updated_at
      FROM pending_operations
      WHERE user_id = ?
      ORDER BY created_at ASC, operation_id ASC;`,
@@ -428,15 +445,81 @@ export async function updatePendingOperationState(
   const placeholders = previousStates.map(() => '?').join(', ');
   const result = await database.runAsync(
     `UPDATE pending_operations
-     SET state = ?, updated_at = ?
+     SET state = ?, retry_after_at = CASE WHEN ? = 'SENDING' THEN NULL ELSE retry_after_at END, updated_at = ?
      WHERE user_id = ? AND operation_id = ? AND state IN (${placeholders});`,
-    [state, updatedAt, userId, operationId, ...previousStates],
+    [state, state, updatedAt, userId, operationId, ...previousStates],
   );
 
   // 条件更新把状态边界与用户边界放在同一条语句，避免后续同步循环读写竞态绕过约束。
   if (result.changes !== 1) {
     throw new Error(`不允许将本地操作 ${operationId} 流转为 ${state}。`);
   }
+}
+
+export async function deletePendingOperation(database: SQLite.SQLiteDatabase, userId: string, operationId: string): Promise<void> {
+  assertUserId(userId);
+
+  const result = await database.runAsync(
+    'DELETE FROM pending_operations WHERE user_id = ? AND operation_id = ?;',
+    [userId, operationId],
+  );
+  if (result.changes !== 1) {
+    throw new Error(`本地操作 ${operationId} 不存在或不属于当前用户。`);
+  }
+}
+
+export async function recoverSendingOperations(
+  database: SQLite.SQLiteDatabase, userId: string, retryAfterAt: string, updatedAt: string,
+): Promise<void> {
+  assertUserId(userId);
+
+  await database.runAsync(
+    `UPDATE pending_operations
+     SET state = 'PENDING', retry_after_at = ?, updated_at = ?
+     WHERE user_id = ? AND state = 'SENDING';`,
+    [retryAfterAt, updatedAt, userId],
+  );
+}
+
+export async function markPendingRetryable(
+  database: SQLite.SQLiteDatabase, userId: string, operationId: string, retryAfterAt: string, updatedAt: string,
+): Promise<void> {
+  assertUserId(userId);
+
+  const result = await database.runAsync(
+    `UPDATE pending_operations
+     SET state = 'PENDING', retry_after_at = ?, updated_at = ?
+     WHERE user_id = ? AND operation_id = ? AND state = 'SENDING';`,
+    [retryAfterAt, updatedAt, userId, operationId],
+  );
+  if (result.changes !== 1) {
+    throw new Error(`本地操作 ${operationId} 不允许恢复为 PENDING。`);
+  }
+}
+
+export async function markPendingSending(
+  database: SQLite.SQLiteDatabase, userId: string, operationId: string, updatedAt: string,
+): Promise<void> {
+  await updatePendingOperationState(database, userId, operationId, 'SENDING', updatedAt);
+}
+
+export async function saveSyncConflictInTransaction(
+  transaction: SQLite.SQLiteDatabase,
+  userId: string,
+  operationId: string,
+  problem: SyncProblem,
+  createdAt: string,
+): Promise<void> {
+  // 调用方已持有独占事务；状态和 Problem 副本必须共用该事务，不能留下半个冲突。
+  await updatePendingOperationState(transaction, userId, operationId, 'CONFLICT', createdAt);
+  await transaction.runAsync(
+    `INSERT INTO sync_conflicts (user_id, operation_id, problem_json, created_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT (user_id, operation_id) DO UPDATE SET
+       problem_json = excluded.problem_json,
+       created_at = excluded.created_at;`,
+    [userId, operationId, JSON.stringify(problem), createdAt],
+  );
 }
 
 export async function saveSyncConflict(
@@ -447,16 +530,7 @@ export async function saveSyncConflict(
   createdAt: string,
 ): Promise<void> {
   await database.withExclusiveTransactionAsync(async (transaction) => {
-    // 冲突状态与 Problem 副本必须原子保存，避免 UI 看到无处理材料的 CONFLICT 操作。
-    await updatePendingOperationState(transaction, userId, operationId, 'CONFLICT', createdAt);
-    await transaction.runAsync(
-      `INSERT INTO sync_conflicts (user_id, operation_id, problem_json, created_at)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT (user_id, operation_id) DO UPDATE SET
-         problem_json = excluded.problem_json,
-         created_at = excluded.created_at;`,
-      [userId, operationId, JSON.stringify(problem), createdAt],
-    );
+    await saveSyncConflictInTransaction(transaction, userId, operationId, problem, createdAt);
   });
 }
 
