@@ -339,6 +339,9 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			.andExpect(jsonPath("$.code").value("BUSINESS_RULE_VIOLATION"));
 		assertEquals(0, idempotencyCount(owner.userId(), newKey));
 
+		// 迁移约束要求至少一个 ACTIVE OWNER；保留替代所有者后才撤销当前重放用户。
+		UserFixture retainedOwner = insertUser("hold-archived-replay-retained-owner");
+		addMembership(account.accountId(), retainedOwner.userId(), "OWNER", "ACTIVE");
 		jdbc.update("UPDATE account_members SET status = 'REMOVED', ended_at = CURRENT_TIMESTAMP WHERE account_id = ? AND user_id = ?",
 			account.accountId(), owner.userId());
 		mvc.perform(post(path(account.accountId()))
@@ -487,10 +490,12 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			}
 		}
 
+		assertEquals(2, results.size());
 		assertEquals(1, results.stream().filter(result -> {
 			int status = result.getResponse().getStatus();
 			return status == 200 || status == 201;
 		}).count());
+		assertEquals(1, results.stream().filter(result -> result.getResponse().getStatus() == 409).count());
 		MvcResult conflict = results.stream().filter(result -> result.getResponse().getStatus() == 409).findFirst().orElseThrow();
 		assertTrue(conflict.getResponse().getContentAsString().contains("\"code\":\"VERSION_CONFLICT\""));
 		assertTrue(conflict.getResponse().getContentAsString().contains("\"currentVersion\":2"));

@@ -49,8 +49,9 @@ class LiquidityHoldDomainTests {
 		}
 		assertEquals(maximumInteger,
 			root(LiquidityHoldType.FROZEN, maximumInteger, AccountCurrency.JPY, NOW, null, "r").amount());
-		assertThrows(AccountDomainException.class,
-			() -> root(LiquidityHoldType.FROZEN, new BigDecimal("1.00"), AccountCurrency.JPY, NOW, null, "r"));
+		// JPY 禁止非零最小单位；尾随零仍是同一个整数金额，不能错误拒绝。
+		assertEquals(new BigDecimal("1.00"),
+			root(LiquidityHoldType.FROZEN, new BigDecimal("1.00"), AccountCurrency.JPY, NOW, null, "r").amount());
 		assertEquals(new BigDecimal("1E+21"),
 			root(LiquidityHoldType.FROZEN, new BigDecimal("1E+21"), AccountCurrency.CNY, NOW, null, "r").amount());
 		assertThrows(AccountDomainException.class,

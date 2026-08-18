@@ -154,7 +154,8 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 		if (holdId == null || expectedVersion < 1 || command == null) {
 			throw new LiquidityHoldException.Validation();
 		}
-		return transactions.required(() -> {
+		// VERSION_CONFLICT 由外层统一幂等事务固化；savepoint 回滚不能污染该 FAILED_FINAL 终态。
+		return transactions.nested(() -> {
 			ActiveMembership membership = requireActiveMembership(userId, accountId);
 			LiquidityHold current = holds.lockByAccountAndId(accountId, holdId).orElseThrow(AccountNotVisibleException::new);
 			requireWritable(membership);
@@ -186,7 +187,8 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 		if (holdId == null || expectedVersion < 1) {
 			throw new LiquidityHoldException.Validation();
 		}
-		return transactions.required(() -> {
+		// release 与修订共享冲突重放语义，预期冲突只回滚生命周期子事务。
+		return transactions.nested(() -> {
 			ActiveMembership membership = requireActiveMembership(userId, accountId);
 			LiquidityHold current = holds.lockByAccountAndId(accountId, holdId).orElseThrow(AccountNotVisibleException::new);
 			requireWritable(membership);
