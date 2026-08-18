@@ -10,6 +10,13 @@ import type { SecureCredentialStore } from '@/storage/secure-credentials';
 
 type MobileSessionEnvelope = components['schemas']['MobileSessionEnvelope'];
 
+function currentUserResponse(id = 'user-1'): components['schemas']['UserEnvelope'] {
+  return {
+    data: { id, email: 'user@example.com', nickname: '资迹', timezone: 'Asia/Shanghai', baseCurrency: 'CNY', locale: 'zh-CN', amountFormat: 'STANDARD', status: 'ACTIVE', version: 1 },
+    meta: { requestId: 'request-1' },
+  };
+}
+
 function sessionResponse(id = 'session-1', refreshToken = 'refresh-new'): MobileSessionEnvelope {
   return {
     data: {
@@ -43,6 +50,7 @@ function createApi(overrides: Partial<jest.Mocked<MobileAuthApiClient>> = {}): j
     refreshMobileSession: jest.fn(),
     registerUser: jest.fn(),
     revokeCurrentSession: jest.fn(),
+    getCurrentUser: jest.fn().mockResolvedValue(currentUserResponse()),
     ...overrides,
   };
 }
@@ -58,7 +66,28 @@ describe('MobileAuthenticationSession', () => {
     expect(credentials.writeRefreshCredential).toHaveBeenCalledWith('refresh-new');
     expect(session.getState().status).toBe('AUTHENTICATED');
     expect(session.getAccessToken()).toBe('access-token');
+    expect(session.getState().userId).toBe('user-1');
+    expect(api.getCurrentUser).toHaveBeenCalledTimes(1);
     expect(api.createMobileSession).toHaveBeenCalledWith(expect.objectContaining({ deviceId: expect.stringMatching(/^ziji-/), deviceName: 'Ziji Mobile' }));
+  });
+
+  it('主体确认完成前不发布 AUTHENTICATED 或 access token', async () => {
+    let resolveUser: (value: components['schemas']['UserEnvelope']) => void = () => undefined;
+    const userPending = new Promise<components['schemas']['UserEnvelope']>((resolve) => { resolveUser = resolve; });
+    const credentials = createCredentialStore();
+    const session = new MobileAuthenticationSession(
+      createApi({ createMobileSession: jest.fn().mockResolvedValue(sessionResponse()), getCurrentUser: jest.fn().mockReturnValue(userPending) }),
+      credentials,
+      createDeviceIdentityProvider(credentials),
+    );
+
+    const signIn = session.signIn('user@example.com', 'password');
+    await Promise.resolve();
+    expect(session.getState().status).not.toBe('AUTHENTICATED');
+
+    resolveUser(currentUserResponse());
+    await signIn;
+    expect(session.getState()).toMatchObject({ status: 'AUTHENTICATED', userId: 'user-1' });
   });
 
   it('凭据安全存储失败时不暴露已登录状态', async () => {
@@ -112,6 +141,16 @@ describe('MobileAuthenticationSession', () => {
     expect(invalidCredentialsStore.clearRefreshCredential).toHaveBeenCalledTimes(1);
     expect(invalidCredentialsSession.getState().status).toBe('UNAUTHENTICATED');
 
+    const forbiddenStore = createCredentialStore('refresh-old');
+    const forbiddenSession = new MobileAuthenticationSession(
+      createApi({ refreshMobileSession: jest.fn().mockRejectedValue(new ApiClientError({ type: 'about:blank', title: '无权刷新', status: 403, code: 'FORBIDDEN', requestId: 'request-1' })) }),
+      forbiddenStore,
+      createDeviceIdentityProvider(forbiddenStore),
+    );
+    await forbiddenSession.restore();
+    expect(forbiddenStore.clearRefreshCredential).toHaveBeenCalledTimes(1);
+    expect(forbiddenSession.getState().status).toBe('UNAUTHENTICATED');
+
     const recoverableStore = createCredentialStore('refresh-old');
     const recoverableSession = new MobileAuthenticationSession(
       createApi({ refreshMobileSession: jest.fn().mockRejectedValue(new TypeError('network failed')) }),
@@ -136,6 +175,58 @@ describe('MobileAuthenticationSession', () => {
       expect(serverErrorSession.getState().status).toBe('RECOVERABLE_ERROR');
       expect(serverErrorSession.getAccessToken()).toBeNull();
     }
+  });
+
+  it.each([401, 403])('主体确认返回 %i 时清除认证材料且不开放用户 scope', async (status) => {
+    const credentials = createCredentialStore();
+    const session = new MobileAuthenticationSession(
+      createApi({
+        createMobileSession: jest.fn().mockResolvedValue(sessionResponse()),
+        getCurrentUser: jest.fn().mockRejectedValue(new ApiClientError({ type: 'about:blank', title: '认证失败', status, code: status === 401 ? 'INVALID_CREDENTIALS' : 'FORBIDDEN', requestId: 'request-1' })),
+      }),
+      credentials,
+      createDeviceIdentityProvider(credentials),
+    );
+
+    await session.signIn('user@example.com', 'password');
+
+    expect(credentials.clearRefreshCredential).toHaveBeenCalledTimes(1);
+    expect(session.getState()).toMatchObject({ status: 'UNAUTHENTICATED', userId: null });
+    expect(session.getAccessToken()).toBeNull();
+  });
+
+  it('主体确认网络或 5xx 失败时保留刷新凭据但不开放用户 scope', async () => {
+    for (const error of [new TypeError('offline'), new ApiClientError({ type: 'about:blank', title: '服务失败', status: 503, code: 'INTERNAL_ERROR', requestId: 'request-1' })]) {
+      const credentials = createCredentialStore();
+      const session = new MobileAuthenticationSession(
+        createApi({ createMobileSession: jest.fn().mockResolvedValue(sessionResponse()), getCurrentUser: jest.fn().mockRejectedValue(error) }),
+        credentials,
+        createDeviceIdentityProvider(credentials),
+      );
+
+      await session.signIn('user@example.com', 'password');
+
+      expect(credentials.clearRefreshCredential).not.toHaveBeenCalled();
+      expect(session.getState()).toMatchObject({ status: 'RECOVERABLE_ERROR', userId: null });
+      expect(session.getAccessToken()).toBeNull();
+    }
+  });
+
+  it('刷新主体变化时清除本轮凭据并保留用户隔离边界', async () => {
+    const credentials = createCredentialStore();
+    const api = createApi({
+      createMobileSession: jest.fn().mockResolvedValue(sessionResponse()),
+      refreshMobileSession: jest.fn().mockResolvedValue(sessionResponse('session-1', 'refresh-rotated')),
+      getCurrentUser: jest.fn().mockResolvedValueOnce(currentUserResponse('user-a')).mockResolvedValueOnce(currentUserResponse('user-b')),
+    });
+    const session = new MobileAuthenticationSession(api, credentials, createDeviceIdentityProvider(credentials));
+
+    await session.signIn('user@example.com', 'password');
+    await session.restore();
+
+    expect(credentials.clearRefreshCredential).toHaveBeenCalledTimes(1);
+    expect(session.getState()).toMatchObject({ status: 'UNAUTHENTICATED', userId: null });
+    expect(session.getAccessToken()).toBeNull();
   });
 
   it('安全存储读取失败时不调用刷新接口或清除凭据', async () => {
@@ -178,6 +269,22 @@ describe('MobileAuthenticationSession', () => {
     expect(credentials.clearRefreshCredential).toHaveBeenCalledTimes(1);
     expect(session.getState().status).toBe('UNAUTHENTICATED');
     expect(session.getAccessToken()).toBeNull();
+  });
+
+  it('认证失效路径先关闭主体 scope，再清理 SecureStore 且不调用远端退出', async () => {
+    const credentials = createCredentialStore();
+    const api = createApi({ createMobileSession: jest.fn().mockResolvedValue(sessionResponse()) });
+    const session = new MobileAuthenticationSession(api, credentials, createDeviceIdentityProvider(credentials));
+    await session.signIn('user@example.com', 'password');
+
+    let finishClear: () => void = () => undefined;
+    credentials.clearRefreshCredential.mockImplementationOnce(() => new Promise<void>((resolve) => { finishClear = resolve; }));
+    const invalidation = session.invalidateAuthentication();
+    expect(session.getState()).toMatchObject({ status: 'UNAUTHENTICATED', userId: null });
+    expect(session.getAccessToken()).toBeNull();
+    expect(api.revokeCurrentSession).not.toHaveBeenCalled();
+    finishClear();
+    await expect(invalidation).resolves.toBe(true);
   });
 
   it('冷启动无 access token 时仍可执行本机安全退出', async () => {

@@ -16,6 +16,7 @@ import {
   saveSyncCursor,
   updatePendingOperationState,
 } from './local-database';
+import { createSyncConflictResolutionPort } from '@/sync/conflict-resolution';
 
 interface NativeStatement {
   all(...parameters: unknown[]): unknown[];
@@ -369,6 +370,158 @@ describe('local sync storage', () => {
 
       await expect(getPendingOperation(sqlite, 'user-a', operation.operationId)).resolves.toMatchObject({ state: 'PENDING' });
       await expect(getSyncConflict(sqlite, 'user-a', operation.operationId)).resolves.toBeNull();
+    } finally {
+      database.close();
+    }
+  });
+
+  it('discardLocal 仅在同一用户 SQLite 事务内删除 conflict 与旧 pending', async () => {
+    const database = createDatabase();
+    const sqlite = database as unknown as SQLite.SQLiteDatabase;
+
+    try {
+      await migrateLocalDatabase(sqlite);
+      await enqueuePendingOperation(sqlite, 'user-a', operation, '2026-08-16T00:00:00Z');
+      await saveSyncConflict(sqlite, 'user-a', operation.operationId, {
+        code: 'VERSION_CONFLICT', requestId: 'request-1', status: 409, title: '版本冲突', type: 'about:blank',
+      }, '2026-08-16T00:00:01Z');
+      const port = createSyncConflictResolutionPort(sqlite);
+
+      await expect(port.discardLocal('user-b', operation.operationId)).rejects.toThrow('不属于当前用户');
+      await expect(getPendingOperation(sqlite, 'user-a', operation.operationId)).resolves.toMatchObject({ state: 'CONFLICT' });
+
+      await port.discardLocal('user-a', operation.operationId);
+      await expect(getPendingOperation(sqlite, 'user-a', operation.operationId)).resolves.toBeNull();
+      await expect(getSyncConflict(sqlite, 'user-a', operation.operationId)).resolves.toBeNull();
+    } finally {
+      database.close();
+    }
+  });
+
+  it('discardLocal 删除 conflict 失败时不留下半删除的 pending', async () => {
+    const database = createDatabase('DELETE FROM sync_conflicts');
+    const sqlite = database as unknown as SQLite.SQLiteDatabase;
+
+    try {
+      await migrateLocalDatabase(sqlite);
+      await enqueuePendingOperation(sqlite, 'user-a', operation, '2026-08-16T00:00:00Z');
+      await saveSyncConflict(sqlite, 'user-a', operation.operationId, {
+        code: 'VERSION_CONFLICT', requestId: 'request-1', status: 409, title: '版本冲突', type: 'about:blank',
+      }, '2026-08-16T00:00:01Z');
+
+      await expect(createSyncConflictResolutionPort(sqlite).discardLocal('user-a', operation.operationId)).rejects.toThrow('注入的 SQLite 写入失败');
+      await expect(getPendingOperation(sqlite, 'user-a', operation.operationId)).resolves.toMatchObject({ state: 'CONFLICT' });
+      await expect(getSyncConflict(sqlite, 'user-a', operation.operationId)).resolves.not.toBeNull();
+    } finally {
+      database.close();
+    }
+  });
+
+  it('修订重试使用冲突 currentVersion 和新三元组，写入失败时回滚全部记录', async () => {
+    const oldOperation = {
+      ...operation,
+      baseVersion: 1,
+      idempotencyKey: 'old-update-key',
+      operationId: 'old-update',
+      operationType: 'UPDATE' as const,
+      payload: { reason: '旧修订', replacement: operation.payload },
+    };
+    const revised = {
+      ...oldOperation,
+      baseVersion: 99,
+      idempotencyKey: 'new-update-key',
+      operationId: 'new-update',
+      payload: { reason: '新修订', replacement: operation.payload },
+    };
+    const database = createDatabase('DELETE FROM sync_conflicts');
+    const sqlite = database as unknown as SQLite.SQLiteDatabase;
+
+    try {
+      await migrateLocalDatabase(sqlite);
+      await enqueuePendingOperation(sqlite, 'user-a', oldOperation, '2026-08-16T00:00:00Z');
+      await saveSyncConflict(sqlite, 'user-a', oldOperation.operationId, {
+        code: 'VERSION_CONFLICT', requestId: 'request-1', status: 409, title: '版本冲突', type: 'about:blank',
+        versionConflict: { currentEtag: '"7"', currentVersion: 7, resourceLocation: '/api/v1/transactions/123e4567-e89b-42d3-a456-426614174000' },
+      }, '2026-08-16T00:00:01Z');
+      const port = createSyncConflictResolutionPort(sqlite);
+
+      await expect(port.retryWithRevision('user-a', oldOperation.operationId, revised)).rejects.toThrow('注入的 SQLite 写入失败');
+      await expect(getPendingOperation(sqlite, 'user-a', oldOperation.operationId)).resolves.toMatchObject({ state: 'CONFLICT' });
+      await expect(getPendingOperation(sqlite, 'user-a', revised.operationId)).resolves.toBeNull();
+
+      const successDatabase = createDatabase();
+      const successSqlite = successDatabase as unknown as SQLite.SQLiteDatabase;
+      try {
+        await migrateLocalDatabase(successSqlite);
+        await enqueuePendingOperation(successSqlite, 'user-a', oldOperation, '2026-08-16T00:00:00Z');
+        await saveSyncConflict(successSqlite, 'user-a', oldOperation.operationId, {
+          code: 'VERSION_CONFLICT', requestId: 'request-1', status: 409, title: '版本冲突', type: 'about:blank',
+          versionConflict: { currentEtag: '"7"', currentVersion: 7, resourceLocation: '/api/v1/transactions/123e4567-e89b-42d3-a456-426614174000' },
+        }, '2026-08-16T00:00:01Z');
+        const successPort = createSyncConflictResolutionPort(successSqlite);
+        await expect(successPort.retryWithRevision('user-a', oldOperation.operationId, {
+          ...revised, operationId: 'wrong-type', idempotencyKey: 'wrong-type-key', operationType: 'REVERSE', payload: { reason: '误切换语义' },
+        })).rejects.toThrow('保持原 UPDATE 或 REVERSE 类型');
+        await expect(getPendingOperation(successSqlite, 'user-a', oldOperation.operationId)).resolves.toMatchObject({ state: 'CONFLICT' });
+        await createSyncConflictResolutionPort(successSqlite).retryWithRevision('user-a', oldOperation.operationId, revised);
+
+        await expect(getPendingOperation(successSqlite, 'user-a', oldOperation.operationId)).resolves.toBeNull();
+        await expect(getSyncConflict(successSqlite, 'user-a', oldOperation.operationId)).resolves.toBeNull();
+        await expect(getPendingOperation(successSqlite, 'user-a', revised.operationId)).resolves.toMatchObject({
+          baseVersion: 7, idempotencyKey: 'new-update-key', operationId: 'new-update', state: 'PENDING',
+        });
+
+        const oldReverse = {
+          ...operation,
+          baseVersion: 3,
+          idempotencyKey: 'old-reverse-key',
+          operationId: 'old-reverse',
+          operationType: 'REVERSE' as const,
+          payload: { reason: '旧作废' },
+        };
+        const revisedReverse = {
+          ...oldReverse,
+          baseVersion: 88,
+          idempotencyKey: 'new-reverse-key',
+          operationId: 'new-reverse',
+          payload: { reason: '新作废' },
+        };
+        await enqueuePendingOperation(successSqlite, 'user-a', oldReverse, '2026-08-16T00:00:03Z');
+        await saveSyncConflict(successSqlite, 'user-a', oldReverse.operationId, {
+          code: 'VERSION_CONFLICT', requestId: 'request-2', status: 409, title: '版本冲突', type: 'about:blank',
+          versionConflict: { currentEtag: '"9"', currentVersion: 9, resourceLocation: '/api/v1/transactions/123e4567-e89b-42d3-a456-426614174000' },
+        }, '2026-08-16T00:00:04Z');
+        await expect(successPort.retryWithRevision('user-a', oldReverse.operationId, {
+          ...revisedReverse, operationType: 'UPDATE', payload: { reason: '误切换语义', replacement: operation.payload },
+        })).rejects.toThrow('保持原 UPDATE 或 REVERSE 类型');
+        await expect(getPendingOperation(successSqlite, 'user-a', oldReverse.operationId)).resolves.toMatchObject({ state: 'CONFLICT' });
+        await successPort.retryWithRevision('user-a', oldReverse.operationId, revisedReverse);
+        await expect(getPendingOperation(successSqlite, 'user-a', revisedReverse.operationId)).resolves.toMatchObject({
+          baseVersion: 9, idempotencyKey: 'new-reverse-key', operationId: 'new-reverse', operationType: 'REVERSE', state: 'PENDING',
+        });
+      } finally {
+        successDatabase.close();
+      }
+    } finally {
+      database.close();
+    }
+  });
+
+  it('REJECTED 操作没有冲突处置入口，不能被自动重试', async () => {
+    const database = createDatabase();
+    const sqlite = database as unknown as SQLite.SQLiteDatabase;
+    const rejected = { ...operation, operationId: 'rejected-operation', idempotencyKey: 'rejected-key' };
+
+    try {
+      await migrateLocalDatabase(sqlite);
+      await enqueuePendingOperation(sqlite, 'user-a', rejected, '2026-08-16T00:00:00Z');
+      await updatePendingOperationState(sqlite, 'user-a', rejected.operationId, 'SENDING', '2026-08-16T00:00:01Z');
+      await updatePendingOperationState(sqlite, 'user-a', rejected.operationId, 'REJECTED', '2026-08-16T00:00:02Z');
+
+      await expect(createSyncConflictResolutionPort(sqlite).retryWithRevision('user-a', rejected.operationId, {
+        ...rejected, baseVersion: 1, idempotencyKey: 'new-key', operationId: 'new-operation', operationType: 'REVERSE', payload: { reason: '重新提交' },
+      })).rejects.toThrow('已拒绝');
+      await expect(getPendingOperation(sqlite, 'user-a', rejected.operationId)).resolves.toMatchObject({ state: 'REJECTED' });
     } finally {
       database.close();
     }

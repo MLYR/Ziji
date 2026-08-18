@@ -6,6 +6,7 @@ import { ApiClientError } from '@/api/api-client';
 import { mobileAuthenticationSession } from '@/auth/default-auth-session';
 import { createRegistrationIdempotencyKey, type MobileAuthenticationState } from '@/auth/auth-session';
 import { useThemeStore } from '@/state/theme-store';
+import { SyncStatusPanel } from '@/sync/sync-status-panel';
 
 type AuthMode = 'LOGIN' | 'REGISTER';
 type FieldName = 'email' | 'password' | 'verificationCode' | 'nickname';
@@ -135,6 +136,7 @@ export default function AuthenticationScreen() {
           <View className="my-10 rounded-xl bg-surface-light p-5 dark:bg-surface-dark" accessibilityLiveRegion="polite">
             <Text className="text-xl font-bold text-ink-light dark:text-ink-dark">已安全登录</Text>
             <Text className="mt-2 text-base text-muted-light dark:text-muted-dark">当前设备：{authentication.session?.deviceName}</Text>
+            {authentication.userId ? <SyncStatusPanel userId={authentication.userId} /> : null}
             <Pressable
               accessibilityLabel="退出当前设备"
               accessibilityRole="button"

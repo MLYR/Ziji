@@ -13,6 +13,7 @@ export type LoginRequest = components['schemas']['LoginRequest'];
 export type MobileRefreshRequest = components['schemas']['MobileRefreshRequest'];
 export type UserEnvelope = components['schemas']['UserEnvelope'];
 export type MobileSessionEnvelope = components['schemas']['MobileSessionEnvelope'];
+export type TransactionEnvelope = components['schemas']['TransactionEnvelope'];
 export type RegistrationChallengeEnvelope = operations['createRegistrationChallenge']['responses'][202]['content']['application/json'];
 
 export interface MobileSyncApiClient {
@@ -26,6 +27,11 @@ export interface MobileAuthApiClient {
   createMobileSession(request: LoginRequest): Promise<MobileSessionEnvelope>;
   refreshMobileSession(request: MobileRefreshRequest): Promise<MobileSessionEnvelope>;
   revokeCurrentSession(): Promise<void>;
+  getCurrentUser(): Promise<UserEnvelope>;
+}
+
+export interface MobileTransactionApiClient {
+  getTransaction(transactionId: string): Promise<TransactionEnvelope>;
 }
 
 export class ApiClientError extends Error {
@@ -133,6 +139,19 @@ export function createMobileAuthApiClient(options: MobileApiClientOptions): Mobi
     },
     revokeCurrentSession() {
       return request<void>('/api/v1/auth/sessions/current', { method: 'DELETE' });
+    },
+    getCurrentUser() {
+      return request<UserEnvelope>('/api/v1/users/me', { method: 'GET' });
+    },
+  };
+}
+
+export function createMobileTransactionApiClient(options: MobileApiClientOptions): MobileTransactionApiClient {
+  const request = createMobileApiClient(options);
+
+  return {
+    getTransaction(transactionId) {
+      return request<TransactionEnvelope>(`/api/v1/transactions/${encodeURIComponent(transactionId)}`, { method: 'GET' });
     },
   };
 }
