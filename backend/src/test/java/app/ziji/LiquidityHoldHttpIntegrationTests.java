@@ -1,13 +1,35 @@
 package app.ziji;
 
+import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
+import app.ziji.account.application.AccountStore;
+import app.ziji.account.application.LiquidityHoldCommand;
+import app.ziji.account.application.LiquidityHoldCursorCodec;
+import app.ziji.account.application.LiquidityHoldService;
+import app.ziji.account.application.LiquidityHoldStore;
+import app.ziji.account.domain.AccountCurrency;
+import app.ziji.account.domain.LiquidityHold;
+import app.ziji.account.domain.LiquidityHoldType;
+import app.ziji.accountmember.application.AccountMembershipReadPort;
+import app.ziji.audit.application.AuditLogWritePort;
 import app.ziji.auth.application.CreateDeviceSessionCommand;
 import app.ziji.auth.application.DeviceSessionApplicationService;
 import app.ziji.auth.application.SessionTokenResult;
+import app.ziji.shared.application.IdempotencyResponse;
+import app.ziji.shared.application.IdempotencyWorkResult;
 import app.ziji.shared.application.TransactionRunner;
+import app.ziji.shared.application.UnifiedIdempotencyService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -17,9 +39,13 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -43,6 +69,24 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 
 	@Autowired
 	private TransactionRunner transactions;
+
+	@Autowired
+	private AccountStore accounts;
+
+	@Autowired
+	private AccountMembershipReadPort memberships;
+
+	@Autowired
+	private LiquidityHoldStore holds;
+
+	@Autowired
+	private LiquidityHoldCursorCodec cursors;
+
+	@Autowired
+	private UnifiedIdempotencyService idempotency;
+
+	@Autowired
+	private Clock clock;
 
 	@Test
 	void activeRoleMatrixUsesMembershipFactsAndHidesInactiveOrUnrelatedAccountsBeforeIdempotency() throws Exception {
@@ -68,6 +112,8 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 		assertAllowedAllRoutes(editor, account.accountId(), "editor", seedHold(account.accountId(), owner.userId()),
 			seedHold(account.accountId(), owner.userId()));
 		assertViewerCanReadButCannotWrite(viewer, account.accountId(), seedHold(account.accountId(), owner.userId()));
+		AccountFixture other = seedAccount(owner.userId(), "其他账户");
+		assertViewerCannotEnumerateMissingOrForeignHold(viewer, account.accountId(), seedHold(other.accountId(), owner.userId()));
 		assertInvisibleAllRoutes(left, account.accountId(), seedHold(account.accountId(), owner.userId()), "left");
 		assertInvisibleAllRoutes(removed, account.accountId(), seedHold(account.accountId(), owner.userId()), "removed");
 		assertInvisibleAllRoutes(ended, account.accountId(), seedHold(account.accountId(), owner.userId()), "ended");
@@ -94,7 +140,7 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 	}
 
 	@Test
-	void reviseAndReleaseIfMatchFailuresDoNotWriteIdempotencyRecords() throws Exception {
+	void malformedIfMatchFailuresDoNotWriteIdempotencyRecords() throws Exception {
 		UserFixture owner = insertUser("hold-if-match-owner");
 		AccountFixture account = seedAccount(owner.userId(), "If-Match");
 		String token = bearer(owner);
@@ -115,28 +161,380 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).contentType(MediaType.APPLICATION_JSON).content(commandJson()), "duplicate-revise-key");
 		assertDuplicateIfMatch(owner.userId(), post(path(account.accountId()) + "/{holdId}/release", seedHold(account.accountId(), owner.userId()))
 			.header(HttpHeaders.AUTHORIZATION, "Bearer " + token), "duplicate-release-key");
+	}
 
-		UUID staleHoldId = seedHold(account.accountId(), owner.userId());
-		String staleKey = "stale-if-match-key-001";
-		mvc.perform(post(path(account.accountId()) + "/{holdId}/revisions", staleHoldId)
+	@Test
+	void staleIfMatchIsPersistedAndReplayedWithItsFirstSafeVersionConflictSummary() throws Exception {
+		UserFixture owner = insertUser("hold-stale-replay-owner");
+		AccountFixture account = seedAccount(owner.userId(), "冲突重放");
+		UUID holdId = seedHold(account.accountId(), owner.userId());
+		String token = bearer(owner);
+		String key = "hold-stale-replay-key-01";
+		String body = commandJson();
+
+		mvc.perform(post(path(account.accountId()) + "/{holdId}/revisions", holdId)
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
-				.header("Idempotency-Key", staleKey)
+				.header("Idempotency-Key", key)
 				.header("If-Match", "\"2\"")
-				.contentType(MediaType.APPLICATION_JSON).content(commandJson()))
+				.contentType(MediaType.APPLICATION_JSON).content(body))
 			.andExpect(status().isConflict())
 			.andExpect(header().doesNotExist(HttpHeaders.ETAG))
-			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
-		assertEquals(0, idempotencyCount(owner.userId(), staleKey));
-		UUID staleReleaseHoldId = seedHold(account.accountId(), owner.userId());
-		String staleReleaseKey = "stale-release-key-001";
-		mvc.perform(post(path(account.accountId()) + "/{holdId}/release", staleReleaseHoldId)
+			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(1))
+			.andExpect(jsonPath("$.versionConflict.currentEtag").value("\"1\""))
+			.andExpect(jsonPath("$.versionConflict.resourceLocation").value(path(account.accountId())));
+		assertEquals(1, idempotencyCount(owner.userId(), key));
+		assertEquals("FAILED_FINAL", idempotencyStatus(owner.userId(), key));
+
+		Instant changedAt = Instant.now();
+		jdbc.update("UPDATE liquidity_holds SET version = 3, expires_at = CAST(? AS timestamptz), updated_at = CAST(? AS timestamptz) WHERE id = ?",
+			changedAt.minusSeconds(1).toString(), changedAt.toString(), holdId);
+		mvc.perform(post(path(account.accountId()) + "/{holdId}/revisions", holdId)
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
-				.header("Idempotency-Key", staleReleaseKey)
-				.header("If-Match", "\"2\""))
+				.header("Idempotency-Key", key)
+				.header("If-Match", "\"2\"")
+				.contentType(MediaType.APPLICATION_JSON).content(body))
 			.andExpect(status().isConflict())
 			.andExpect(header().doesNotExist(HttpHeaders.ETAG))
-			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
-		assertEquals(0, idempotencyCount(owner.userId(), staleReleaseKey));
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(1))
+			.andExpect(jsonPath("$.versionConflict.currentEtag").value("\"1\""))
+			.andExpect(jsonPath("$.versionConflict.resourceLocation").value(path(account.accountId())));
+		assertEquals(1, idempotencyCount(owner.userId(), key));
+
+		mvc.perform(post(path(account.accountId()) + "/{holdId}/revisions", holdId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", key)
+				.header("If-Match", "\"2\"")
+				.contentType(MediaType.APPLICATION_JSON).content(body.replace("10.00", "11.00")))
+			.andExpect(status().isConflict())
+			.andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
+		assertEquals(1, idempotencyCount(owner.userId(), key));
+	}
+
+	@Test
+	void archivedAccountRejectsCreateAndReviseButAllowsReleaseOfTheExistingHold() throws Exception {
+		UserFixture owner = insertUser("hold-archived-owner");
+		AccountFixture account = seedAccount(owner.userId(), "已归档账户");
+		UUID holdId = seedHold(account.accountId(), owner.userId());
+		String token = bearer(owner);
+		Instant archivedAt = Instant.now();
+		jdbc.update("UPDATE accounts SET status = 'ARCHIVED', archived_at = CAST(? AS timestamptz) WHERE id = ?",
+			archivedAt.toString(), account.accountId());
+
+		mvc.perform(post(path(account.accountId()))
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "archived-create-key-01")
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson()))
+			.andExpect(status().isUnprocessableEntity())
+			.andExpect(header().doesNotExist(HttpHeaders.ETAG));
+		assertEquals(0, idempotencyCount(owner.userId(), "archived-create-key-01"));
+
+		mvc.perform(post(path(account.accountId()) + "/{holdId}/revisions", holdId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "archived-revise-key-01")
+				.header("If-Match", "\"1\"")
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson()))
+			.andExpect(status().isUnprocessableEntity())
+			.andExpect(header().doesNotExist(HttpHeaders.ETAG));
+		assertEquals(0, idempotencyCount(owner.userId(), "archived-revise-key-01"));
+
+		mvc.perform(post(path(account.accountId()) + "/{holdId}/release", holdId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "archived-release-key-1")
+				.header("If-Match", "\"1\""))
+			.andExpect(status().isOk())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"2\""))
+			.andExpect(jsonPath("$.data.status").value("RELEASED"));
+		assertEquals("RELEASED", jdbc.queryForObject(
+			"SELECT end_reason FROM liquidity_holds WHERE id = ?", String.class, holdId));
+		assertEquals(1, jdbc.queryForObject(
+			"SELECT count(*) FROM liquidity_holds WHERE id = ? AND released_at IS NOT NULL AND ended_at IS NOT NULL",
+			Integer.class, holdId));
+	}
+
+	@Test
+	void createPersistsTheTwentyTwoDigitPositiveMoneyBoundaryWithoutNumericDrift() throws Exception {
+		UserFixture owner = insertUser("hold-max-money-owner");
+		AccountFixture account = seedAccount(owner.userId(), "金额上限");
+		String token = bearer(owner);
+		String maximum = "9999999999999999999999";
+		String key = "hold-max-money-key-0001";
+
+		mvc.perform(post(path(account.accountId()))
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON)
+				.content(commandJson(maximum, "CNY")))
+			.andExpect(status().isCreated())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"1\""))
+			.andExpect(jsonPath("$.data.amount").value(maximum))
+			.andExpect(jsonPath("$.data.currency").value("CNY"));
+		BigDecimal persisted = jdbc.queryForObject(
+			"SELECT amount FROM liquidity_holds WHERE account_id = ?", BigDecimal.class, account.accountId());
+		assertEquals(0, persisted.compareTo(new BigDecimal(maximum)));
+		assertEquals(maximum, persisted.stripTrailingZeros().toPlainString());
+
+		int holdsBefore = jdbc.queryForObject(
+			"SELECT count(*) FROM liquidity_holds WHERE account_id = ?", Integer.class, account.accountId());
+		int auditsBefore = jdbc.queryForObject(
+			"SELECT count(*) FROM audit_logs WHERE account_id = ?", Integer.class, account.accountId());
+		String rejectedKey = "hold-overflow-money-key";
+		mvc.perform(post(path(account.accountId()))
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", rejectedKey).contentType(MediaType.APPLICATION_JSON)
+				.content(commandJson("10000000000000000000000", "CNY")))
+			.andExpect(status().isBadRequest())
+			.andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+		assertEquals(holdsBefore, jdbc.queryForObject(
+			"SELECT count(*) FROM liquidity_holds WHERE account_id = ?", Integer.class, account.accountId()));
+		assertEquals(auditsBefore, jdbc.queryForObject(
+			"SELECT count(*) FROM audit_logs WHERE account_id = ?", Integer.class, account.accountId()));
+		assertEquals(0, idempotencyCount(owner.userId(), rejectedKey));
+	}
+
+	@Test
+	void archivedAccountReplaysTheExistingCreateTerminalBeforeNewBusinessEligibility() throws Exception {
+		UserFixture owner = insertUser("hold-archived-replay-owner");
+		AccountFixture account = seedAccount(owner.userId(), "归档重放");
+		String token = bearer(owner);
+		String body = commandJson();
+		String key = "hold-archived-replay-key";
+
+		mvc.perform(post(path(account.accountId()))
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isCreated())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"1\""));
+		UUID holdId = UUID.fromString(jdbc.queryForObject(
+			"SELECT id::text FROM liquidity_holds WHERE account_id = ?", String.class, account.accountId()));
+		archive(account.accountId());
+
+		mvc.perform(post(path(account.accountId()))
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isCreated())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"1\""))
+			.andExpect(jsonPath("$.data.id").value(holdId.toString()));
+		assertEquals(1, jdbc.queryForObject(
+			"SELECT count(*) FROM liquidity_holds WHERE account_id = ?", Integer.class, account.accountId()));
+		assertEquals(1, jdbc.queryForObject(
+			"SELECT count(*) FROM audit_logs WHERE account_id = ?", Integer.class, account.accountId()));
+		assertEquals(1, idempotencyCount(owner.userId(), key));
+
+		mvc.perform(post(path(account.accountId()))
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON)
+				.content(body.replace("10.00", "11.00")))
+			.andExpect(status().isConflict())
+			.andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
+
+		String newKey = "hold-archived-new-key-01";
+		mvc.perform(post(path(account.accountId()))
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", newKey).contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isUnprocessableEntity())
+			.andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("BUSINESS_RULE_VIOLATION"));
+		assertEquals(0, idempotencyCount(owner.userId(), newKey));
+
+		jdbc.update("UPDATE account_members SET status = 'REMOVED', ended_at = CURRENT_TIMESTAMP WHERE account_id = ? AND user_id = ?",
+			account.accountId(), owner.userId());
+		mvc.perform(post(path(account.accountId()))
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isNotFound())
+			.andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+		assertEquals(1, idempotencyCount(owner.userId(), key));
+	}
+
+	@Test
+	void archivedAccountReplaysTheFirstVersionConflictWithoutRecheckingMutableEligibility() throws Exception {
+		UserFixture owner = insertUser("hold-archived-conflict-owner");
+		AccountFixture account = seedAccount(owner.userId(), "归档冲突重放");
+		UUID holdId = seedHold(account.accountId(), owner.userId());
+		String token = bearer(owner);
+		String key = "hold-archived-conflict-key";
+		String body = commandJson();
+
+		mvc.perform(post(path(account.accountId()) + "/{holdId}/revisions", holdId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", key).header("If-Match", "\"2\"")
+				.contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(1));
+		archive(account.accountId());
+
+		mvc.perform(post(path(account.accountId()) + "/{holdId}/revisions", holdId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", key).header("If-Match", "\"2\"")
+				.contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isConflict())
+			.andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(1));
+		assertEquals("FAILED_FINAL", idempotencyStatus(owner.userId(), key));
+
+		mvc.perform(post(path(account.accountId()) + "/{holdId}/revisions", holdId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", key).header("If-Match", "\"2\"")
+				.contentType(MediaType.APPLICATION_JSON).content(body.replace("10.00", "11.00")))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
+	}
+
+	@Test
+	void revisionAtomicallySupersedesTheOldFactAndAppendsTheNewFactAndAudit() throws Exception {
+		UserFixture owner = insertUser("hold-revision-atomic-owner");
+		AccountFixture account = seedAccount(owner.userId(), "修订原子性");
+		UUID originalId = seedHold(account.accountId(), owner.userId());
+
+		mvc.perform(post(path(account.accountId()) + "/{holdId}/revisions", originalId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer(owner))
+				.header("Idempotency-Key", "revision-atomic-key-001")
+				.header("If-Match", "\"1\"")
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson()))
+			.andExpect(status().isCreated())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"1\""));
+
+		assertEquals("SUPERSEDED", jdbc.queryForObject(
+			"SELECT end_reason FROM liquidity_holds WHERE id = ?", String.class, originalId));
+		assertEquals(2, jdbc.queryForObject(
+			"SELECT version FROM liquidity_holds WHERE id = ?", Integer.class, originalId));
+		assertEquals(1, jdbc.queryForObject(
+			"SELECT count(*) FROM liquidity_holds WHERE id = ? AND ended_at IS NOT NULL", Integer.class, originalId));
+		UUID revisedId = UUID.fromString(jdbc.queryForObject(
+			"SELECT id::text FROM liquidity_holds WHERE previous_revision_id = ?", String.class, originalId));
+		assertNotNull(revisedId);
+		assertEquals(2, jdbc.queryForObject(
+			"SELECT revision_no FROM liquidity_holds WHERE id = ?", Integer.class, revisedId));
+		assertEquals(1, jdbc.queryForObject(
+			"SELECT version FROM liquidity_holds WHERE id = ?", Integer.class, revisedId));
+		assertEquals(1, jdbc.queryForObject(
+			"SELECT count(*) FROM audit_logs WHERE action = 'LIQUIDITY_HOLD_REVISED' AND resource_id = ?",
+			Integer.class, revisedId));
+		assertEquals(originalId.toString(), jdbc.queryForObject(
+			"SELECT metadata ->> 'previousHoldId' FROM audit_logs WHERE resource_id = ?", String.class, revisedId));
+		assertEquals("1", jdbc.queryForObject(
+			"SELECT metadata ->> 'expectedVersion' FROM audit_logs WHERE resource_id = ?", String.class, revisedId));
+	}
+
+	@Test
+	void concurrentRevisionAndReleaseHaveOneWinnerAndPersistTheLosersFirstVersionConflict() throws Exception {
+		UserFixture owner = insertUser("hold-lifecycle-race-owner");
+		AccountFixture account = seedAccount(owner.userId(), "生命周期竞争");
+		UUID holdId = seedHold(account.accountId(), owner.userId());
+		String token = bearer(owner);
+		String revisionKey = "revision-race-key-0001";
+		String releaseKey = "release-race-key-00001";
+		CountDownLatch ready = new CountDownLatch(2);
+		CountDownLatch start = new CountDownLatch(1);
+		List<MvcResult> results = new ArrayList<>();
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		List<Future<MvcResult>> futures = new ArrayList<>();
+		Throwable failure = null;
+		try {
+			futures = List.of(
+				executor.submit(() -> mutateAfter(ready, start, post(path(account.accountId()) + "/{holdId}/revisions", holdId)
+					.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+					.header("Idempotency-Key", revisionKey)
+					.header("If-Match", "\"1\"")
+					.contentType(MediaType.APPLICATION_JSON).content(commandJson()))),
+				executor.submit(() -> mutateAfter(ready, start, post(path(account.accountId()) + "/{holdId}/release", holdId)
+					.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+					.header("Idempotency-Key", releaseKey)
+					.header("If-Match", "\"1\""))));
+			assertTrue(ready.await(10, TimeUnit.SECONDS), "两个生命周期写入未同时就绪");
+			start.countDown();
+			for (Future<MvcResult> future : futures) {
+				try {
+					results.add(future.get(10, TimeUnit.SECONDS));
+				} catch (ExecutionException exception) {
+					throw new AssertionError("并发生命周期请求失败", exception.getCause());
+				}
+			}
+		} catch (Exception | AssertionError exception) {
+			failure = exception;
+			throw exception;
+		} finally {
+			// ready 失败、超时或请求异常也必须释放另一个等待者并终止测试线程。
+			start.countDown();
+			for (Future<MvcResult> future : futures) {
+				if (!future.isDone()) {
+					future.cancel(true);
+				}
+			}
+			executor.shutdownNow();
+			try {
+				if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
+					AssertionError termination = new AssertionError("并发测试线程未在超时内终止");
+					if (failure != null) {
+						failure.addSuppressed(termination);
+					} else {
+						throw termination;
+					}
+				}
+			} catch (InterruptedException exception) {
+				Thread.currentThread().interrupt();
+				if (failure != null) {
+					failure.addSuppressed(exception);
+				} else {
+					throw exception;
+				}
+			}
+		}
+
+		assertEquals(1, results.stream().filter(result -> {
+			int status = result.getResponse().getStatus();
+			return status == 200 || status == 201;
+		}).count());
+		MvcResult conflict = results.stream().filter(result -> result.getResponse().getStatus() == 409).findFirst().orElseThrow();
+		assertTrue(conflict.getResponse().getContentAsString().contains("\"code\":\"VERSION_CONFLICT\""));
+		assertTrue(conflict.getResponse().getContentAsString().contains("\"currentVersion\":2"));
+		String conflictKey = conflict.getRequest().getHeader("Idempotency-Key");
+		assertEquals("FAILED_FINAL", idempotencyStatus(owner.userId(), conflictKey));
+		assertEquals(2, jdbc.queryForObject(
+			"SELECT count(*) FROM idempotency_records WHERE user_id = ? AND idempotency_key IN (?, ?)",
+			Integer.class, owner.userId(), revisionKey, releaseKey));
+		String endReason = jdbc.queryForObject(
+			"SELECT end_reason FROM liquidity_holds WHERE id = ?", String.class, holdId);
+		assertTrue(List.of("SUPERSEDED", "RELEASED").contains(endReason));
+		assertEquals("SUPERSEDED".equals(endReason) ? 1 : 0, jdbc.queryForObject(
+			"SELECT count(*) FROM liquidity_holds WHERE previous_revision_id = ?", Integer.class, holdId));
+	}
+
+	@Test
+	void auditFailureRollsBackRevisionFactsAndItsIdempotencyTerminalTogether() {
+		UserFixture owner = insertUser("hold-audit-rollback-owner");
+		AccountFixture account = seedAccount(owner.userId(), "审计失败回滚");
+		UUID holdId = seedHold(account.accountId(), owner.userId());
+		String key = "audit-failure-revise-01";
+		LiquidityHoldService failingAuditService = new LiquidityHoldService(
+			accounts, memberships, holds, cursors, entry -> { throw new IllegalStateException("模拟审计追加失败"); },
+			transactions, clock, UUID::randomUUID);
+		LiquidityHoldCommand command = new LiquidityHoldCommand(
+			LiquidityHoldType.RESERVED, new BigDecimal("11.00"), AccountCurrency.CNY, Instant.now(), null, "审计失败");
+
+		assertThrows(IllegalStateException.class, () -> idempotency.executeAuthenticated(
+			owner.userId(), 1, "reviseLiquidityHold", key, "b".repeat(64), () -> {
+				LiquidityHold revised = failingAuditService.revise(owner.userId(), account.accountId(), holdId, 1, command, "audit-failure-request");
+				return IdempotencyWorkResult.completed(revised, IdempotencyResponse.succeededResource(
+					201, "LIQUIDITY_HOLD", revised.id(), new IdempotencyResponse.ResourceReference(
+						path(account.accountId()) + "/" + holdId + "/revisions", revised.etag(), (long) revised.version())));
+			}));
+
+		assertEquals(1, jdbc.queryForObject(
+			"SELECT version FROM liquidity_holds WHERE id = ?", Integer.class, holdId));
+		assertEquals(0, jdbc.queryForObject(
+			"SELECT count(*) FROM liquidity_holds WHERE id = ? AND ended_at IS NOT NULL", Integer.class, holdId));
+		assertEquals(0, jdbc.queryForObject(
+			"SELECT count(*) FROM liquidity_holds WHERE previous_revision_id = ?", Integer.class, holdId));
+		assertEquals(0, jdbc.queryForObject(
+			"SELECT count(*) FROM audit_logs WHERE resource_id = ?", Integer.class, holdId));
+		assertEquals(0, idempotencyCount(owner.userId(), key));
 	}
 
 	private void assertAllowedAllRoutes(
@@ -181,6 +579,21 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			.contentType(MediaType.APPLICATION_JSON).content(commandJson()), viewer.userId(), "viewer-revise-key-01");
 		assertForbiddenWithoutIdempotency(post(path(accountId) + "/{holdId}/release", holdId)
 			.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("If-Match", "\"1\""), viewer.userId(), "viewer-release-key-1");
+	}
+
+	private void assertViewerCannotEnumerateMissingOrForeignHold(
+		UserFixture viewer,
+		UUID accountId,
+		UUID foreignHoldId) throws Exception {
+		String token = bearer(viewer);
+		for (UUID holdId : List.of(UUID.randomUUID(), foreignHoldId)) {
+			assertNotFoundWithoutIdempotency(post(path(accountId) + "/{holdId}/revisions", holdId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("If-Match", "\"1\"")
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson()), viewer.userId(), "viewer-hidden-revise-" + holdId);
+			assertNotFoundWithoutIdempotency(post(path(accountId) + "/{holdId}/release", holdId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("If-Match", "\"1\""),
+				viewer.userId(), "viewer-hidden-release-" + holdId);
+		}
 	}
 
 	private void assertInvisibleAllRoutes(UserFixture user, UUID accountId, UUID holdId, String label) throws Exception {
@@ -235,9 +648,26 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 		assertEquals(0, idempotencyCount(userId, key));
 	}
 
+	private MvcResult mutateAfter(
+		CountDownLatch ready,
+		CountDownLatch start,
+		MockHttpServletRequestBuilder request) throws Exception {
+		// 两个旧版本请求同步进入真实 HTTP 链路，让数据库条件更新决定唯一终止转换。
+		ready.countDown();
+		if (!start.await(10, TimeUnit.SECONDS)) {
+			throw new IllegalStateException("并发生命周期起始栅栏超时");
+		}
+		return mvc.perform(request).andReturn();
+	}
+
 	private int idempotencyCount(UUID userId, String key) {
 		return jdbc.queryForObject("SELECT count(*) FROM idempotency_records WHERE user_id = ? AND idempotency_key = ?",
 			Integer.class, userId, key);
+	}
+
+	private String idempotencyStatus(UUID userId, String key) {
+		return jdbc.queryForObject("SELECT status FROM idempotency_records WHERE user_id = ? AND idempotency_key = ?",
+			String.class, userId, key);
 	}
 
 	private String bearer(UserFixture user) {
@@ -323,13 +753,23 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 		return holdId;
 	}
 
+	private void archive(UUID accountId) {
+		Instant now = Instant.now();
+		jdbc.update("UPDATE accounts SET status = 'ARCHIVED', archived_at = CAST(? AS timestamptz) WHERE id = ?",
+			now.toString(), accountId);
+	}
+
 	private static String path(UUID accountId) {
 		return "/api/v1/accounts/" + accountId + "/liquidity-holds";
 	}
 
 	private static String commandJson() {
+		return commandJson("10.00", "CNY");
+	}
+
+	private static String commandJson(String amount, String currency) {
 		Instant effectiveAt = Instant.now().minusSeconds(30);
-		return "{\"type\":\"FROZEN\",\"amount\":\"10.00\",\"currency\":\"CNY\",\"effectiveAt\":\""
+		return "{\"type\":\"FROZEN\",\"amount\":\"" + amount + "\",\"currency\":\"" + currency + "\",\"effectiveAt\":\""
 			+ effectiveAt + "\",\"expiresAt\":null,\"reason\":\"HTTP 验收\"}";
 	}
 
