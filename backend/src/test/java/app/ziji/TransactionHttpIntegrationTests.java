@@ -245,6 +245,29 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 	}
 
 	@Test
+	void currentActiveMembershipAllowsHistoricalIncomeBusinessAt() throws Exception {
+		User owner = user("ledger-historical-income-owner");
+		Account account = account(owner.id());
+		UUID incomeCategory = category(owner.id(), "INCOME");
+		Instant businessAt = Instant.parse("2020-01-01T01:00:00Z");
+		Instant joinedAt = jdbc.queryForObject(
+			"SELECT joined_at FROM account_members WHERE account_id = ? AND user_id = ? AND status = 'ACTIVE'",
+			java.sql.Timestamp.class, account.id(), owner.id()).toInstant();
+		assertTrue(businessAt.isBefore(joinedAt));
+
+		// businessAt 固化历史账务日期，不应被误当成当前成员授权的生效时点。
+		UUID transactionId = postLedgerTransaction(bearer(owner), "historical-income-key-01", """
+			{"type":"INCOME","businessAt":"2020-01-01T01:00:00Z","timezone":"UTC",
+			 "accountId":"%s","amount":"100.00","currency":"CNY","categoryId":"%s"}
+			""".formatted(account.id(), incomeCategory), "INCOME");
+		assertEquals(2, jdbc.queryForObject("SELECT count(*) FROM ledger_entries WHERE transaction_id = ?",
+			Integer.class, transactionId));
+		assertEquals(1, jdbc.queryForObject(
+			"SELECT count(*) FROM idempotency_records WHERE idempotency_key = 'historical-income-key-01' AND status = 'SUCCEEDED'",
+			Integer.class));
+	}
+
+	@Test
 	void writePermissionAndValidationFailuresAreBoundedAndDoNotAcquireIdempotency() throws Exception {
 		User owner = user("ledger-write-permission-owner");
 		User editor = user("ledger-write-permission-editor");
@@ -821,15 +844,15 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 		}
 
 		@Override
-		public boolean mayPost(UUID userId, UUID accountId, Instant effectiveAt) {
-			return delegate.mayPost(userId, accountId, effectiveAt);
+		public boolean mayPost(UUID userId, UUID accountId) {
+			return delegate.mayPost(userId, accountId);
 		}
 
 		@Override
-		public PostingAccessDecision postingDecision(UUID userId, UUID accountId, Instant effectiveAt) {
+		public PostingAccessDecision postingDecision(UUID userId, UUID accountId) {
 			PermissionRaceGate gate = armed.getAndSet(null);
 			if (gate != null) {
-				// 只暂停最终 application 复核，preflight 的 mayPost 已在此前完成。
+				// 只暂停最终 application 复核，preflight 的授权检查已在此前完成。
 				gate.finalCheckReached().countDown();
 				try {
 					if (!gate.membershipChanged().await(10, TimeUnit.SECONDS)) {
@@ -840,7 +863,7 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 					throw new AssertionError("权限竞争测试线程被中断", exception);
 				}
 			}
-			return delegate.postingDecision(userId, accountId, effectiveAt);
+			return delegate.postingDecision(userId, accountId);
 		}
 	}
 

@@ -632,7 +632,7 @@ class LedgerCommandApplicationServiceTests {
 		private UUID deniedAccountId;
 
 		@Override
-		public boolean mayPost(UUID userId, UUID accountId, Instant effectiveAt) {
+		public boolean mayPost(UUID userId, UUID accountId) {
 			return allowed && !accountId.equals(deniedAccountId);
 		}
 	}

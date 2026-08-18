@@ -137,7 +137,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 	}
 
 	private Transaction postIncomeInTransaction(IncomeCommand command, UUID transactionId, TransactionSource source) {
-		AccountPostingReference account = editableAccount(command.userId(), command.accountId(), command.businessAt());
+		AccountPostingReference account = editableAccount(command.userId(), command.accountId());
 		LedgerAccountReference accountLedger = primary(account);
 		requireAssetAccount(account, "收入");
 		validateAmount(command.amount(), accountLedger.currency());
@@ -177,7 +177,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 	}
 
 	private Transaction postExpenseInTransaction(ExpenseCommand command, UUID transactionId, TransactionSource source) {
-		AccountPostingReference account = editableAccount(command.userId(), command.accountId(), command.businessAt());
+		AccountPostingReference account = editableAccount(command.userId(), command.accountId());
 		LedgerAccountReference accountLedger = primary(account);
 		if ("LIABILITY".equals(account.accountClass())) {
 			if (!"CREDIT_CARD".equals(account.accountType())) {
@@ -217,8 +217,8 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 	public Transaction postLiabilityBorrowing(LiabilityBorrowingCommand command, UUID transactionId) {
 		require(command, "借款到账命令");
 		return transactions.nested(() -> {
-			AccountPostingReference asset = editableAccount(command.userId(), command.assetAccountId(), command.businessAt());
-			AccountPostingReference liability = editableAccount(command.userId(), command.liabilityAccountId(), command.businessAt());
+			AccountPostingReference asset = editableAccount(command.userId(), command.assetAccountId());
+			AccountPostingReference liability = editableAccount(command.userId(), command.liabilityAccountId());
 			requireExactAccountClass(asset, "ASSET", "借款到账");
 			requireExactAccountClass(liability, "LIABILITY", "借款到账");
 			if (!Set.of("LOAN", "CONSUMER_LOAN", "OTHER").contains(liability.accountType())) {
@@ -253,8 +253,8 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 	public Transaction postLiabilityRepayment(LiabilityRepaymentCommand command, UUID transactionId) {
 		require(command, "负债还款命令");
 		return transactions.nested(() -> {
-			AccountPostingReference cash = editableAccount(command.userId(), command.cashAccountId(), command.businessAt());
-			AccountPostingReference liability = editableAccount(command.userId(), command.liabilityAccountId(), command.businessAt());
+			AccountPostingReference cash = editableAccount(command.userId(), command.cashAccountId());
+			AccountPostingReference liability = editableAccount(command.userId(), command.liabilityAccountId());
 			requireExactAccountClass(cash, "ASSET", "负债还款");
 			requireExactAccountClass(liability, "LIABILITY", "负债还款");
 			LedgerAccountReference cashLedger = primary(cash);
@@ -320,14 +320,14 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 	}
 
 	private Transaction postRefundInTransaction(RefundCommand command, UUID transactionId, TransactionSource source) {
-		AccountPostingReference refundAccount = editableAccount(command.userId(), command.accountId(), command.businessAt());
+		AccountPostingReference refundAccount = editableAccount(command.userId(), command.accountId());
 		LedgerAccountReference refundLedger = primary(refundAccount);
 		requireAssetAccount(refundAccount, "退款");
 		validateAmount(command.amount(), refundLedger.currency());
 		LedgerTransactionStore.RefundCandidate original = ledgerTransactions
 			.findRefundCandidate(command.originalTransactionId())
 			.orElseThrow(() -> invalid("原支出交易不存在或不可退款。"));
-		requireWritableAccount(command.userId(), original.originalAccountId(), command.businessAt());
+		requireWritableAccount(command.userId(), original.originalAccountId());
 		if (!original.originalAmount().currency().equals(refundLedger.currency())
 			|| !original.refundedAmount().currency().equals(refundLedger.currency())) {
 			throw invalid("退款币种必须与原支出一致。");
@@ -373,8 +373,8 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 	}
 
 	private Transaction postTransferInTransaction(TransferCommand command, UUID transactionId, TransactionSource source) {
-		AccountPostingReference from = editableAccount(command.userId(), command.fromAccountId(), command.businessAt());
-		AccountPostingReference to = editableAccount(command.userId(), command.toAccountId(), command.businessAt());
+		AccountPostingReference from = editableAccount(command.userId(), command.fromAccountId());
+		AccountPostingReference to = editableAccount(command.userId(), command.toAccountId());
 		requireAssetAccount(from, "转账");
 		requireAssetAccount(to, "转账");
 		LedgerAccountReference fromLedger = primary(from);
@@ -507,7 +507,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 	public Transaction postBalanceAdjustment(BalanceAdjustmentCommand command) {
 		require(command, "余额调整命令");
 		return transactions.nested(() -> {
-			AccountPostingReference account = editableAccount(command.userId(), command.accountId(), command.businessAt());
+			AccountPostingReference account = editableAccount(command.userId(), command.accountId());
 			LedgerAccountReference accountLedger = primary(account);
 			validateBalance(command.actualBalance(), accountLedger.currency());
 			LedgerAccountReference equityLedger = command.equityLedgerAccountId() == null
@@ -561,7 +561,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		LedgerTransactionStore.PostedTransactionSnapshot snapshot = postedForMutation(command.transactionId());
 		Transaction original = snapshot.transaction();
 		requireIndependentOriginal(snapshot);
-		validateOriginalAccess(command.userId(), original, command.businessAt());
+		validateOriginalAccess(command.userId(), original);
 		requireExpectedVersion(command.transactionId(), command.expectedEntityVersion(), snapshot.entityVersion());
 		RevisionBuild build = buildRevision(command, snapshot);
 
@@ -589,7 +589,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		LedgerTransactionStore.PostedTransactionSnapshot snapshot = postedForMutation(command.transactionId());
 		Transaction original = snapshot.transaction();
 		requireIndependentOriginal(snapshot);
-		validateOriginalAccess(command.userId(), original, original.businessAt());
+		validateOriginalAccess(command.userId(), original);
 		requireExpectedVersion(command.transactionId(), command.expectedEntityVersion(), snapshot.entityVersion());
 
 		Transaction reversal = transactionFactory.createReversal(original, UUID.randomUUID(), clock.instant());
@@ -728,25 +728,23 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		return accountIds.size() == 1 ? accountIds.iterator().next() : null;
 	}
 
-	private AccountPostingReference editableAccount(UUID userId, UUID accountId, java.time.Instant businessAt) {
-		AccountPostingReference account = requireWritableAccount(userId, accountId, businessAt);
+	private AccountPostingReference editableAccount(UUID userId, UUID accountId) {
+		AccountPostingReference account = requireWritableAccount(userId, accountId);
 		if (!account.active()) {
 			throw invalid("归档账户不能新增账务交易。");
 		}
 		return account;
 	}
 
-	private AccountPostingReference requireWritableAccount(
-		UUID userId, UUID accountId, java.time.Instant effectiveAt) {
+	private AccountPostingReference requireWritableAccount(UUID userId, UUID accountId) {
 		AccountPostingReference account = accounts.findById(accountId)
 			.orElseThrow(TransactionNotVisibleException::new);
-		switch (accountAccess.postingDecision(userId, accountId, effectiveAt)) {
+		switch (accountAccess.postingDecision(userId, accountId)) {
 			case ALLOWED -> {
 				return account;
 			}
 			case NOT_VISIBLE -> throw new TransactionNotVisibleException();
 			case READ_ONLY -> throw new LedgerPermissionDeniedException();
-			case OUTSIDE_PERIOD -> throw invalid("业务时间不在当前可写成员周期内。");
 		}
 		throw invalid("当前成员无权写入该账户。");
 	}
@@ -769,12 +767,12 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		}
 	}
 
-	private void validateOriginalAccess(UUID userId, Transaction transaction, java.time.Instant effectiveAt) {
+	private void validateOriginalAccess(UUID userId, Transaction transaction) {
 		for (LedgerEntry entry : transaction.entries()) {
 			LedgerAccountReference ledgerAccount = ledgerAccounts.findById(entry.ledgerAccountId())
 				.orElseThrow(() -> invalid("原交易账务科目不存在。"));
 			if (ledgerAccount.visibleAccountId() != null) {
-				requireWritableAccount(userId, ledgerAccount.visibleAccountId(), effectiveAt);
+				requireWritableAccount(userId, ledgerAccount.visibleAccountId());
 				if (!ledgerAccount.active()) {
 					throw invalid("原交易账务科目不可用。");
 				}
@@ -811,8 +809,8 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		}
 		LedgerAccountReference originalAccountLedger = originalVisibleLedger(original);
 		AccountPostingReference account = details.accountId() == null
-			? visibleAccountForMutation(originalAccountLedger, command.userId(), command.businessAt())
-			: editableAccount(command.userId(), details.accountId(), command.businessAt());
+			? visibleAccountForMutation(originalAccountLedger, command.userId())
+			: editableAccount(command.userId(), details.accountId());
 		LedgerAccountReference accountLedger = primary(account);
 		requireAssetAccount(account, "收入");
 		validateAmount(details.amount(), accountLedger.currency());
@@ -836,8 +834,8 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		}
 		LedgerAccountReference originalAccountLedger = originalVisibleLedger(original);
 		AccountPostingReference account = details.accountId() == null
-			? visibleAccountForMutation(originalAccountLedger, command.userId(), command.businessAt())
-			: editableAccount(command.userId(), details.accountId(), command.businessAt());
+			? visibleAccountForMutation(originalAccountLedger, command.userId())
+			: editableAccount(command.userId(), details.accountId());
 		LedgerAccountReference accountLedger = primary(account);
 		if ("LIABILITY".equals(account.accountClass())) {
 			if (!"CREDIT_CARD".equals(account.accountType())) {
@@ -866,8 +864,8 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 			|| !(snapshot.details() instanceof TransferWriteDetails)) {
 			throw invalid("转账语义载荷与原交易类型不匹配。");
 		}
-		AccountPostingReference from = editableAccount(command.userId(), details.fromAccountId(), command.businessAt());
-		AccountPostingReference to = editableAccount(command.userId(), details.toAccountId(), command.businessAt());
+		AccountPostingReference from = editableAccount(command.userId(), details.fromAccountId());
+		AccountPostingReference to = editableAccount(command.userId(), details.toAccountId());
 		requireAssetAccount(from, "转账");
 		requireAssetAccount(to, "转账");
 		LedgerAccountReference fromLedger = primary(from);
@@ -911,14 +909,14 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		if (details.originalTransactionId() == null || details.originalTransactionId().equals(snapshot.transaction().transactionId())) {
 			throw invalid("退款原支出交易关联无效。");
 		}
-		AccountPostingReference refundAccount = editableAccount(command.userId(), details.accountId(), command.businessAt());
+		AccountPostingReference refundAccount = editableAccount(command.userId(), details.accountId());
 		LedgerAccountReference refundLedger = primary(refundAccount);
 		requireAssetAccount(refundAccount, "退款");
 		validateAmount(details.amount(), refundLedger.currency());
 		LedgerTransactionStore.RefundCandidate candidate = ledgerTransactions
 			.findRefundCandidate(details.originalTransactionId())
 			.orElseThrow(() -> invalid("原支出交易不存在或不可退款。"));
-		requireWritableAccount(command.userId(), candidate.originalAccountId(), command.businessAt());
+		requireWritableAccount(command.userId(), candidate.originalAccountId());
 		if (!candidate.originalAmount().currency().equals(refundLedger.currency())) {
 			throw invalid("退款币种必须与原支出一致。");
 		}
@@ -954,7 +952,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		if (!originalDetails.accountId().equals(details.accountId())) {
 			throw invalid("余额调整语义载荷与原交易类型或账户不匹配。");
 		}
-		AccountPostingReference account = editableAccount(command.userId(), details.accountId(), command.businessAt());
+		AccountPostingReference account = editableAccount(command.userId(), details.accountId());
 		LedgerAccountReference accountLedger = primary(account);
 		validateBalance(details.actualBalance(), accountLedger.currency());
 		LedgerAccountReference equityLedger = details.equityLedgerAccountId() == null
@@ -994,10 +992,8 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 			|| !(snapshot.details() instanceof LiabilityBorrowingWriteDetails)) {
 			throw invalid("借款到账语义载荷与原交易类型不匹配。");
 		}
-		AccountPostingReference asset = editableAccount(
-			command.userId(), details.assetAccountId(), command.businessAt());
-		AccountPostingReference liability = editableAccount(
-			command.userId(), details.liabilityAccountId(), command.businessAt());
+		AccountPostingReference asset = editableAccount(command.userId(), details.assetAccountId());
+		AccountPostingReference liability = editableAccount(command.userId(), details.liabilityAccountId());
 		requireExactAccountClass(asset, "ASSET", "借款到账");
 		requireExactAccountClass(liability, "LIABILITY", "借款到账");
 		if (!Set.of("LOAN", "CONSUMER_LOAN", "OTHER").contains(liability.accountType())) {
@@ -1025,9 +1021,8 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 			|| !(snapshot.details() instanceof RepaymentWriteDetails)) {
 			throw invalid("负债还款语义载荷与原交易类型不匹配。");
 		}
-		AccountPostingReference cash = editableAccount(command.userId(), details.cashAccountId(), command.businessAt());
-		AccountPostingReference liability = editableAccount(
-			command.userId(), details.liabilityAccountId(), command.businessAt());
+		AccountPostingReference cash = editableAccount(command.userId(), details.cashAccountId());
+		AccountPostingReference liability = editableAccount(command.userId(), details.liabilityAccountId());
 		requireExactAccountClass(cash, "ASSET", "负债还款");
 		requireExactAccountClass(liability, "LIABILITY", "负债还款");
 		LedgerAccountReference cashLedger = primary(cash);
@@ -1076,9 +1071,8 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 			.orElseThrow(() -> invalid("原交易缺少可见账户主科目。"));
 	}
 
-	private AccountPostingReference visibleAccountForMutation(
-		LedgerAccountReference ledgerAccount, UUID userId, java.time.Instant effectiveAt) {
-		return requireWritableAccount(userId, ledgerAccount.visibleAccountId(), effectiveAt);
+	private AccountPostingReference visibleAccountForMutation(LedgerAccountReference ledgerAccount, UUID userId) {
+		return requireWritableAccount(userId, ledgerAccount.visibleAccountId());
 	}
 
 	private record RevisionBuild(

@@ -280,8 +280,8 @@ class AccountCreationPostgresIntegrationTests extends PostgresIntegrationTestSup
 		// 审计创建者可以变化，授权必须继续由 ACTIVE membership 事实决定。
 		jdbc.update("UPDATE accounts SET created_by = ? WHERE id = ?", differentCreatorId, result.id());
 
-		assertTrue(accountAccess.mayPost(ownerId, result.id(), FIXED_NOW));
-		assertTrue(!accountAccess.mayPost(differentCreatorId, result.id(), FIXED_NOW));
+		assertTrue(accountAccess.mayPost(ownerId, result.id()));
+		assertTrue(!accountAccess.mayPost(differentCreatorId, result.id()));
 		assertOwnerMembership(result.id(), ownerId);
 	}
 

@@ -110,7 +110,7 @@ public class TransactionCommandController {
 		UUID userId = currentUserIdResolver.resolve(principal);
 		ParsedTransaction parsed = parseTransaction(body, userId);
 		List<Transaction> related = relatedTransactions(userId, parsed.relatedTransactionIds(), null);
-		preflight.requireWritable(userId, parsed.businessAt(), related, parsed.accountIds());
+		preflight.requireWritable(userId, related, parsed.accountIds());
 		parsed.validateSupportedBusinessRules();
 		String resource = "/api/v1/transactions";
 		IdempotencyExecution<Transaction> execution = idempotency.executeAuthenticated(
@@ -137,7 +137,7 @@ public class TransactionCommandController {
 		List<Transaction> related = relatedTransactions(
 			userId, revision.replacement().relatedTransactionIds(), original.transaction());
 		preflight.requireWritable(
-			userId, revision.replacement().businessAt(), related, revision.replacement().accountIds());
+			userId, related, revision.replacement().accountIds());
 		revision.replacement().validateSupportedBusinessRules();
 		int expectedVersion = parseIfMatch(request);
 		String canonicalIfMatch = etag(expectedVersion);
@@ -175,7 +175,7 @@ public class TransactionCommandController {
 		ParsedReason parsed = parseReason(body);
 		TransactionSnapshot original = queries.get(userId, parsedTransactionId);
 		preflight.requireWritable(
-			userId, original.transaction().businessAt(), List.of(original.transaction()), List.of());
+			userId, List.of(original.transaction()), List.of());
 		int expectedVersion = parseIfMatch(request);
 		String canonicalIfMatch = etag(expectedVersion);
 		String key = idempotencyKey(request);
@@ -210,7 +210,7 @@ public class TransactionCommandController {
 		UUID userId = currentUserIdResolver.resolve(principal);
 		UUID parsedAccountId = parseUuid(accountId);
 		ParsedBalanceAdjustment parsed = parseBalanceAdjustment(body);
-		var accounts = preflight.requireWritable(userId, parsed.businessAt(), parsedAccountId);
+		var accounts = preflight.requireWritable(userId, parsedAccountId);
 		CurrencyCode currency;
 		try {
 			currency = CurrencyCode.fromCode(accounts.get(parsedAccountId).currency());

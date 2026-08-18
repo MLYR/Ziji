@@ -1,7 +1,5 @@
 package app.ziji.accountmember.infrastructure;
 
-import java.time.Instant;
-import java.sql.Timestamp;
 import java.util.List;
 import java.util.UUID;
 
@@ -9,16 +7,14 @@ import app.ziji.accountmember.application.AccountPostingAccessPort;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-/** 用数据库当前 membership 周期执行 fail-closed 的账务写入授权。 */
+/** 用数据库请求时当前 ACTIVE membership 执行 fail-closed 的账务写入授权。 */
 @Repository
 public class PostgresAccountPostingAccessPort implements AccountPostingAccessPort {
 
 	private final JdbcTemplate jdbc;
 	private static final String POSTING_DECISION_SQL = """
-		/* 在同一快照内先确认当前 ACTIVE membership，再区分角色和业务时间边界。 */
-		SELECT m.role,
-		       m.joined_at <= CAST(? AS timestamptz)
-		         AND (m.ended_at IS NULL OR m.ended_at > CAST(? AS timestamptz)) AS effective
+		/* 权限只看请求时当前 ACTIVE membership；历史 businessAt 不能回溯成员生效周期。 */
+		SELECT m.role
 		FROM account_members m
 		JOIN account_inclusion_settings s ON s.membership_id = m.id
 		WHERE m.user_id = ?
@@ -38,8 +34,8 @@ public class PostgresAccountPostingAccessPort implements AccountPostingAccessPor
 	}
 
 	@Override
-	public PostingAccessDecision postingDecision(UUID userId, UUID accountId, Instant effectiveAt) {
-		if (userId == null || accountId == null || effectiveAt == null) {
+	public PostingAccessDecision postingDecision(UUID userId, UUID accountId) {
+		if (userId == null || accountId == null) {
 			return PostingAccessDecision.NOT_VISIBLE;
 		}
 		List<PostingAccessDecision> decisions = jdbc.query(POSTING_DECISION_SQL, (result, rowNum) -> {
@@ -47,14 +43,13 @@ public class PostgresAccountPostingAccessPort implements AccountPostingAccessPor
 			if (!"OWNER".equals(role) && !"EDITOR".equals(role)) {
 				return PostingAccessDecision.READ_ONLY;
 			}
-			return result.getBoolean("effective")
-				? PostingAccessDecision.ALLOWED : PostingAccessDecision.OUTSIDE_PERIOD;
-		}, Timestamp.from(effectiveAt), Timestamp.from(effectiveAt), userId, accountId);
+			return PostingAccessDecision.ALLOWED;
+		}, userId, accountId);
 		return decisions.isEmpty() ? PostingAccessDecision.NOT_VISIBLE : decisions.getFirst();
 	}
 
 	@Override
-	public boolean mayPost(UUID userId, UUID accountId, Instant effectiveAt) {
-		return postingDecision(userId, accountId, effectiveAt) == PostingAccessDecision.ALLOWED;
+	public boolean mayPost(UUID userId, UUID accountId) {
+		return postingDecision(userId, accountId) == PostingAccessDecision.ALLOWED;
 	}
 }

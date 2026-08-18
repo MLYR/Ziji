@@ -1,6 +1,5 @@
 package app.ziji.ledger.application;
 
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -42,10 +41,9 @@ public final class LedgerCommandPreflightService {
 
 	public Map<UUID, AccountPostingReference> requireWritable(
 		UUID userId,
-		Instant effectiveAt,
 		List<Transaction> relatedTransactions,
 		List<UUID> requestedAccountIds) {
-		if (userId == null || effectiveAt == null || relatedTransactions == null || requestedAccountIds == null) {
+		if (userId == null || relatedTransactions == null || requestedAccountIds == null) {
 			throw new LedgerCommandValidationException("账务写入前置参数无效。");
 		}
 		Set<UUID> accountIds = new LinkedHashSet<>();
@@ -97,19 +95,22 @@ public final class LedgerCommandPreflightService {
 			if (!references.get(accountId).active()) {
 				throw new LedgerCommandValidationException("归档账户不能新增或修改账务交易。");
 			}
-			if (!postingAccess.mayPost(userId, accountId, effectiveAt)) {
-				throw new LedgerCommandValidationException("业务时间不在当前可写成员周期内。");
+			switch (postingAccess.postingDecision(userId, accountId)) {
+				case ALLOWED -> {
+				}
+				case NOT_VISIBLE -> throw new TransactionNotVisibleException();
+				case READ_ONLY -> throw new LedgerPermissionDeniedException();
 			}
 		}
 		return java.util.Collections.unmodifiableMap(new LinkedHashMap<>(references));
 	}
 
 	public Map<UUID, AccountPostingReference> requireWritable(
-		UUID userId, Instant effectiveAt, UUID... requestedAccountIds) {
+		UUID userId, UUID... requestedAccountIds) {
 		List<UUID> ids = new ArrayList<>();
 		if (requestedAccountIds != null) {
 			java.util.Collections.addAll(ids, requestedAccountIds);
 		}
-		return requireWritable(userId, effectiveAt, List.of(), ids);
+		return requireWritable(userId, List.of(), ids);
 	}
 }
