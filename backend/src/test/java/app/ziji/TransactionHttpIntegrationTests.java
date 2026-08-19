@@ -180,6 +180,26 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 				.content(reasonBody))
 			.andExpect(status().isCreated()).andExpect(header().string(HttpHeaders.ETAG, "\"1\""))
 			.andExpect(jsonPath("$.data.reversalOfId").value(replacementId));
+
+		String reverseConflictKey = "mutation-reverse-stale-01";
+		for (int attempt = 0; attempt < 2; attempt++) {
+			mvc.perform(post("/api/v1/transactions/{id}/reversal", replacementId)
+					.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", reverseConflictKey)
+					.header("If-Match", "\"1\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+					.content(reasonBody))
+				.andExpect(status().isConflict()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+				.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
+				.andExpect(jsonPath("$.versionConflict.currentVersion").value(2))
+				.andExpect(jsonPath("$.versionConflict.currentEtag").value("\"2\""))
+				.andExpect(jsonPath("$.versionConflict.resourceLocation")
+					.value("/api/v1/transactions/" + replacementId));
+		}
+		mvc.perform(post("/api/v1/transactions/{id}/reversal", replacementId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", reverseConflictKey)
+				.header("If-Match", "\"1\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content("{\"reason\":\"同键异参\"}"))
+			.andExpect(status().isConflict()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
 	}
 
 	@Test
@@ -407,6 +427,8 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			{"type":"EXPENSE","businessAt":"2026-08-17T10:00:00Z","timezone":"Asia/Shanghai",
 			 "accountId":"%s","amount":"10.00","currency":"CNY","categoryId":"%s"}
 			""".formatted(account.id(), categoryId), "EXPENSE");
+		UUID hiddenTransactionId = transaction(otherOwner.id(), invisibleAccount.ledgerId(),
+			Instant.parse("2026-08-17T09:00:00Z"));
 		String reason = "{\"reason\":\"作废\"}";
 		List<String> malformed = java.util.Arrays.asList(null, "W/\"1\"", "*", "1", "\"0\"", "\"-1\"",
 			"\"abc\"", "\"2147483648\"", "\"1\", \"2\"");
@@ -426,6 +448,16 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 				.header("If-Match", "\"1\"", "\"1\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
 				.content(reason))
 			.andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+		String hiddenReverseKey = "hidden-reverse-key-0001";
+		mvc.perform(post("/api/v1/transactions/{id}/reversal", hiddenTransactionId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken).header("Idempotency-Key", hiddenReverseKey)
+				.header("If-Match", "\"1\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content(reason))
+			.andExpect(status().isNotFound()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"))
+			.andExpect(jsonPath("$.versionConflict").doesNotExist());
+		assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM idempotency_records WHERE idempotency_key = ?",
+			Integer.class, hiddenReverseKey));
 
 		String transfer = """
 			{"type":"TRANSFER","businessAt":"2026-08-17T11:00:00Z","timezone":"Asia/Shanghai",

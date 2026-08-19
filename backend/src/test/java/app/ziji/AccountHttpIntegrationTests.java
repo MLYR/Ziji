@@ -202,6 +202,7 @@ class AccountHttpIntegrationTests extends PostgresIntegrationTestSupport {
 
 		mvc.perform(patch(resource)
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "account-patch-name-0001")
 				.header("If-Match", "\"1\"")
 				.contentType("application/merge-patch+json")
 				.content("{\"name\":\"新名称\"}"))
@@ -212,6 +213,7 @@ class AccountHttpIntegrationTests extends PostgresIntegrationTestSupport {
 
 		mvc.perform(patch(resource)
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "account-patch-institution-01")
 				.header("If-Match", "\"2\"")
 				.contentType("application/merge-patch+json")
 				.content("{\"institution\":null}"))
@@ -302,12 +304,14 @@ class AccountHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			.andExpect(status().isBadRequest());
 		mvc.perform(patch(resource)
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "account-patch-first-0001")
 				.header("If-Match", "\"1\"")
 				.contentType("application/merge-patch+json")
 				.content("{\"accountClass\":\"LIABILITY\"}"))
 			.andExpect(status().isBadRequest());
 		mvc.perform(patch(resource)
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "account-patch-stale-0001")
 				.header("If-Match", "\"1\"")
 				.contentType("application/merge-patch+json")
 				.content("{\"name\":\"" + "A".repeat(101) + "\"}"))
@@ -316,12 +320,14 @@ class AccountHttpIntegrationTests extends PostgresIntegrationTestSupport {
 
 		mvc.perform(patch(resource)
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "account-patch-first-success-01")
 				.header("If-Match", "\"1\"")
 				.contentType("application/merge-patch+json")
 				.content("{\"name\":\"第一次成功\"}"))
 			.andExpect(status().isOk());
 		mvc.perform(patch(resource)
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "account-patch-stale-conflict-01")
 				.header("If-Match", "\"1\"")
 				.contentType("application/merge-patch+json")
 				.content("{\"name\":\"过期版本\"}"))
@@ -333,6 +339,58 @@ class AccountHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			.andExpect(jsonPath("$.data").doesNotExist());
 		assertEquals("第一次成功", jdbc.queryForObject("SELECT name FROM accounts WHERE id = ?", String.class, account.accountId()));
 		assertEquals(2, jdbc.queryForObject("SELECT version FROM accounts WHERE id = ?", Integer.class, account.accountId()));
+	}
+
+	@Test
+	void patchPersistsSafeSuccessAndVersionConflictReplaysBeforeCurrentState() throws Exception {
+		UserFixture owner = insertUser("patch-idempotency-owner");
+		UserFixture stranger = insertUser("patch-idempotency-stranger");
+		AccountSeed account = seedAccount(owner.userId(), "幂等账户", Instant.parse("2026-08-15T01:00:00Z"));
+		String token = bearer(owner);
+		String resource = "/api/v1/accounts/" + account.accountId();
+		String successKey = "account-patch-replay-0001";
+		String successBody = "{\"name\":\"首次幂等成功\"}";
+
+		for (int attempt = 0; attempt < 2; attempt++) {
+			mvc.perform(patch(resource).header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+					.header("Idempotency-Key", successKey).header("If-Match", "\"1\"")
+					.contentType("application/merge-patch+json").content(successBody))
+				.andExpect(status().isOk()).andExpect(header().string(HttpHeaders.ETAG, "\"2\""))
+				.andExpect(jsonPath("$.data.version").value(2));
+		}
+		assertEquals(1, idempotencyCount(owner.userId(), successKey));
+		mvc.perform(patch(resource).header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", successKey).header("If-Match", "\"1\"")
+				.contentType("application/merge-patch+json").content("{\"name\":\"同键异参\"}"))
+			.andExpect(status().isConflict()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
+
+		String conflictKey = "account-patch-conflict-01";
+		String conflictBody = "{\"institution\":\"冲突机构\"}";
+		for (int attempt = 0; attempt < 2; attempt++) {
+			mvc.perform(patch(resource).header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+					.header("Idempotency-Key", conflictKey).header("If-Match", "\"1\"")
+					.contentType("application/merge-patch+json").content(conflictBody))
+				.andExpect(status().isConflict()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+				.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
+				.andExpect(jsonPath("$.versionConflict.currentVersion").value(2))
+				.andExpect(jsonPath("$.versionConflict.currentEtag").value("\"2\""))
+				.andExpect(jsonPath("$.versionConflict.resourceLocation").value(resource));
+		}
+		assertEquals(1, idempotencyCount(owner.userId(), conflictKey));
+		mvc.perform(patch(resource).header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", conflictKey).header("If-Match", "\"1\"")
+				.contentType("application/merge-patch+json").content("{\"institution\":\"异参\"}"))
+			.andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
+
+		String hiddenKey = "account-patch-hidden-0001";
+		mvc.perform(patch(resource).header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer(stranger))
+				.header("Idempotency-Key", hiddenKey).header("If-Match", "\"999\"")
+				.contentType("application/merge-patch+json").content("{\"name\":\"不可见\"}"))
+			.andExpect(status().isNotFound()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"))
+			.andExpect(jsonPath("$.versionConflict").doesNotExist());
+		assertEquals(0, idempotencyCount(stranger.userId(), hiddenKey));
 	}
 
 	@Test
@@ -352,6 +410,7 @@ class AccountHttpIntegrationTests extends PostgresIntegrationTestSupport {
 					start.await();
 					return mvc.perform(patch(resource)
 							.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+							.header("Idempotency-Key", "account-patch-concurrent-" + name)
 							.header("If-Match", "\"1\"")
 							.contentType("application/merge-patch+json")
 							.content("{\"name\":\"" + name + "\"}"))
@@ -423,6 +482,12 @@ class AccountHttpIntegrationTests extends PostgresIntegrationTestSupport {
 	private void assertUnchanged(UUID accountId, String expectedName, int expectedVersion) {
 		assertEquals(expectedName, jdbc.queryForObject("SELECT name FROM accounts WHERE id = ?", String.class, accountId));
 		assertEquals(expectedVersion, jdbc.queryForObject("SELECT version FROM accounts WHERE id = ?", Integer.class, accountId));
+	}
+
+	private int idempotencyCount(UUID userId, String key) {
+		return jdbc.queryForObject(
+			"SELECT count(*) FROM idempotency_records WHERE user_id = ? AND idempotency_key = ?",
+			Integer.class, userId, key);
 	}
 
 	private String bearer(UserFixture user) {

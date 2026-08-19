@@ -4456,6 +4456,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
                 "If-Match": components["parameters"]["IfMatch"];
             };
@@ -4473,6 +4475,7 @@ export interface operations {
             200: components["responses"]["AccountOk"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
         };
     };

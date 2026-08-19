@@ -393,6 +393,8 @@ V1 用户状态 `User.status` 固定为 `ACTIVE`、`LOCKED`、`CLOSING`、`CLOSE
 
 创建账户时服务端原子创建账户、创建者的 ACTIVE OWNER membership、`included=true/ratio=1.000000` 计入设置和所需账务科目。所有账户都通过 ACTIVE AccountMember 授权，创建者字段不构成权限捷径。
 
+账户资料 PATCH 必须同时提交 `Idempotency-Key` 与强 `If-Match`。服务端先检查当前 ACTIVE membership、账户可见性和 OWNER 写权限，再校验条件头、merge-patch 载荷和幂等键；不可见账户即使携带语法正确的陈旧 ETag 也统一返回 `404 RESOURCE_NOT_FOUND`，不创建幂等记录且不携带 `versionConflict`。规范化 request Hash 包含实际 `accountId`、类型化 merge-patch 和规范化 If-Match；同 Key/同 Hash 的成功或 `VERSION_CONFLICT` 均精确重放首次安全响应，同 Key/异 Hash 返回 `409 IDEMPOTENCY_KEY_REUSED`。可见账户的 `VERSION_CONFLICT` 使用 §2.5 三字段，`resourceLocation` 固定为 `/api/v1/accounts/{accountId}`。
+
 负债详情是独立资源，不嵌入 `Account`，也不扩展 `POST /accounts`。负债账户尚无持久化详情行时，GET 仍返回 `200`：六个业务字段均为 `null`、`version=0`，并返回强 ETag `"0"`；持久化详情从 version 1 开始。空详情的 `"0"` 只表示稳定读取投影，首次创建必须使用 `PUT + If-None-Match: *`，不得使用 `If-Match: "0"`。V1 不提供 DELETE；清空字段使用 PATCH 显式提交 `null`。
 
 PUT 是完整替换，六个业务字段必须全部出现并可为 `null`。首次 PUT 只接受 `If-None-Match: *`，已有持久化行时返回 `409 VERSION_CONFLICT`；已有详情的完整替换只接受强 `If-Match: "<正整数>"`。PUT 必须在 `If-Match` 与 `If-None-Match` 中恰好提交一个，缺失、同时提交、重复、弱 ETag、未加引号、`*` 用作 If-Match、零、负数、非数字或溢出均返回 `400 VALIDATION_ERROR`。PATCH 至少提交一个字段，必须携带强 If-Match；尚无持久化行时返回 `404 RESOURCE_NOT_FOUND`。成功 GET/PUT/PATCH 返回详情自身的强 ETag，PUT/PATCH 不推进 Account.version，失败响应不带成功 ETag。

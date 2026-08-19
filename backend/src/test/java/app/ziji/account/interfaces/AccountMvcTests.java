@@ -1,7 +1,9 @@
 package app.ziji.account.interfaces;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
@@ -14,6 +16,13 @@ import app.ziji.account.domain.AccountCurrency;
 import app.ziji.account.domain.AccountPatch;
 import app.ziji.account.domain.AccountStatus;
 import app.ziji.account.domain.AccountType;
+import app.ziji.shared.application.IdempotencyAnonymousSubjectHasher;
+import app.ziji.shared.application.IdempotencyRecordStore;
+import app.ziji.shared.application.IdempotencyRequest;
+import app.ziji.shared.application.IdempotencyResponse;
+import app.ziji.shared.application.IdempotencySubject;
+import app.ziji.shared.application.TransactionRunner;
+import app.ziji.shared.application.UnifiedIdempotencyService;
 import app.ziji.user.application.CurrentUserIdResolver;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
@@ -79,6 +88,7 @@ class AccountMvcTests {
 
 		mvc.perform(patch("/api/v1/accounts/{id}", ACCOUNT_ID)
 				.principal(principal())
+				.header("Idempotency-Key", "mvc-account-update-0001")
 				.header("If-Match", "\"7\"")
 				.contentType("application/merge-patch+json")
 				.content("{\"name\":\"新名称\"}"))
@@ -93,6 +103,7 @@ class AccountMvcTests {
 
 		mvc.perform(patch("/api/v1/accounts/{id}", ACCOUNT_ID)
 				.principal(principal())
+				.header("Idempotency-Key", "mvc-account-update-0002")
 				.header("If-Match", "\"7\"")
 				.contentType("application/merge-patch+json")
 				.content("{\"institution\":null}"))
@@ -109,10 +120,12 @@ class AccountMvcTests {
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
 		mvc.perform(patch("/api/v1/accounts/{id}", ACCOUNT_ID).principal(principal())
+				.header("Idempotency-Key", "mvc-account-conflict-001")
 				.header("If-Match", "\"7\"")
 				.contentType("application/merge-patch+json").content("{}"))
 			.andExpect(status().isBadRequest());
 		mvc.perform(patch("/api/v1/accounts/{id}", ACCOUNT_ID).principal(principal())
+				.header("Idempotency-Key", "mvc-account-stale-0001")
 				.header("If-Match", "\"7\"")
 				.contentType("application/merge-patch+json").content("{\"name\":null}"))
 			.andExpect(status().isBadRequest());
@@ -166,6 +179,7 @@ class AccountMvcTests {
 		MockMvc mvc = mvc(new ConflictingUseCase(current));
 
 		mvc.perform(patch("/api/v1/accounts/{id}", ACCOUNT_ID).principal(principal())
+				.header("Idempotency-Key", "mvc-account-stale-0002")
 				.header("If-Match", "\"7\"")
 				.contentType("application/merge-patch+json").content("{\"name\":\"新名称\"}"))
 			.andExpect(status().isConflict())
@@ -184,9 +198,17 @@ class AccountMvcTests {
 			}
 			return USER_ID;
 		};
-		return MockMvcBuilders.standaloneSetup(new AccountController(useCase, resolver))
+		return MockMvcBuilders.standaloneSetup(new AccountController(
+			useCase, null, resolver, idempotency(), null))
 			.setControllerAdvice(new AccountApiExceptionHandler())
 			.build();
+	}
+
+	private UnifiedIdempotencyService idempotency() {
+		IdempotencyAnonymousSubjectHasher anonymous = email ->
+			IdempotencySubject.anonymous(new IdempotencySubject.AnonymousDigest(1, new byte[32]), null);
+		return new UnifiedIdempotencyService(new DirectTransactions(), new Records(), anonymous,
+			Clock.fixed(CREATED_AT, ZoneOffset.UTC));
 	}
 
 	private java.security.Principal principal() {
@@ -261,5 +283,18 @@ class AccountMvcTests {
 			UUID userId, UUID accountId, int expectedVersion, AccountPatch patch) {
 			throw new AccountVersionConflictException(current);
 		}
+	}
+
+	private static final class DirectTransactions implements TransactionRunner {
+		@Override public <T> T required(java.util.function.Supplier<T> action) { return action.get(); }
+		@Override public void required(Runnable action) { action.run(); }
+	}
+
+	private static final class Records implements IdempotencyRecordStore {
+		@Override public Acquisition acquire(IdempotencyRequest request, Instant now) {
+			return new Acquisition.Acquired(UUID.randomUUID());
+		}
+		@Override public void complete(UUID recordId, IdempotencyResponse response, Instant completedAt) {}
+		@Override public int deleteExpiredTerminalRecords(Instant now, int maximumRecords) { return 0; }
 	}
 }

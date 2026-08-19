@@ -53,7 +53,32 @@ class IdempotencyOpenApiContractTests {
 		}
 
 		// 独立负债详情的 PUT/PATCH 都是写操作，必须纳入统一幂等契约门禁。
-		assertEquals(40, idempotencyOperationCount, "Idempotency-Key operation 覆盖数必须和冻结基线一致");
+		assertEquals(41, idempotencyOperationCount, "Idempotency-Key operation 覆盖数必须和冻结基线一致");
+	}
+
+	@Test
+	void allConditionalWriteOperationsDeclareConflict() throws IOException {
+		Map<String, Object> document = readContract();
+		Map<String, Object> paths = objectMap(document.get("paths"), "OpenAPI paths");
+		int conditionalOperationCount = 0;
+		for (Map.Entry<String, Object> path : paths.entrySet()) {
+			Map<String, Object> pathItem = objectMap(path.getValue(), "OpenAPI path " + path.getKey());
+			for (Map.Entry<String, Object> operation : pathItem.entrySet()) {
+				if (!HTTP_METHODS.contains(operation.getKey().toLowerCase(Locale.ROOT))) {
+					continue;
+				}
+				Map<String, Object> definition = objectMap(operation.getValue(),
+					operation.getKey().toUpperCase(Locale.ROOT) + " " + path.getKey());
+				if (!hasCondition(pathItem) && !hasCondition(definition)) {
+					continue;
+				}
+				conditionalOperationCount++;
+				Map<String, Object> responses = objectMap(definition.get("responses"),
+					requiredOperationId(definition, operation.getKey(), path.getKey()) + " responses");
+				assertEquals("#/components/responses/Conflict", objectMap(responses.get("409"), "409 response").get("$ref"));
+			}
+		}
+		assertEquals(22, conditionalOperationCount, "条件写 operation 覆盖数必须和冻结基线一致");
 	}
 
 	@Test
@@ -97,6 +122,21 @@ class IdempotencyOpenApiContractTests {
 			return "#/components/parameters/IdempotencyKey".equals(parameterDefinition.get("$ref"))
 				|| ("Idempotency-Key".equals(parameterDefinition.get("name"))
 					&& "header".equals(parameterDefinition.get("in")));
+		});
+	}
+
+	private static boolean hasCondition(Map<String, Object> definition) {
+		Object value = definition.get("parameters");
+		if (!(value instanceof List<?> parameters)) {
+			return false;
+		}
+		return parameters.stream().anyMatch(parameter -> {
+			Map<String, Object> parameterDefinition = objectMap(parameter, "OpenAPI parameter");
+			String reference = String.valueOf(parameterDefinition.get("$ref"));
+			return reference.contains("IfMatch") || reference.contains("IfNoneMatch")
+				|| ("header".equals(parameterDefinition.get("in"))
+					&& ("If-Match".equals(parameterDefinition.get("name"))
+						|| "If-None-Match".equals(parameterDefinition.get("name"))));
 		});
 	}
 

@@ -1,6 +1,7 @@
 package app.ziji.account.interfaces;
 
 import java.math.BigDecimal;
+import java.net.URI;
 import java.security.Principal;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -11,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -23,6 +25,7 @@ import app.ziji.account.application.AccountPage;
 import app.ziji.account.application.AccountQueryResult;
 import app.ziji.account.application.AccountQueryUseCase;
 import app.ziji.account.application.AccountQueryValidationException;
+import app.ziji.account.application.AccountVersionConflictException;
 import app.ziji.account.domain.AccountClass;
 import app.ziji.account.domain.AccountCurrency;
 import app.ziji.account.domain.AccountPatch;
@@ -59,6 +62,8 @@ import org.springframework.web.bind.annotation.RestController;
 public class AccountController {
 
 	private static final String MERGE_PATCH = "application/merge-patch+json";
+	private static final int API_MAJOR_VERSION = 1;
+	private static final String ACCOUNT_RESOURCE_TYPE = "ACCOUNT";
 	private static final List<String> PATCH_FIELDS = List.of("name", "institution");
 	private static final Set<String> CREATE_FIELDS = Set.of(
 		"accountClass", "accountType", "name", "currency", "institution", "note", "openingBalance");
@@ -69,13 +74,6 @@ public class AccountController {
 	private final CurrentUserIdResolver currentUserIdResolver;
 	private final UnifiedIdempotencyService idempotency;
 	private final CurrentUserTimezonePort timezones;
-
-	/** 保留既有查询/更新 MVC 测试构造入口；创建路由使用完整依赖构造器。 */
-	public AccountController(
-		AccountQueryUseCase useCase,
-		CurrentUserIdResolver currentUserIdResolver) {
-		this(useCase, null, currentUserIdResolver, null, null);
-	}
 
 	@Autowired
 	public AccountController(
@@ -141,20 +139,46 @@ public class AccountController {
 		name = "updateAccount",
 		consumes = MERGE_PATCH,
 		produces = MediaType.APPLICATION_JSON_VALUE)
-	public ResponseEntity<AccountEnvelope> updateAccount(
+	public ResponseEntity<?> updateAccount(
 		@PathVariable String accountId,
 		@RequestHeader(value = "If-Match", required = false) String ifMatch,
 		@RequestBody JsonNode body,
 		Principal principal,
 		HttpServletRequest request,
 		HttpServletResponse response) {
+		UUID userId = currentUserIdResolver.resolve(principal);
+		UUID parsedAccountId = parseAccountId(accountId);
+		// 可见性与 OWNER 先于 If-Match、载荷和幂等，避免旧 ETag 枚举隐藏账户。
+		useCase.authorizeUpdate(userId, parsedAccountId);
 		int expectedVersion = parseIfMatch(ifMatch, request);
 		AccountPatch patch = parsePatch(body);
-		UUID userId = currentUserIdResolver.resolve(principal);
-		AccountQueryResult account = useCase.updateAccount(userId, parseAccountId(accountId), expectedVersion, patch);
-		return ResponseEntity.ok()
-			.eTag(account.etag())
-			.body(new AccountEnvelope(view(account), new ResponseMeta(requestId(response))));
+		String key = idempotencyKey(request);
+		String resource = accountLocation(parsedAccountId);
+		String hash = requestHash(resource, patch, etag(expectedVersion));
+		Optional<IdempotencyExecution<Void>> inspected = idempotency.inspectAuthenticated(
+			userId, API_MAJOR_VERSION, "updateAccount", key, hash);
+		if (inspected.isPresent()) {
+			return writeUpdateAfterAccessProof(
+				inspected.get(), userId, parsedAccountId, resource, request, response);
+		}
+		AccountQueryResult current = useCase.getVisibleAccount(userId, parsedAccountId);
+		if (current.version() != expectedVersion) {
+			return writeUpdateAfterAccessProof(versionConflictExecution(
+				userId, key, hash, current.version(), resource), userId, parsedAccountId, resource, request, response);
+		}
+		IdempotencyExecution<AccountQueryResult> execution = idempotency.executeAuthenticated(
+			userId, API_MAJOR_VERSION, "updateAccount", key, hash, () -> {
+				try {
+					AccountQueryResult updated = useCase.updateAccount(userId, parsedAccountId, expectedVersion, patch);
+					return IdempotencyWorkResult.completed(updated, IdempotencyResponse.succeededResource(
+						200, ACCOUNT_RESOURCE_TYPE, parsedAccountId, new IdempotencyResponse.ResourceReference(
+							resource, updated.etag(), (long) updated.version())));
+				} catch (AccountVersionConflictException conflict) {
+					return IdempotencyWorkResult.completed(null, IdempotencyResponse.failedFinalVersionConflict(
+						409, conflict.current().version(), resource));
+				}
+			});
+		return writeUpdateAfterAccessProof(execution, userId, parsedAccountId, resource, request, response);
 	}
 
 	private AccountPatch parsePatch(JsonNode body) {
@@ -345,6 +369,94 @@ public class AccountController {
 		return problem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", response, false);
 	}
 
+	private IdempotencyExecution<Void> versionConflictExecution(
+		UUID userId, String key, String hash, int currentVersion, String resource) {
+		return idempotency.executeAuthenticated(
+			userId, API_MAJOR_VERSION, "updateAccount", key, hash,
+			() -> IdempotencyWorkResult.completed(null,
+				IdempotencyResponse.failedFinalVersionConflict(409, currentVersion, resource)));
+	}
+
+	private ResponseEntity<?> writeUpdate(
+		IdempotencyExecution<?> execution,
+		UUID userId,
+		UUID accountId,
+		String resource,
+		HttpServletRequest request,
+		HttpServletResponse response) {
+		if (execution.status() == IdempotencyExecution.Status.KEY_REUSED) {
+			return updateProblem(HttpStatus.CONFLICT, "IDEMPOTENCY_KEY_REUSED", request, response, false);
+		}
+		if (execution.status() == IdempotencyExecution.Status.REQUEST_IN_PROGRESS) {
+			return updateProblem(HttpStatus.CONFLICT, "IDEMPOTENCY_REQUEST_IN_PROGRESS", request, response, true);
+		}
+		IdempotencyResponse stored = execution.response();
+		if (stored == null) {
+			return updateProblem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", request, response, false);
+		}
+		if (stored.reference() instanceof IdempotencyResponse.VersionConflictReference conflict
+			&& stored.status() == IdempotencyResponse.Status.FAILED_FINAL && stored.responseStatus() == 409
+			&& resource.equals(conflict.resourceLocation())) {
+			ProblemDetail problem = updateProblemDetail(HttpStatus.CONFLICT, "VERSION_CONFLICT", request, response);
+			problem.setProperty("versionConflict", Map.of(
+				"currentVersion", conflict.currentVersion(), "currentEtag", conflict.currentEtag(),
+				"resourceLocation", conflict.resourceLocation()));
+			return ResponseEntity.status(HttpStatus.CONFLICT).body(problem);
+		}
+		if (stored.status() != IdempotencyResponse.Status.SUCCEEDED
+			|| stored.responseStatus() != 200 || !ACCOUNT_RESOURCE_TYPE.equals(stored.resourceType())
+			|| !accountId.equals(stored.resourceId())
+			|| !(stored.reference() instanceof IdempotencyResponse.ResourceReference reference)
+			|| reference.resourceVersion() == null || !resource.equals(reference.location())) {
+			return updateProblem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", request, response, false);
+		}
+		AccountQueryResult account;
+		try {
+			account = useCase.getVisibleAccount(userId, accountId);
+		} catch (RuntimeException exception) {
+			return updateProblem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", request, response, false);
+		}
+		if (account.version() != reference.resourceVersion() || !account.etag().equals(reference.etag())
+			|| execution.status() == IdempotencyExecution.Status.EXECUTED
+				&& (!(execution.value() instanceof AccountQueryResult value) || !accountId.equals(value.id()))) {
+			return updateProblem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", request, response, false);
+		}
+		return ResponseEntity.ok().eTag(reference.etag())
+			.body(new AccountEnvelope(view(account), new ResponseMeta(requestId(response))));
+	}
+
+	private ResponseEntity<?> writeUpdateAfterAccessProof(
+		IdempotencyExecution<?> execution,
+		UUID userId,
+		UUID accountId,
+		String resource,
+		HttpServletRequest request,
+		HttpServletResponse response) {
+		// inspect/acquire 与响应之间可能撤权；任何历史终态都必须再次证明当前可见且可写。
+		useCase.authorizeUpdate(userId, accountId);
+		return writeUpdate(execution, userId, accountId, resource, request, response);
+	}
+
+	private ResponseEntity<ProblemDetail> updateProblem(
+		HttpStatus status, String code, HttpServletRequest request, HttpServletResponse response, boolean retryAfter) {
+		ResponseEntity.BodyBuilder builder = ResponseEntity.status(status);
+		if (retryAfter) {
+			builder.header("Retry-After", "5");
+		}
+		return builder.body(updateProblemDetail(status, code, request, response));
+	}
+
+	private ProblemDetail updateProblemDetail(
+		HttpStatus status, String code, HttpServletRequest request, HttpServletResponse response) {
+		ProblemDetail detail = ProblemDetail.forStatusAndDetail(status, code);
+		detail.setType(URI.create("https://ziji.app/problems/" + code.toLowerCase().replace('_', '-')));
+		detail.setTitle(status.getReasonPhrase());
+		detail.setInstance(URI.create(request.getRequestURI()));
+		detail.setProperty("code", code);
+		detail.setProperty("requestId", requestId(response));
+		return detail;
+	}
+
 	private ResponseEntity<ProblemDetail> problem(
 		HttpStatus status, String code, HttpServletResponse response, boolean retryAfter) {
 		ProblemDetail detail = ProblemDetail.forStatusAndDetail(status, code);
@@ -368,6 +480,17 @@ public class AccountController {
 		payload.put("note", command.note());
 		payload.put("openingBalance", openingPayload(command.openingBalance()));
 		return IdempotencyRequestHasher.hash("POST", MediaType.APPLICATION_JSON_VALUE, resource, payload, null);
+	}
+
+	private String requestHash(String resource, AccountPatch patch, String ifMatch) {
+		Map<String, Object> payload = new LinkedHashMap<>();
+		if (patch.hasName()) {
+			payload.put("name", patch.name());
+		}
+		if (patch.hasInstitution()) {
+			payload.put("institution", patch.institution());
+		}
+		return IdempotencyRequestHasher.hash("PATCH", MERGE_PATCH, resource, payload, ifMatch);
 	}
 
 	private Map<String, Object> openingPayload(AccountOpeningBalance openingBalance) {
@@ -466,6 +589,10 @@ public class AccountController {
 
 	private String etag(int version) {
 		return "\"" + version + "\"";
+	}
+
+	private String accountLocation(UUID accountId) {
+		return "/api/v1/accounts/" + accountId;
 	}
 
 	public record AccountListEnvelope(List<AccountView> data, PageMeta meta) {

@@ -275,7 +275,7 @@ paths:
       operationId: updateAccount
       summary: OWNER 修改账户资料
       x-requirement-ids: [ACC-002, SHR-002]
-      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
       requestBody:
         required: true
         content:
@@ -285,6 +285,7 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /accounts/{accountId}/liability-details:
     parameters: [{ $ref: '#/components/parameters/AccountId' }]
     x-account-type-field-matrix:

@@ -226,7 +226,9 @@ class LiabilityDetailHttpIntegrationTests extends PostgresIntegrationTestSupport
 				.contentType(MediaType.APPLICATION_JSON).content(creditCardJson("90.00", 9)))
 			.andExpect(status().isConflict()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
 			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
-			.andExpect(jsonPath("$.versionConflict.currentVersion").value(currentVersion));
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(currentVersion))
+			.andExpect(jsonPath("$.versionConflict.currentEtag").value("\"" + currentVersion + "\""))
+			.andExpect(jsonPath("$.versionConflict.resourceLocation").value(path(accountId)));
 		assertEquals(0, idempotencyCount(userId, key));
 	}
 

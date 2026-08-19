@@ -108,6 +108,19 @@ public class AccountQueryService implements AccountQueryUseCase {
 	}
 
 	@Override
+	public void authorizeUpdate(UUID userId, UUID accountId) {
+		if (userId == null || accountId == null) {
+			throw new AccountQueryValidationException();
+		}
+		ActiveMembership membership = memberships.findActiveMembership(userId, accountId)
+			.orElseThrow(AccountNotVisibleException::new);
+		if (!"OWNER".equals(membership.role())) {
+			throw new AccountPermissionDeniedException();
+		}
+		accounts.findById(accountId).orElseThrow(AccountNotVisibleException::new);
+	}
+
+	@Override
 	public AccountQueryResult updateAccount(
 		UUID userId,
 		UUID accountId,
@@ -116,7 +129,8 @@ public class AccountQueryService implements AccountQueryUseCase {
 		if (userId == null || accountId == null || patch == null || patch.isEmpty() || expectedVersion < 1) {
 			throw new AccountQueryValidationException();
 		}
-		return transactions.required(() -> {
+		// 外层统一幂等事务需要持久化 VERSION_CONFLICT；竞争失败只回滚本写入 savepoint。
+		return transactions.nested(() -> {
 			ActiveMembership membership = memberships.findActiveMembership(userId, accountId)
 				.orElseThrow(AccountNotVisibleException::new);
 			if (!"OWNER".equals(membership.role())) {
