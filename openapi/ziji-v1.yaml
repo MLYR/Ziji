@@ -274,7 +274,15 @@ paths:
       tags: [Accounts]
       operationId: updateAccount
       summary: OWNER 修改账户资料
+      description: 必须同时携带 Idempotency-Key 与强 If-Match。服务端先验证当前 ACTIVE membership、账户可见性和 OWNER 写权限；不可见账户返回 404 且不创建幂等记录。requestHash 包含实际 accountId、类型化 merge-patch 和规范化 If-Match；同 Key/同 Hash 的成功或 VERSION_CONFLICT 精确重放首次安全响应。
       x-requirement-ids: [ACC-002, SHR-002]
+      x-idempotency:
+        scope: CURRENT_USER_API_VERSION_OPERATION_ID_KEY
+        requestHash: ACTUAL_ACCOUNT_ID_TYPED_MERGE_PATCH_IF_MATCH
+        sameKeySameHash: REPLAY_FIRST_RESPONSE
+        sameKeyDifferentHash: IDEMPOTENCY_KEY_REUSED
+        rejectedBeforeRecord: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, RESOURCE_NOT_FOUND]
+      x-precondition-order: [AUTHENTICATION, ACCOUNT_VISIBILITY, OWNER_WRITE_PERMISSION, IF_MATCH_AND_MERGE_PATCH_VALIDATION, SAFE_IDEMPOTENCY_REPLAY, PERSISTED_VERSION, IDEMPOTENCY_ACQUIRE]
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
       requestBody:
         required: true
@@ -282,6 +290,7 @@ paths:
           application/merge-patch+json: { schema: { $ref: '#/components/schemas/UpdateAccountRequest' } }
       responses:
         '200': { $ref: '#/components/responses/AccountOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '409': { $ref: '#/components/responses/Conflict' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }

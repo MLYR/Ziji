@@ -97,6 +97,22 @@ class IdempotencyOpenApiContractTests {
 		assertTrue(description.contains("IDEMPOTENCY_KEY_REUSED"));
 	}
 
+	@Test
+	void updateAccountDeclaresItsReplayAndPreconditionContract() throws IOException {
+		Map<String, Object> document = readContract();
+		Map<String, Object> paths = objectMap(document.get("paths"), "OpenAPI paths");
+		Map<String, Object> accountPath = objectMap(paths.get("/accounts/{accountId}"), "账户详情 path");
+		Map<String, Object> update = objectMap(accountPath.get("patch"), "updateAccount operation");
+		Map<String, Object> idempotency = objectMap(update.get("x-idempotency"), "updateAccount x-idempotency");
+		Map<String, Object> responses = objectMap(update.get("responses"), "updateAccount responses");
+
+		assertEquals("ACTUAL_ACCOUNT_ID_TYPED_MERGE_PATCH_IF_MATCH", idempotency.get("requestHash"));
+		assertEquals("REPLAY_FIRST_RESPONSE", idempotency.get("sameKeySameHash"));
+		assertEquals("IDEMPOTENCY_KEY_REUSED", idempotency.get("sameKeyDifferentHash"));
+		assertEquals("#/components/responses/BadRequest", objectMap(responses.get("400"), "updateAccount 400").get("$ref"));
+		assertEquals("#/components/responses/Conflict", objectMap(responses.get("409"), "updateAccount 409").get("$ref"));
+	}
+
 	private static Map<String, Object> readContract() throws IOException {
 		Path contract = locateContract();
 		try (InputStream input = Files.newInputStream(contract)) {

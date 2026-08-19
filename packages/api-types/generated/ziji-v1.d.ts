@@ -266,7 +266,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** OWNER 修改账户资料 */
+        /**
+         * OWNER 修改账户资料
+         * @description 必须同时携带 Idempotency-Key 与强 If-Match。服务端先验证当前 ACTIVE membership、账户可见性和 OWNER 写权限；不可见账户返回 404 且不创建幂等记录。requestHash 包含实际 accountId、类型化 merge-patch 和规范化 If-Match；同 Key/同 Hash 的成功或 VERSION_CONFLICT 精确重放首次安全响应。
+         */
         patch: operations["updateAccount"];
         trace?: never;
     };
@@ -4473,6 +4476,7 @@ export interface operations {
         };
         responses: {
             200: components["responses"]["AccountOk"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
