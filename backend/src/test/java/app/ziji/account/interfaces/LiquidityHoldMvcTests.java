@@ -411,6 +411,52 @@ class LiquidityHoldMvcTests {
 	}
 
 	@Test
+	void revokedAccessAfterEmptyInspectionDoesNotRevealAcquireDiscoveredStates() throws Exception {
+		Fixture replayedCreate = fixture(new FakeUseCase().denyAtAccessCall(2));
+		replayedCreate.idempotency().forceAcquisition("empty-then-replay-key",
+			new IdempotencyRecordStore.Acquisition.Replay(IdempotencyResponse.succeededResource(
+				201, "LIQUIDITY_HOLD", HOLD_ID,
+				new IdempotencyResponse.ResourceReference(path(), "\"1\"", 1L))));
+		assertRevokedAfterEmptyInspection(replayedCreate,
+			post(path()).principal(principal()).header("Idempotency-Key", "empty-then-replay-key")
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson("10.00", "CNY")));
+		assertEquals(0, replayedCreate.useCase().replayCalls);
+
+		Fixture keyReusedRevision = fixture(new FakeUseCase().denyAtAccessCall(2));
+		keyReusedRevision.idempotency().forceAcquisition("empty-then-key-reused",
+			new IdempotencyRecordStore.Acquisition.KeyReused());
+		assertRevokedAfterEmptyInspection(keyReusedRevision,
+			post(path() + "/{holdId}/revisions", HOLD_ID).principal(principal())
+				.header("Idempotency-Key", "empty-then-key-reused").header("If-Match", "\"1\"")
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson("10.00", "CNY")));
+		assertEquals(0, keyReusedRevision.useCase().reviseCalls);
+
+		Fixture inProgressRelease = fixture(new FakeUseCase().denyAtAccessCall(2));
+		inProgressRelease.idempotency().forceAcquisition("empty-then-in-progress",
+			new IdempotencyRecordStore.Acquisition.InProgress());
+		assertRevokedAfterEmptyInspection(inProgressRelease,
+			post(path() + "/{holdId}/release", HOLD_ID).principal(principal())
+				.header("Idempotency-Key", "empty-then-in-progress").header("If-Match", "\"1\""));
+		assertEquals(0, inProgressRelease.useCase().releaseCalls);
+
+		Fixture unavailableCreate = fixture(new FakeUseCase().denyAtAccessCall(2));
+		unavailableCreate.idempotency().forceAcquisition("empty-then-unavailable",
+			new IdempotencyRecordStore.Acquisition.SafeReplayUnavailable());
+		assertRevokedAfterEmptyInspection(unavailableCreate,
+			post(path()).principal(principal()).header("Idempotency-Key", "empty-then-unavailable")
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson("10.00", "CNY")));
+
+		Fixture versionConflictRevision = fixture(new FakeUseCase().denyAtAccessCall(2));
+		versionConflictRevision.idempotency().forceAcquisition("empty-then-version-conflict",
+			new IdempotencyRecordStore.Acquisition.Replay(
+				IdempotencyResponse.failedFinalVersionConflict(409, 2, path())));
+		assertRevokedAfterEmptyInspection(versionConflictRevision,
+			post(path() + "/{holdId}/revisions", HOLD_ID).principal(principal())
+				.header("Idempotency-Key", "empty-then-version-conflict").header("If-Match", "\"1\"")
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson("10.00", "CNY")));
+	}
+
+	@Test
 	void mutationReplaysValidateTheirOperationSpecificReferences() throws Exception {
 		Fixture revise = fixture(new FakeUseCase());
 		String reviseKey = "valid-revision-replay-key";
@@ -629,6 +675,16 @@ class LiquidityHoldMvcTests {
 		assertEquals(0, fixture.useCase().replayCalls);
 	}
 
+	private static void assertRevokedAfterEmptyInspection(Fixture fixture, MockHttpServletRequestBuilder request) throws Exception {
+		fixture.mvc().perform(request)
+			.andExpect(status().isNotFound())
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(header().doesNotExist("Retry-After"))
+			.andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"))
+			.andExpect(jsonPath("$.versionConflict").doesNotExist());
+		assertEquals(1, fixture.idempotency().acquisitions);
+	}
+
 	private static java.security.Principal principal() {
 		return () -> USER_ID.toString();
 	}
@@ -796,6 +852,7 @@ class LiquidityHoldMvcTests {
 		private final Map<UUID, IdempotencyRequest> acquired = new HashMap<>();
 		private final Map<String, CompletedRecord> completed = new HashMap<>();
 		private final Map<String, Acquisition> forcedInspections = new HashMap<>();
+		private final Map<String, Acquisition> forcedAcquisitions = new HashMap<>();
 		private int acquisitions;
 
 		@Override
@@ -816,6 +873,10 @@ class LiquidityHoldMvcTests {
 		public Acquisition acquire(IdempotencyRequest request, Instant now) {
 			acquisitions++;
 			requests.add(request);
+			Acquisition forced = forcedAcquisitions.get(request.idempotencyKey());
+			if (forced != null) {
+				return forced;
+			}
 			CompletedRecord prior = completed.get(request.idempotencyKey());
 			if (prior != null) {
 				return prior.request().requestHash().equals(request.requestHash())
@@ -852,6 +913,10 @@ class LiquidityHoldMvcTests {
 
 		private void forceInspection(String key, Acquisition acquisition) {
 			forcedInspections.put(key, acquisition);
+		}
+
+		private void forceAcquisition(String key, Acquisition acquisition) {
+			forcedAcquisitions.put(key, acquisition);
 		}
 
 		private record CompletedRecord(IdempotencyRequest request, IdempotencyResponse response) {}

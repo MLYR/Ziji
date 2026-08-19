@@ -107,6 +107,8 @@ public class LiquidityHoldController {
 				return IdempotencyWorkResult.completed(created, IdempotencyResponse.succeededResource(
 					201, "LIQUIDITY_HOLD", created.id(), resourceReference(resource, created)));
 			});
+		requireCurrentAccessForExistingExecution(execution,
+			() -> useCase.preflightCreateAccess(userId, parsedAccountId));
 		return writeCreate(execution, parsedAccountId, request, response);
 	}
 
@@ -147,6 +149,8 @@ public class LiquidityHoldController {
 						409, conflict.current().version(), holdLocation(parsedAccountId)));
 				}
 			});
+		requireCurrentAccessForExistingExecution(execution,
+			() -> useCase.preflightMutationAccess(userId, parsedAccountId, parsedHoldId, expectedVersion));
 		return writeMutation(execution, parsedAccountId, parsedHoldId, resource, request, response,
 			HttpStatus.CREATED, true, false);
 	}
@@ -186,8 +190,19 @@ public class LiquidityHoldController {
 						409, conflict.current().version(), holdLocation(parsedAccountId)));
 				}
 			});
+		requireCurrentAccessForExistingExecution(execution,
+			() -> useCase.preflightMutationAccess(userId, parsedAccountId, parsedHoldId, expectedVersion));
 		return writeMutation(execution, parsedAccountId, parsedHoldId, resource, request, response,
 			HttpStatus.OK, false, true);
+	}
+
+	private static void requireCurrentAccessForExistingExecution(
+		IdempotencyExecution<?> execution,
+		Runnable accessProof) {
+		if (execution.status() != IdempotencyExecution.Status.EXECUTED) {
+			// inspect 为空后 acquire 仍可能读到并发提交的旧记录，渲染前必须再次验证当前权限。
+			accessProof.run();
+		}
 	}
 
 	private ResponseEntity<?> writeCreate(
