@@ -144,7 +144,29 @@ JAVA_HOME=$(/usr/libexec/java_home -v 25) \
 
 jOOQ 生成物位于 `backend/target/generated-sources/jooq`，属于可重建产物，不提交 Git。
 
-## 5. 最小验证
+## 5. 验证与提交流程
+
+本地验证按改动范围执行，提交后由 CI 对精确 commit 执行完整门禁。不要为了形式在本地重复跑两遍全量测试。
+
+### 5.1 提交前最小验证
+
+- 文档、注释或原型：`git diff --check`。
+- Web/Mobile：对应的 `check` 和受影响测试。
+- OpenAPI：`pnpm api:check && pnpm api:generate && pnpm api:types:check`。
+- 后端账务、权限、迁移、幂等或同步：相关定向测试；高风险改动再执行完整后端测试。
+
+提交前检查暂存区：
+
+```bash
+git diff --cached --check
+git diff --cached --stat
+```
+
+### 5.2 提交后完整门禁
+
+推送后等待 GitHub Actions 的 Contract、Backend、Web 和 Mobile 四个 job 全部成功，再合并。高风险改动若需要本地复测，应在干净提交快照上执行并记录证据。
+
+### 5.3 各工程验证命令
 
 ```bash
 # Backend：JUnit、Modulith 边界、Testcontainers 空库 Flyway
