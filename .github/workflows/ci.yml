@@ -109,10 +109,22 @@ jobs:
           distribution: temurin
           java-version: '25'
           cache: maven
-      # 固定 Trivy CLI 版本，扫描器未安装或初始化失败时直接使该 job 失败。
-      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
-        with:
-          version: v0.58.1
+      # 直接下载并校验固定 Trivy 发布包，绕过 setup-trivy 的 Runner 路径兼容缺陷。
+      - name: Install pinned Trivy
+        env:
+          TRIVY_VERSION: v0.74.0
+          TRIVY_SHA256: 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+        run: |
+          set -euo pipefail
+          install_dir="$RUNNER_TEMP/trivy-bin"
+          archive="$RUNNER_TEMP/trivy.tar.gz"
+          mkdir -p "$install_dir"
+          curl --fail --location --retry 3 --output "$archive" \
+            "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VERSION#v}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  ${archive}" | sha256sum --check --status
+          tar -xzf "$archive" -C "$install_dir" trivy
+          echo "$install_dir" >> "$GITHUB_PATH"
+          "$install_dir/trivy" --version
       - run: pnpm install --frozen-lockfile
       # all 模式会汇总退出，但内部不短路：漏洞失败后仍执行许可证和密钥扫描。
       - run: pnpm security:scan

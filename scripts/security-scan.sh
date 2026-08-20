@@ -35,7 +35,7 @@ require_trivy() {
     return 0
   fi
 
-  printf '缺少 Trivy：请安装固定版本，或在 CI 中使用 aquasecurity/setup-trivy 后再运行本脚本。\n' >&2
+  printf '缺少 Trivy：请安装固定版本后再运行本脚本；CI 会在扫描前校验固定发布包。\n' >&2
   return 2
 }
 
