@@ -1,0 +1,44 @@
+{
+  "nodeAllowedLicenses": [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BlueOak-1.0.0",
+    "CC-BY-4.0",
+    "ISC",
+    "MIT",
+    "MIT AND Apache-2.0",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Python-2.0",
+    "Unlicense",
+    "(BSD-3-Clause OR GPL-2.0)",
+    "(MIT OR Apache-2.0)",
+    "(MIT OR CC0-1.0)"
+  ],
+  "nodePackageExceptions": {
+    "@gsap/react@2.1.2": {
+      "license": "SEE LICENSE AT https://gsap.com/standard-license",
+      "reason": "Web 动画封装的标准免费许可，已与直接依赖版本一并盘点。"
+    },
+    "gsap@3.15.0": {
+      "license": "Standard 'no charge' license: https://gsap.com/standard-license.",
+      "reason": "Web 动画运行时的标准免费许可，已与直接依赖版本一并盘点。"
+    }
+  },
+  "mavenAllowedLicenseTokens": [
+    "apache",
+    "bouncy castle licence",
+    "bsd",
+    "cc0",
+    "eclipse public license",
+    "epl",
+    "edl",
+    "mit",
+    "mpl",
+    "public domain",
+    "unlicense",
+    "zlib"
+  ]
+}

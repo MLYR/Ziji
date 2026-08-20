@@ -16,7 +16,16 @@
     "api:generate": "pnpm --filter @ziji/api-types run generate",
     "api:types:check": "pnpm --filter @ziji/api-types run check",
     "check:workspace": "pnpm --recursive --if-present run check",
+    "security:dependencies": "scripts/security-scan.sh dependencies",
+    "security:licenses": "scripts/security-scan.sh licenses",
+    "security:secrets": "scripts/security-scan.sh secrets",
+    "security:scan": "scripts/security-scan.sh all",
     "test:workspace": "pnpm --recursive --if-present run test"
+  },
+  "pnpm": {
+    "overrides": {
+      "image-size": "npm:image-size-next@1.2.2"
+    }
   },
   "devDependencies": {
     "@redocly/cli": "2.46.1"

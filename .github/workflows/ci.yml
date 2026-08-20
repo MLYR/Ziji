@@ -89,3 +89,42 @@ jobs:
       # Maestro 需原生模拟器，基础 CI 先执行类型、配置和单元检查。
       - run: pnpm --filter mobile check
       - run: pnpm --filter mobile test
+
+  security:
+    name: Security supply-chain gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 10.4.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.22.3
+          cache: pnpm
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      # 直接下载并校验固定 Trivy 发布包，绕过 setup-trivy 的 Runner 路径兼容缺陷。
+      - name: Install pinned Trivy
+        env:
+          TRIVY_VERSION: v0.74.0
+          TRIVY_SHA256: 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+        run: |
+          set -euo pipefail
+          install_dir="$RUNNER_TEMP/trivy-bin"
+          archive="$RUNNER_TEMP/trivy.tar.gz"
+          mkdir -p "$install_dir"
+          curl --fail --location --retry 3 --output "$archive" \
+            "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VERSION#v}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  ${archive}" | sha256sum --check --status
+          tar -xzf "$archive" -C "$install_dir" trivy
+          echo "$install_dir" >> "$GITHUB_PATH"
+          "$install_dir/trivy" --version
+      - run: pnpm install --frozen-lockfile
+      # all 模式会汇总退出，但内部不短路：漏洞失败后仍执行许可证和密钥扫描。
+      - run: pnpm security:scan
