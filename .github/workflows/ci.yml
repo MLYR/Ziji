@@ -89,3 +89,30 @@ jobs:
       # Maestro 需原生模拟器，基础 CI 先执行类型、配置和单元检查。
       - run: pnpm --filter mobile check
       - run: pnpm --filter mobile test
+
+  security:
+    name: Security supply-chain gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 10.4.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.22.3
+          cache: pnpm
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      # 固定 Trivy CLI 版本，扫描器未安装或初始化失败时直接使该 job 失败。
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.58.1
+      - run: pnpm install --frozen-lockfile
+      # all 模式会汇总退出，但内部不短路：漏洞失败后仍执行许可证和密钥扫描。
+      - run: pnpm security:scan

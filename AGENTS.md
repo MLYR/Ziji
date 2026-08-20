@@ -2,7 +2,7 @@
 
 本文件只补充资迹项目特有规则。通用的工具使用、文件编辑、Git、安全审批、沟通和验证要求继承 Codex 全局规范，不在此重复。
 
-@/Users/zreo/CODE/Ziji/doc/多智能体研发协作规范.md
+@/Users/zreo/CODE/Ziji/doc/Project Shepherd项目管理Prompt规范.md
 
 ## 1. 基线与事实源
 
