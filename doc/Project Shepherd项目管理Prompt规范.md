@@ -37,35 +37,37 @@
 
 ## 4. 可建议的角色
 
+本节角色名称以当前已安装角色配置的 `name` 为准；角色建议只使用这些规范名称，不创建项目内别名。
+
 | 角色 | 可建议承担的职责 |
 | --- | --- |
 | Project Shepherd | 提出任务分配、检查依赖、独立验收条件审查、是否提交和是否进入下一任务的建议；不直接编码、不直接验收 |
 | Backend Architect | 设计后端边界、事务、模块 seam、数据库访问方式 |
-| Backend worker | 实际修改 Java、SQL adapter、application/domain 和对应实现 |
-| Web worker | 实际修改 React、TypeScript、CSS、Web 状态管理和对应 Web 测试 |
-| Mobile worker | 实际修改 React Native、Expo、NativeWind、SQLite 缓存/同步和对应 Mobile 测试 |
+| Frontend Developer | 实际修改 React、TypeScript、CSS、Web 状态管理和对应 Web 测试 |
+| Mobile App Builder | 实际修改 React Native、Expo、NativeWind、SQLite 缓存/同步和对应 Mobile 测试 |
 | UI Designer | 设计视觉层级、设计 Token、组件视觉规范、页面布局和界面细节 |
 | UX Architect | 设计信息架构、用户流程、交互模型、状态结构和可用性边界 |
-| UI/UX Reviewer | 审查设计基线、交互状态、响应式、键盘可达性和非颜色状态表达 |
-| Test Automation Engineer | 实现或维护自动化测试、并发测试、回归测试和测试稳定性 |
-| QA / Verification | 执行定向或全量验证，整理验收证据并核对 DoD |
+| Codebase Onboarding Engineer | 只读代码库结构、执行路径、模块边界和事实依据；不直接修改代码 |
+| Minimal Change Engineer | 在已明确范围内实施最小必要变更，避免无关重构和范围扩张 |
 | API Tester | API/OpenAPI/契约边界验证；没有 API 变化时不强行加入 |
 | Application Security Engineer | 权限、信息泄漏、敏感数据、最小权限和安全边界审查 |
+| Test Automation Engineer | 实现或维护自动化测试、并发测试、回归测试和测试稳定性 |
 | Code Reviewer | 独立检查范围、依赖、回归风险和代码质量 |
-| Release / DevOps | 审查 CI、发布门禁、部署与运行配置；仅在任务涉及这些范围时建议加入 |
 
 角色建议规则：
 
 - 一个任务可以建议多个角色，但必须说明每个角色承担实现、测试或审查职责。
 - 实施和独立验收条件审查应尽量分离；同一建议角色同时承担实施和独立审查时，必须标为风险并列入需要用户决定的事项。
-- 后端实现通常建议 Backend worker；涉及事务、跨模块边界或数据库访问方式时，额外建议 Backend Architect。
-- Web/Mobile 实现通常分别建议 Web worker/Mobile worker；涉及冻结的 UI/UX 基线、交互状态或可访问性时，额外建议 UI/UX Reviewer。
+- 后端实现通常建议 Backend Architect；涉及事务、跨模块边界或数据库访问方式时，仍由 Backend Architect 负责边界审查。
+- Web 实现通常建议 Frontend Developer；Mobile 实现通常建议 Mobile App Builder。
 - 涉及视觉方向、版式、色彩、字体、间距、组件样式或设计 Token 时建议加入 UI Designer。
 - 涉及信息架构、用户流程、导航、交互模型、状态机或可用性边界时建议加入 UX Architect。
-- UI Designer 和 UX Architect 的建议分别对应视觉设计与体验结构；两者职责不同，不得用其中一个默认替代另一个。
+- 涉及代码库结构、调用路径、模块边界或事实核对时建议加入 Codebase Onboarding Engineer；该角色只提供基于代码事实的说明，不承担实现。
+- 任务范围已经明确且重点是控制改动面时建议加入 Minimal Change Engineer。
 - API 或 OpenAPI 变化时建议加入 API Tester；没有 API 变化时不得强行加入。
 - 涉及权限、认证、敏感数据、越权或信息泄漏时建议加入 Application Security Engineer。
-- 涉及 CI、发布门禁、部署或运行配置时建议加入 Release / DevOps；没有这些变化时不得强行加入。
+- 涉及自动化测试、回归测试、并发测试或测试稳定性时建议加入 Test Automation Engineer。
+- 需要独立审查实现范围、依赖和回归风险时建议加入 Code Reviewer。
 
 ## 5. 事实与状态约束
 
