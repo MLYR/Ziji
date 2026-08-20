@@ -24,6 +24,11 @@
     "test:agency-agent": "node --test scripts/agency-agent.test.mjs",
     "test:workspace": "pnpm --recursive --if-present run test"
   },
+  "pnpm": {
+    "overrides": {
+      "image-size": "npm:image-size-next@1.2.2"
+    }
+  },
   "devDependencies": {
     "@redocly/cli": "2.46.1"
   }
