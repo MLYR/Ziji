@@ -35,12 +35,7 @@ const ROUTES = [
   },
   {
     role: 'Backend Architect',
-    keywords: ['架构', '事务', '模块边界', '数据库访问', '迁移', 'flyway', 'jooq', 'schema', 'seam'],
-    reviewer: 'Code Reviewer',
-  },
-  {
-    role: 'Backend worker',
-    keywords: ['java', 'sql', '后端', 'application', 'domain', 'adapter', 'controller', 'service'],
+    keywords: ['架构', '事务', '模块边界', '数据库访问', '迁移', 'flyway', 'jooq', 'schema', 'seam', 'java', 'sql', '后端', 'application', 'domain', 'adapter', 'controller', 'service'],
     reviewer: 'Code Reviewer',
   },
   {
@@ -62,7 +57,6 @@ const ROLE_AGENT_FILES = new Map([
   ['Application Security Engineer', 'application-security-engineer.toml'],
   ['Test Automation Engineer', 'test-automation-engineer.toml'],
   ['Backend Architect', 'backend-architect.toml'],
-  ['Backend worker', 'senior-developer.toml'],
   ['Code Reviewer', 'code-reviewer.toml'],
   ['Project Shepherd', 'project-shepherd.toml'],
 ])
@@ -138,9 +132,17 @@ function buildPrompt(task, route, review = false) {
   ].join('\n')
 }
 
+function assertCompleteModelId(model) {
+  // --run 必须显式携带可传给 Codex 的模型标识，避免把本地默认配置冒充为验收证据。
+  if (!model || !/^(?:gpt|o\d)(?:[-.][A-Za-z0-9]+)+$/.test(model) || model.toLowerCase().includes('default')) {
+    throw new Error('--run 必须通过 --model 提供完整模型 ID（不能使用默认占位值）。')
+  }
+}
+
 function runCodex(prompt, model) {
+  assertCompleteModelId(model)
   const args = ['exec', '--cd', REPO_ROOT]
-  if (model) args.push('--model', model)
+  args.push('--model', model)
   args.push(prompt)
   const result = spawnSync('codex', args, { cwd: REPO_ROOT, stdio: 'inherit' })
   if (result.error) throw result.error
@@ -148,7 +150,7 @@ function runCodex(prompt, model) {
 }
 
 function printHelp() {
-  console.log(`用法：\n  pnpm agency:route -- --task "任务描述" [--json]\n  pnpm agency:route -- --task "任务描述" --run [--review] [--model MODEL]\n\n选项：\n  --task TEXT       任务描述；省略时从 stdin 读取\n  --run             调用 codex exec 执行主角色\n  --review          主角色完成后调用建议的独立审查角色\n  --model MODEL    传给 codex exec 的完整模型 ID\n  --risk LEVEL      仅作为输出标签：high/medium/low\n  --json            输出机器可读 JSON\n`)
+  console.log(`用法：\n  pnpm agency:route -- --task "任务描述" [--json]\n  pnpm agency:route -- --task "任务描述" --run [--review] --model MODEL\n\n选项：\n  --task TEXT       任务描述；省略时从 stdin 读取\n  --run             调用 codex exec 执行主角色；必须同时提供完整 --model\n  --review          主角色完成后调用建议的独立审查角色\n  --model MODEL    传给 codex exec 的完整模型 ID（--run 必填）\n  --risk LEVEL      仅作为输出标签：high/medium/low\n  --json            输出机器可读 JSON\n`)
 }
 
 export function routeTask(task) {
@@ -168,12 +170,13 @@ async function main() {
   if (options.help) return printHelp()
   const task = options.task || readFileSync(0, 'utf8').trim()
   if (!task) throw new Error('缺少任务描述：使用 --task 或通过 stdin 传入。')
+  if (options.run) assertCompleteModelId(options.model)
 
   const route = routeTask(task)
   const output = {
     ...route,
     risk: options.risk || 'unspecified',
-    model: options.model || 'codex-config-default',
+    model: options.model || null,
     run: options.run,
     review: options.review,
   }
