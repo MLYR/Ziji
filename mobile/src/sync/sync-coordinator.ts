@@ -2,7 +2,8 @@ import type * as SQLite from 'expo-sqlite';
 
 import type { components } from '@ziji/api-types';
 
-import type { MobileSyncApiClient } from '../api/api-client';
+import { ApiClientError, type MobileSyncApiClient } from '../api/api-client';
+import type { MobileAuthenticationScopeLease } from '@/auth/auth-session';
 import {
   deletePendingOperation,
   getSyncCursor,
@@ -33,6 +34,7 @@ export interface SyncCoordinatorOptions {
   deviceId: string;
   now?: () => string;
   scope?: string;
+  lease?: MobileAuthenticationScopeLease;
 }
 
 export class SyncProtocolError extends Error {
@@ -47,9 +49,15 @@ export async function synchronize(userId: string, options: SyncCoordinatorOption
   if (options.deviceId.trim().length === 0) throw new SyncProtocolError('同步设备标识不能为空。');
   const scope: LocalSyncScope = { scope: options.scope ?? SYNC_SCOPE, userId };
 
-  // 拉取先完成并确认游标，再允许推送；拉取协议异常时不会带着未确认游标写入业务操作。
-  await pullChanges(scope, options.database, options.api, now);
-  await pushOperations(userId, scope, options.database, options.api, options.deviceId, now);
+  const run = options.lease
+    ? <T>(operation: () => Promise<T>) => options.lease!.withOperation(operation)
+    : <T>(operation: () => Promise<T>) => operation();
+  await run(async () => {
+    assertLease(options.lease);
+    // 拉取先完成并确认游标，再允许推送；拉取协议异常时不会带着未确认游标写入业务操作。
+    await pullChanges(scope, options.database, options.api, now, options.lease);
+    await pushOperations(userId, scope, options.database, options.api, options.deviceId, now, options.lease);
+  });
 }
 
 export async function pullChanges(
@@ -57,12 +65,16 @@ export async function pullChanges(
   database: SQLite.SQLiteDatabase,
   api: MobileSyncApiClient,
   now: () => string,
+  lease?: MobileAuthenticationScopeLease,
 ): Promise<void> {
+  assertLease(lease);
   let cursor = await getSyncCursor(database, scope);
   const seenCursors = new Set<string>();
 
   while (true) {
+    assertLease(lease);
     const page = await api.listSyncChanges(cursor);
+    assertLease(lease);
     const { changes, hasMore, nextCursor } = validateChangePage(page);
 
     if (changes.length > 0 && (nextCursor === null || nextCursor === cursor || seenCursors.has(nextCursor))) {
@@ -78,7 +90,9 @@ export async function pullChanges(
 
     if (changes.length > 0 || nextCursor !== cursor) {
       await database.withExclusiveTransactionAsync(async (transaction) => {
+        assertLease(lease);
         for (const change of changes) await saveCachedEntity(transaction, scope.userId, change, now());
+        assertLease(lease);
         await saveSyncCursor(transaction, scope, nextCursor, now());
       });
     }
@@ -95,8 +109,10 @@ export async function pushOperations(
   api: MobileSyncApiClient,
   deviceId: string,
   now: () => string,
+  lease?: MobileAuthenticationScopeLease,
 ): Promise<void> {
   if (scope.userId !== userId) throw new SyncProtocolError('同步范围与当前用户不一致。');
+  assertLease(lease);
   const recoveryTime = plusSeconds(now(), RETRY_AFTER_SECONDS);
   await recoverSendingOperations(database, userId, recoveryTime, now());
 
@@ -105,30 +121,42 @@ export async function pushOperations(
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.operationId.localeCompare(right.operationId));
 
   for (let offset = 0; offset < pending.length; offset += MAX_BATCH_SIZE) {
+    assertLease(lease);
     const batch = pending.slice(offset, offset + MAX_BATCH_SIZE);
     await database.withExclusiveTransactionAsync(async (transaction) => {
+      assertLease(lease);
       for (const operation of batch) await markPendingSending(transaction, userId, operation.operationId, now());
     });
 
     let response: Awaited<ReturnType<MobileSyncApiClient['applySyncOperations']>>;
     try {
+      assertLease(lease);
       response = await api.applySyncOperations({ deviceId, operations: batch.map(toWireOperation) });
-    } catch {
-      await retryBatch(database, userId, batch, plusSeconds(now(), RETRY_AFTER_SECONDS), now());
+      assertLease(lease);
+    } catch (error) {
+      if (isAuthenticationError(error)) {
+        // 401 需要交给上层 single-flight refresh 立即重试；403 先保留待处理事实，关闭 scope 后不得继续访问。
+        await retryBatch(database, userId, batch, now(), now(), lease).catch(() => undefined);
+        throw error;
+      }
+      await retryBatch(database, userId, batch, plusSeconds(now(), RETRY_AFTER_SECONDS), now(), lease);
       return;
     }
 
     try {
+      assertLease(lease);
       const results = validateOperationResults(response, batch);
       await database.withExclusiveTransactionAsync(async (transaction) => {
+        assertLease(lease);
         for (const operation of batch) {
           const result = results.get(operation.operationId);
           if (result === undefined) throw new SyncProtocolError('同步结果缺少 operationId。');
+          assertLease(lease);
           await applyOperationResult(transaction, userId, operation, result, now);
         }
       });
     } catch (error) {
-      await retryBatch(database, userId, batch, plusSeconds(now(), RETRY_AFTER_SECONDS), now());
+      await retryBatch(database, userId, batch, plusSeconds(now(), RETRY_AFTER_SECONDS), now(), lease).catch(() => undefined);
       if (error instanceof SyncProtocolError) throw error;
       throw new SyncProtocolError('同步结果落库失败，操作保留为可重试状态。');
     }
@@ -210,16 +238,27 @@ async function retryBatch(
   batch: readonly PendingSyncOperation[],
   retryAfterAt: string,
   updatedAt: string,
+  lease?: MobileAuthenticationScopeLease,
 ): Promise<void> {
   await database.withExclusiveTransactionAsync(async (transaction) => {
+    assertLease(lease);
     for (const operation of batch) {
+      assertLease(lease);
       await markPendingRetryable(transaction, userId, operation.operationId, retryAfterAt, updatedAt);
     }
   });
 }
 
+function assertLease(lease: MobileAuthenticationScopeLease | undefined): void {
+  lease?.assertCurrent();
+}
+
 function isRetryDue(operation: PendingSyncOperation, now: () => string): boolean {
   return operation.retryAfterAt === null || operation.retryAfterAt <= now();
+}
+
+function isAuthenticationError(error: unknown): error is ApiClientError {
+  return error instanceof ApiClientError && (error.problem.status === 401 || error.problem.status === 403);
 }
 
 function toWireOperation(operation: PendingSyncOperation): SyncOperation {

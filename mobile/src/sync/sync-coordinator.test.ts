@@ -151,6 +151,16 @@ function retryable(operationId: string): Extract<components['schemas']['SyncOper
   };
 }
 
+function authenticationError(status: 401 | 403): ApiClientError {
+  return new ApiClientError({
+    type: 'about:blank',
+    title: status === 401 ? '未认证' : '无权',
+    status,
+    code: status === 401 ? 'UNAUTHORIZED' : 'FORBIDDEN',
+    requestId: 'request-1',
+  });
+}
+
 class FakeApi implements MobileSyncApiClient {
   readonly changes: components['schemas']['SyncChangeListEnvelope'][] = [];
   readonly requestedCursors: (string | null)[] = [];
@@ -266,6 +276,70 @@ describe('sync coordinator', () => {
       api.applyResult = { data: { results: [duplicate(queued.operationId)] }, meta: { requestId: 'request-1' } };
       await pushOperations('user-a', { userId: 'user-a', scope: 'default' }, database as unknown as SQLite.SQLiteDatabase, api, 'device-a', () => '2026-08-16T00:00:15.000Z');
       await expect(getPendingOperation(database as unknown as SQLite.SQLiteDatabase, 'user-a', queued.operationId)).resolves.toBeNull();
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each([401, 403] as const)('pushOperations 传播 applySyncOperations 的 HTTP %i，不能降级为普通重试', async (status) => {
+    const database = new TestDatabase();
+    const api = new FakeApi();
+    const queued = operation(`authentication-${status}`);
+    const error = authenticationError(status);
+    await migrateLocalDatabase(database as unknown as SQLite.SQLiteDatabase);
+    await enqueuePendingOperation(database as unknown as SQLite.SQLiteDatabase, 'user-a', queued, '2026-08-16T00:00:00Z');
+    api.applyError = error;
+
+    try {
+      // 直接调用真实 coordinator seam；认证错误必须到达上层，并立即恢复为可供 401 refresh 重试的 PENDING。
+      await expect(pushOperations('user-a', { userId: 'user-a', scope: 'default' }, database as unknown as SQLite.SQLiteDatabase, api, 'device-a', () => '2026-08-16T00:00:00Z')).rejects.toBe(error);
+      await expect(getPendingOperation(database as unknown as SQLite.SQLiteDatabase, 'user-a', queued.operationId)).resolves.toMatchObject({ state: 'PENDING', retryAfterAt: '2026-08-16T00:00:00Z' });
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each([401, 403] as const)('synchronize 传播 applySyncOperations 的 HTTP %i，交给调用方认证处理', async (status) => {
+    const database = new TestDatabase();
+    const api = new FakeApi();
+    const queued = operation(`synchronize-authentication-${status}`);
+    const error = authenticationError(status);
+    await migrateLocalDatabase(database as unknown as SQLite.SQLiteDatabase);
+    await enqueuePendingOperation(database as unknown as SQLite.SQLiteDatabase, 'user-a', queued, '2026-08-16T00:00:00Z');
+    api.applyError = error;
+
+    try {
+      // 拉取空页后仍会进入真实上传路径，不能因 synchronize 的封装丢失认证错误类型。
+      await expect(synchronize('user-a', { database: database as unknown as SQLite.SQLiteDatabase, api, deviceId: 'device-a', now: () => '2026-08-16T00:00:00Z' })).rejects.toBe(error);
+    } finally {
+      database.close();
+    }
+  });
+
+  it('认证 scope 在上传响应返回前失效时，不落库旧主体的响应', async () => {
+    const database = new TestDatabase();
+    const api = new FakeApi();
+    const queued = operation('stale-scope');
+    let current = true;
+    const lease = {
+      userId: 'user-a',
+      generation: 1,
+      accessToken: 'access-token',
+      isCurrent: () => current,
+      assertCurrent: () => { if (!current) throw new Error('scope expired'); },
+      withOperation: async <T,>(task: () => Promise<T>) => task(),
+    };
+    await migrateLocalDatabase(database as unknown as SQLite.SQLiteDatabase);
+    await enqueuePendingOperation(database as unknown as SQLite.SQLiteDatabase, 'user-a', queued, '2026-08-16T00:00:00Z');
+    api.applySyncOperations = jest.fn(async (request) => {
+      api.sent.push(request);
+      current = false;
+      return { data: { results: [applied(queued.operationId)] }, meta: { requestId: 'request-1' } };
+    });
+
+    try {
+      await expect(synchronize('user-a', { database: database as unknown as SQLite.SQLiteDatabase, api, deviceId: 'device-a', now: () => '2026-08-16T00:00:00Z', lease })).rejects.toThrow();
+      await expect(getPendingOperation(database as unknown as SQLite.SQLiteDatabase, 'user-a', queued.operationId)).resolves.toMatchObject({ state: 'SENDING' });
     } finally {
       database.close();
     }

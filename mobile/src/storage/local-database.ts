@@ -77,6 +77,12 @@ export const platformDatabaseSecurity: LocalDatabaseSecurity = {
 };
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | undefined;
+let databaseHandle: SQLite.SQLiteDatabase | undefined;
+let databaseGeneration = 0;
+let databaseCloseTask: Promise<void> = Promise.resolve();
+let databaseCloseFailure: unknown = null;
+let databaseCloseTarget: SQLite.SQLiteDatabase | undefined;
+const databaseClosePromises = new WeakMap<SQLite.SQLiteDatabase, Promise<void>>();
 
 const allowedPreviousStates: Record<PendingOperationState, readonly PendingOperationState[]> = {
   CONFLICT: ['PENDING', 'SENDING'],
@@ -553,15 +559,83 @@ export async function getSyncConflict(database: SQLite.SQLiteDatabase, userId: s
       };
 }
 
-async function openAndMigrateDatabase(): Promise<SQLite.SQLiteDatabase> {
+async function openAndMigrateDatabase(generation: number): Promise<SQLite.SQLiteDatabase> {
   const database = await SQLite.openDatabaseAsync(DATABASE_NAME);
-  await migrateLocalDatabase(database);
+  if (generation !== databaseGeneration) {
+    await closeDatabaseAfterInvalidation(database);
+    throw new Error('本地同步 scope 已失效。');
+  }
+  databaseHandle = database;
+  let cleanupStarted = false;
+  try {
+    await migrateLocalDatabase(database);
+    if (generation !== databaseGeneration) {
+      cleanupStarted = true;
+      await closeDatabaseAfterInvalidation(database);
+      databaseHandle = undefined;
+      throw new Error('本地同步 scope 已失效。');
+    }
+  } catch (error) {
+    databaseHandle = undefined;
+    if (!cleanupStarted) await closeDatabaseAfterInvalidation(database).catch(() => undefined);
+    throw error;
+  }
 
   return database;
 }
 
 export function getLocalDatabase(): Promise<SQLite.SQLiteDatabase> {
-  // 复用同一初始化 Promise，防止并发启动重复执行迁移。
-  databasePromise ??= openAndMigrateDatabase();
+  // 关闭失败时保持拒绝屏障，避免旧句柄仍存活时重新打开同一 SQLite 文件。
+  if (databaseCloseFailure !== null) return Promise.reject(new Error('本地同步 scope 关闭失败，需先完成关闭重试。'));
+  // 复用同一初始化 Promise，并等待上一个句柄彻底关闭，避免同一文件并发 close/open。
+  if (databasePromise === undefined) {
+    const generation = ++databaseGeneration;
+    databasePromise = databaseCloseTask.then(() => openAndMigrateDatabase(generation));
+  }
   return databasePromise;
+}
+
+export async function closeLocalDatabase(): Promise<void> {
+  const openingDatabase = databasePromise;
+  const openedDatabase = databaseHandle;
+  if (openedDatabase !== undefined) databaseCloseTarget = openedDatabase;
+  databaseGeneration += 1;
+  databasePromise = undefined;
+  databaseHandle = undefined;
+
+  // 失效主体时关闭整条本地句柄；失败 Promise 保留为屏障，下一次 closeLocalDatabase 才能显式重试。
+  const closeTask = databaseCloseTask.catch(() => undefined).then(async () => {
+    const database = openingDatabase
+      ? await openingDatabase.catch(() => databaseCloseTarget)
+      : databaseCloseTarget ?? openedDatabase;
+    if (database === undefined) return;
+    databaseCloseTarget = database;
+    await closeDatabaseAfterInvalidation(database);
+  });
+  databaseCloseTask = closeTask;
+  await closeTask;
+}
+
+async function closeDatabaseAfterInvalidation(database: SQLite.SQLiteDatabase): Promise<void> {
+  const existingClose = databaseClosePromises.get(database);
+  if (existingClose !== undefined) return existingClose;
+
+  const closeTask = (async () => {
+    try {
+      await database.closeAsync();
+      databaseCloseTarget = undefined;
+      databaseCloseFailure = null;
+    } catch (error) {
+      databaseCloseTarget = database;
+      databaseCloseFailure = error;
+      throw error;
+    }
+  })();
+  databaseClosePromises.set(database, closeTask);
+  try {
+    await closeTask;
+  } catch (error) {
+    databaseClosePromises.delete(database);
+    throw error;
+  }
 }

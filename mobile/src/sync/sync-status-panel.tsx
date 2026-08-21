@@ -1,13 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 
 import { ApiClientError } from '@/api/api-client';
 import {
+  createMobileSyncApiClientForLease,
+  createMobileTransactionApiClientForLease,
   mobileAuthenticationSession,
   mobileDeviceIdentity,
-  mobileSyncApiClient,
-  mobileTransactionApiClient,
 } from '@/auth/default-auth-session';
+import type { MobileAuthenticationScopeLease } from '@/auth/auth-session';
 import {
   createRevisionOperation,
   createSyncConflictResolutionPort,
@@ -60,105 +61,166 @@ export function SyncStatusPanel({ userId }: { userId: string }) {
   const [message, setMessage] = useState<string | null>(null);
   const [cloud, setCloud] = useState<CloudSummary | null>(null);
   const [revisionReasons, setRevisionReasons] = useState<Record<string, string>>({});
+  const scopeGeneration = useRef(0);
 
-  async function load(databaseOverride?: SQLite.SQLiteDatabase): Promise<void> {
-    const currentDatabase = databaseOverride ?? database ?? await getLocalDatabase();
-    const operations = await listPendingOperations(currentDatabase, userId);
-    const conflicts = await Promise.all(operations.map(async (operation) => ({
-      operation,
-      conflict: operation.state === 'CONFLICT' ? await getSyncConflict(currentDatabase, userId, operation.operationId) : null,
-    })));
-    setDatabase(currentDatabase);
-    setItems(conflicts);
+  function isCurrentScope(generation: number): boolean {
+    const authentication = mobileAuthenticationSession.getState();
+    const lease = mobileAuthenticationSession.getCurrentScopeLease();
+    return scopeGeneration.current === generation
+      && authentication.status === 'AUTHENTICATED'
+      && authentication.userId === userId
+      && lease?.userId === userId;
+  }
+
+  async function load(databaseOverride?: SQLite.SQLiteDatabase, generation = scopeGeneration.current): Promise<void> {
+    const lease = mobileAuthenticationSession.getCurrentScopeLease();
+    if (!lease || lease.userId !== userId || !isCurrentScope(generation)) return;
+    await lease.withOperation(async () => {
+      lease.assertCurrent();
+      const currentDatabase = databaseOverride ?? database ?? await getLocalDatabase();
+      lease.assertCurrent();
+      const operations = await listPendingOperations(currentDatabase, userId);
+      const conflicts = await Promise.all(operations.map(async (operation) => ({
+        operation,
+        conflict: operation.state === 'CONFLICT' ? await getSyncConflict(currentDatabase, userId, operation.operationId) : null,
+      })));
+      lease.assertCurrent();
+      if (!isCurrentScope(generation)) return;
+      setDatabase(currentDatabase);
+      setItems(conflicts);
+    });
+  }
+
+  function revokeUiScope(): void {
+    // 认证状态降级时先撤销本组件的代次，旧异步闭包即使返回也不能继续更新或提交用户范围数据。
+    scopeGeneration.current += 1;
+    setDatabase(null);
+    setItems([]);
+    setCloud(null);
+    setIsLoading(false);
+    setIsSyncing(false);
+    setResolvingOperationId(null);
+    setMessage(null);
+    setIsOffline(false);
+    setRevisionReasons({});
   }
 
   useEffect(() => {
+    const generation = ++scopeGeneration.current;
     let active = true;
     setIsLoading(true);
     setMessage(null);
     setIsOffline(false);
     setCloud(null);
-    void getLocalDatabase().then(async (currentDatabase) => {
-      if (!active) return;
-      await load(currentDatabase);
-    }).catch(() => {
-      if (active) setMessage('无法读取本机同步状态，请稍后重试。');
+    setRevisionReasons({});
+    void load(undefined, generation).catch(() => {
+      if (active && isCurrentScope(generation)) setMessage('无法读取本机同步状态，请稍后重试。');
     }).finally(() => {
-      if (active) setIsLoading(false);
+      if (active && isCurrentScope(generation)) setIsLoading(false);
     });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      scopeGeneration.current += 1;
+    };
   }, [userId]);
 
-  async function synchronizeOnce(): Promise<void> {
-    if (!database) return;
+  async function synchronizeOnce(lease: MobileAuthenticationScopeLease): Promise<void> {
+    if (!database || lease.userId !== userId) return;
+    const generation = scopeGeneration.current;
+    if (!isCurrentScope(generation)) return;
     const { deviceId } = await mobileDeviceIdentity.get();
-    await synchronize(userId, { database, api: mobileSyncApiClient, deviceId });
+    lease.assertCurrent();
+    await synchronize(userId, {
+      database,
+      api: createMobileSyncApiClientForLease(lease),
+      deviceId,
+      lease,
+    });
   }
 
-  async function invalidateAuthentication(): Promise<void> {
-    await mobileAuthenticationSession.invalidateAuthentication();
+  async function invalidateAuthentication(lease?: MobileAuthenticationScopeLease): Promise<void> {
+    revokeUiScope();
+    await mobileAuthenticationSession.invalidateAuthentication(lease);
   }
 
   async function runSync(): Promise<void> {
     if (!database || isSyncing) return;
+    const generation = scopeGeneration.current;
+    if (!isCurrentScope(generation)) return;
     setIsSyncing(true);
     setMessage(null);
     setIsOffline(false);
+    const lease = mobileAuthenticationSession.getCurrentScopeLease();
+    if (!lease || lease.userId !== userId) return;
     try {
-      await synchronizeOnce();
-      await load(database);
+      await synchronizeOnce(lease);
+      await load(database, generation);
+      if (!lease.isCurrent() || !isCurrentScope(generation)) return;
       setMessage('同步检查完成。');
     } catch (error) {
+      if (!lease.isCurrent() || !isCurrentScope(generation)) return;
       if (isAuthenticationError(error, 401)) {
         const refreshed = await mobileAuthenticationSession.refresh();
         if (refreshed.status === 'AUTHENTICATED' && refreshed.userId === userId) {
+          const retryLease = mobileAuthenticationSession.getCurrentScopeLease();
+          if (!retryLease || retryLease.userId !== userId) return;
           try {
-            await synchronizeOnce();
-            await load(database);
+            await synchronizeOnce(retryLease);
+            await load(database, generation);
+            if (!retryLease.isCurrent() || !isCurrentScope(generation)) return;
             setMessage('登录已恢复，同步检查完成。');
             return;
           } catch (retryError) {
             // 认证恢复后仍失败时落入可恢复提示，不把本地队列误删。
             if (isAuthenticationError(retryError, 401) || isAuthenticationError(retryError, 403)) {
-              await invalidateAuthentication();
+              await invalidateAuthentication(retryLease);
               return;
             }
-            setMessage('同步暂时不可用，本地操作仍保留。');
+            if (isCurrentScope(generation)) setMessage('同步暂时不可用，本地操作仍保留。');
             return;
           }
         }
-        setMessage('登录状态需要恢复，请重新登录后再同步。');
+        revokeUiScope();
         return;
       }
       if (isAuthenticationError(error, 403)) {
         // 403 表示当前主体不再可用，必须立即关闭 userId SQLite scope，不能继续显示或读取队列。
-        await invalidateAuthentication();
+        await invalidateAuthentication(lease);
         return;
       }
+      if (!isCurrentScope(generation)) return;
       setIsOffline(true);
       setMessage('当前无法连接服务，操作已保留在本机，恢复网络后可重试。');
-      await load(database).catch(() => undefined);
+      await load(database, generation).catch(() => undefined);
     } finally {
-      setIsSyncing(false);
+      if (isCurrentScope(generation)) setIsSyncing(false);
     }
   }
 
   async function discardLocal(operationId: string): Promise<void> {
     if (!database || resolvingOperationId !== null) return;
+    const generation = scopeGeneration.current;
+    if (!isCurrentScope(generation)) return;
+    const lease = mobileAuthenticationSession.getCurrentScopeLease();
+    if (!lease || lease.userId !== userId) return;
     setResolvingOperationId(operationId);
     try {
-      await createSyncConflictResolutionPort(database).discardLocal(userId, operationId);
-      await load(database);
-      setMessage('已接受云端版本并移除本地冲突。');
+      await lease.withOperation(() => createSyncConflictResolutionPort(database).discardLocal(userId, operationId));
+      await load(database, generation);
+      if (isCurrentScope(generation)) setMessage('已接受云端版本并移除本地冲突。');
     } catch {
-      setMessage('冲突处理失败，本地操作仍保留。');
+      if (isCurrentScope(generation)) setMessage('冲突处理失败，本地操作仍保留。');
     } finally {
-      setResolvingOperationId(null);
+      if (isCurrentScope(generation)) setResolvingOperationId(null);
     }
   }
 
   async function retryRevision(item: SyncItem): Promise<void> {
     if (!database || resolvingOperationId !== null) return;
+    const generation = scopeGeneration.current;
+    if (!isCurrentScope(generation)) return;
+    const lease = mobileAuthenticationSession.getCurrentScopeLease();
+    if (!lease || lease.userId !== userId) return;
     try {
       const reason = revisionReasons[item.operation.operationId] ?? '';
       if (reason.trim().length === 0) {
@@ -167,53 +229,62 @@ export function SyncStatusPanel({ userId }: { userId: string }) {
       }
       setResolvingOperationId(item.operation.operationId);
       const revised = createRevisionOperation(item.operation, reason);
-      await createSyncConflictResolutionPort(database).retryWithRevision(userId, item.operation.operationId, revised);
-      await load(database);
-      setMessage('修订已加入待同步队列。');
+      await lease.withOperation(() => createSyncConflictResolutionPort(database).retryWithRevision(userId, item.operation.operationId, revised));
+      await load(database, generation);
+      if (isCurrentScope(generation)) setMessage('修订已加入待同步队列。');
     } catch {
-      setMessage('修订重试失败，本地冲突仍保留。');
+      if (isCurrentScope(generation)) setMessage('修订重试失败，本地冲突仍保留。');
     } finally {
-      setResolvingOperationId(null);
+      if (isCurrentScope(generation)) setResolvingOperationId(null);
     }
   }
 
   async function viewCloud(item: SyncItem): Promise<void> {
+    const generation = scopeGeneration.current;
+    if (!isCurrentScope(generation)) return;
+    const lease = mobileAuthenticationSession.getCurrentScopeLease();
+    if (!lease || lease.userId !== userId) return;
     const transactionId = parseTransactionResourceLocation(item.conflict?.problem.versionConflict?.resourceLocation);
     if (!transactionId) {
-      setMessage('服务端冲突定位无效，已拒绝请求。');
+      if (isCurrentScope(generation)) setMessage('服务端冲突定位无效，已拒绝请求。');
       return;
     }
     try {
-      const response = await mobileTransactionApiClient.getTransaction(transactionId);
+      const response = await createMobileTransactionApiClientForLease(lease).getTransaction(transactionId);
+      if (!lease.isCurrent() || !isCurrentScope(generation)) return;
       setCloud({ operationId: item.operation.operationId, type: response.data.type, businessDate: response.data.businessDate, status: response.data.status, version: response.data.version });
       setMessage('已读取云端交易摘要。');
     } catch (error) {
+      if (!lease.isCurrent() || !isCurrentScope(generation)) return;
       if (isAuthenticationError(error, 401)) {
         const refreshed = await mobileAuthenticationSession.refresh();
         if (refreshed.status === 'AUTHENTICATED' && refreshed.userId === userId) {
+          const retryLease = mobileAuthenticationSession.getCurrentScopeLease();
+          if (!retryLease || retryLease.userId !== userId) return;
           try {
-            const response = await mobileTransactionApiClient.getTransaction(transactionId);
+            const response = await createMobileTransactionApiClientForLease(retryLease).getTransaction(transactionId);
+            if (!retryLease.isCurrent() || !isCurrentScope(generation)) return;
             setCloud({ operationId: item.operation.operationId, type: response.data.type, businessDate: response.data.businessDate, status: response.data.status, version: response.data.version });
             setMessage('登录已恢复，已读取云端交易摘要。');
             return;
           } catch (retryError) {
             if (isAuthenticationError(retryError, 401) || isAuthenticationError(retryError, 403)) {
-              await invalidateAuthentication();
+              await invalidateAuthentication(retryLease);
               return;
             }
-            setMessage('暂时无法读取云端交易，请稍后重试。');
+            if (isCurrentScope(generation)) setMessage('暂时无法读取云端交易，请稍后重试。');
             return;
           }
         }
-        setMessage('登录状态需要恢复，请重新登录后再查看云端交易。');
+        revokeUiScope();
         return;
       }
       if (isAuthenticationError(error, 403)) {
         // 冲突详情同样受当前主体约束；禁止在无权后保留 userId SQLite scope。
-        await invalidateAuthentication();
+        await invalidateAuthentication(lease);
         return;
       }
-      setMessage('暂时无法读取云端交易，请稍后重试。');
+      if (isCurrentScope(generation)) setMessage('暂时无法读取云端交易，请稍后重试。');
     }
   }
 

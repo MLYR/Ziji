@@ -4,8 +4,10 @@ import type * as SQLite from 'expo-sqlite';
 
 import {
   LOCAL_DATABASE_SCHEMA_VERSION,
+  closeLocalDatabase,
   enqueuePendingOperation,
   getCachedEntity,
+  getLocalDatabase,
   getPendingOperation,
   getSyncConflict,
   getSyncCursor,
@@ -72,6 +74,10 @@ class TestDatabase {
   close(): void {
     this.native.close();
   }
+
+  async closeAsync(): Promise<void> {
+    this.close();
+  }
 }
 
 function flattenParameters(parameters: unknown[]): unknown[] {
@@ -87,7 +93,101 @@ async function readSchemaVersion(database: TestDatabase): Promise<number> {
   return version?.user_version ?? 0;
 }
 
+const openDatabaseAsync = (jest.requireMock('expo-sqlite') as { openDatabaseAsync: jest.Mock }).openDatabaseAsync;
+
 describe('local database migration', () => {
+  it('关闭当前库时，新的打开请求等待旧句柄完成关闭', async () => {
+    const firstDatabase = createDatabase();
+    const secondDatabase = createDatabase();
+    let releaseClose: () => void = () => undefined;
+    let closeStarted: () => void = () => undefined;
+    const closeStartedPromise = new Promise<void>((resolve) => { closeStarted = resolve; });
+    const closeGate = new Promise<void>((resolve) => { releaseClose = resolve; });
+    firstDatabase.closeAsync = jest.fn(async () => {
+      closeStarted();
+      await closeGate;
+      firstDatabase.close();
+    });
+    openDatabaseAsync
+      .mockReset()
+      .mockResolvedValueOnce(firstDatabase)
+      .mockResolvedValueOnce(secondDatabase);
+
+    try {
+      await expect(getLocalDatabase()).resolves.toBe(firstDatabase);
+      const closing = closeLocalDatabase();
+      await closeStartedPromise;
+
+      const reopening = getLocalDatabase();
+      await Promise.resolve();
+      expect(openDatabaseAsync).toHaveBeenCalledTimes(1);
+
+      releaseClose();
+      await closing;
+      await expect(reopening).resolves.toBe(secondDatabase);
+      expect(openDatabaseAsync).toHaveBeenCalledTimes(2);
+    } finally {
+      openDatabaseAsync.mockReset();
+      await closeLocalDatabase().catch(() => undefined);
+    }
+  });
+
+  it('关闭失败时保持重新打开屏障，只有成功重试关闭后才允许新 scope', async () => {
+    const firstDatabase = createDatabase();
+    const secondDatabase = createDatabase();
+    openDatabaseAsync
+      .mockReset()
+      .mockResolvedValueOnce(firstDatabase)
+      .mockResolvedValueOnce(secondDatabase);
+    let closeAttempts = 0;
+    firstDatabase.closeAsync = jest.fn(async () => {
+      closeAttempts += 1;
+      if (closeAttempts === 1) throw new Error('SQLite close failed');
+      firstDatabase.close();
+    });
+
+    try {
+      await expect(getLocalDatabase()).resolves.toBe(firstDatabase);
+      await expect(closeLocalDatabase()).rejects.toThrow('SQLite close failed');
+      await expect(getLocalDatabase()).rejects.toThrow('本地同步 scope 关闭失败');
+      expect(openDatabaseAsync).toHaveBeenCalledTimes(1);
+
+      await expect(closeLocalDatabase()).resolves.toBeUndefined();
+      await expect(getLocalDatabase()).resolves.toBe(secondDatabase);
+      expect(openDatabaseAsync).toHaveBeenCalledTimes(2);
+    } finally {
+      openDatabaseAsync.mockReset();
+      await closeLocalDatabase().catch(() => undefined);
+    }
+  });
+
+  it('迁移期间 scope 失效时，同一 SQLite 句柄只执行一次 close', async () => {
+    const firstDatabase = createDatabase();
+    let releaseMigration: () => void = () => undefined;
+    const migrationGate = new Promise<void>((resolve) => { releaseMigration = resolve; });
+    const originalExecAsync = firstDatabase.execAsync.bind(firstDatabase);
+    firstDatabase.execAsync = jest.fn(async (sql: string) => {
+      if (sql.includes('journal_mode = WAL')) await migrationGate;
+      await originalExecAsync(sql);
+    });
+    firstDatabase.closeAsync = jest.fn(async () => { firstDatabase.close(); });
+    openDatabaseAsync.mockReset().mockResolvedValueOnce(firstDatabase);
+
+    try {
+      const opening = getLocalDatabase();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const closing = closeLocalDatabase();
+      releaseMigration();
+
+      await expect(opening).rejects.toThrow('本地同步 scope 已失效');
+      await expect(closing).resolves.toBeUndefined();
+      expect(firstDatabase.closeAsync).toHaveBeenCalledTimes(1);
+    } finally {
+      openDatabaseAsync.mockReset();
+      await closeLocalDatabase().catch(() => undefined);
+    }
+  });
+
   it('为全新库建立仅含缓存和同步控制的 v2 schema', async () => {
     const database = createDatabase();
 

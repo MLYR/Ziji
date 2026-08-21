@@ -11,11 +11,23 @@ const mockRetryWithRevision = jest.fn();
 const mockGetTransaction = jest.fn();
 const mockRefresh = jest.fn();
 const mockInvalidateAuthentication = jest.fn();
+const mockLease = {
+  userId: 'user-a',
+  generation: 1,
+  accessToken: 'access-token',
+  isCurrent: () => true,
+  assertCurrent: () => undefined,
+  withOperation: async <T,>(operation: () => Promise<T>) => operation(),
+};
 
 jest.mock('@/auth/default-auth-session', () => ({
+  createMobileSyncApiClientForLease: () => ({}),
+  createMobileTransactionApiClientForLease: () => ({ getTransaction: (transactionId: string) => mockGetTransaction(transactionId) }),
   mobileAuthenticationSession: {
     invalidateAuthentication: () => mockInvalidateAuthentication(),
     refresh: () => mockRefresh(),
+    getState: () => ({ errorMessage: null, session: {}, status: 'AUTHENTICATED', userId: 'user-a' }),
+    getCurrentScopeLease: () => mockLease,
   },
   mobileDeviceIdentity: { get: jest.fn().mockResolvedValue({ deviceId: 'device-a', deviceName: 'Ziji Mobile' }) },
   mobileSyncApiClient: {},
