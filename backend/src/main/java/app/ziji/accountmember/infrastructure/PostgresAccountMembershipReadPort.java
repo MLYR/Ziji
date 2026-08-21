@@ -38,7 +38,7 @@ public class PostgresAccountMembershipReadPort implements AccountMembershipReadP
 		""";
 
 	private static final String FIND_ACTIVE_FOR_UPDATE_SQL = """
-		/* 写入事实前锁定当前成员行，使撤权与事实提交只能按一个顺序生效。 */
+		/* 行锁释放后重新读取当前版本，避免撤权提交后沿用锁等待前的成员快照。 */
 		SELECT m.role, s.ratio
 		FROM account_members m
 		JOIN account_inclusion_settings s ON s.membership_id = m.id
@@ -46,6 +46,14 @@ public class PostgresAccountMembershipReadPort implements AccountMembershipReadP
 		  AND m.joined_at <= CURRENT_TIMESTAMP
 		  AND (m.ended_at IS NULL OR m.ended_at > CURRENT_TIMESTAMP)
 		  AND s.valid_from <= CURRENT_TIMESTAMP
+		""";
+
+	private static final String LOCK_MEMBERSHIPS_SQL = """
+		/* 先锁定该用户在账户上的全部成员周期，再用新语句判断当前有效周期。 */
+		SELECT m.id
+		FROM account_members m
+		WHERE m.user_id = ? AND m.account_id = ?
+		ORDER BY m.joined_at DESC, m.id DESC
 		FOR UPDATE OF m
 		""";
 
@@ -86,6 +94,8 @@ public class PostgresAccountMembershipReadPort implements AccountMembershipReadP
 		if (userId == null || accountId == null) {
 			return Optional.empty();
 		}
+		// 锁定与重新读取分成两个命令，确保撤权事务提交后的新命令快照不会回显旧成员状态。
+		jdbc.query(LOCK_MEMBERSHIPS_SQL, (result, rowNum) -> result.getObject("id", UUID.class), userId, accountId);
 		List<ActiveMembership> memberships = jdbc.query(FIND_ACTIVE_FOR_UPDATE_SQL, (result, rowNum) -> new ActiveMembership(
 			accountId,
 			result.getString("role"),
