@@ -39,7 +39,8 @@ import tools.jackson.databind.ObjectMapper;
 /** 账户归档 HTTP 边界；先证明当前 OWNER，再固化业务终态并只用安全引用重放。 */
 @RestController
 @RequestMapping("/api/v1/accounts")
-public final class AccountArchiveController {
+// Spring Modulith observability 会为归档路由创建 CGLIB 代理，保留可子类化边界。
+public class AccountArchiveController {
 
 	private static final Set<String> REQUEST_FIELDS = Set.of("reason", "confirmNonZeroBalance");
 
