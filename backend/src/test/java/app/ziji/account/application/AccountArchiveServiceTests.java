@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
@@ -53,6 +54,28 @@ class AccountArchiveServiceTests {
 		AccountQueryResult secondArchived = second.service().archive(
 			USER_ID, ACCOUNT_ID, 1, "账户已完成清理", true, "request-zero-002");
 		assertEquals(AccountStatus.ARCHIVED, secondArchived.status());
+	}
+
+	@Test
+	void archiveNormalizesClockPrecisionBeforePersistenceRoundTrip() {
+		Instant nanosecondNow = Instant.parse("2026-08-21T05:06:07.123456789Z");
+		FakeAccounts accounts = new FakeAccounts();
+		accounts.put(account());
+		accounts.normalizeArchiveTimestamp = true;
+		FakeMemberships memberships = new FakeMemberships();
+		memberships.membership = new ActiveMembership(ACCOUNT_ID, "OWNER", BigDecimal.ONE);
+		FakeAudits audits = new FakeAudits();
+		AccountArchiveService service = new AccountArchiveService(
+			new DirectTransactions(), accounts, accounts, memberships,
+			new FakeBalances(BigDecimal.ZERO, "CNY"), audits,
+			Clock.fixed(nanosecondNow, ZoneOffset.UTC));
+
+		AccountQueryResult archived = service.archive(
+			USER_ID, ACCOUNT_ID, 1, "账户已完成清理", false, "request-precision-001");
+
+		assertEquals(AccountStatus.ARCHIVED, archived.status());
+		assertEquals(nanosecondNow.truncatedTo(ChronoUnit.MICROS),
+			accounts.findById(ACCOUNT_ID).orElseThrow().archivedAt());
 	}
 
 	@Test
@@ -170,6 +193,7 @@ class AccountArchiveServiceTests {
 
 	private static final class FakeAccounts implements AccountStore, AccountArchiveStore {
 		private final Map<UUID, Account> accounts = new HashMap<>();
+		private boolean normalizeArchiveTimestamp;
 
 		private void put(Account account) {
 			accounts.put(account.id(), account);
@@ -196,7 +220,10 @@ class AccountArchiveServiceTests {
 			if (current == null || current.status() != AccountStatus.ACTIVE || current.version() != expectedVersion) {
 				return Optional.empty();
 			}
-			Account archived = current.archive(archivedAt);
+			// 模拟 PostgreSQL timestamptz 往返只保留微秒，固定覆盖纳秒 Clock 的回归路径。
+			Instant persistedArchiveTime = normalizeArchiveTimestamp
+				? archivedAt.truncatedTo(ChronoUnit.MICROS) : archivedAt;
+			Account archived = current.archive(persistedArchiveTime);
 			accounts.put(accountId, archived);
 			return Optional.of(archived);
 		}
