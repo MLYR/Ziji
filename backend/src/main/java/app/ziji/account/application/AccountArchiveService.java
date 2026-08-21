@@ -8,6 +8,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import app.ziji.account.domain.Account;
+import app.ziji.account.domain.AccountCurrency;
 import app.ziji.account.domain.AccountStatus;
 import app.ziji.accountmember.application.AccountMembershipReadPort;
 import app.ziji.accountmember.application.AccountMembershipReadPort.ActiveMembership;
@@ -85,7 +86,7 @@ public final class AccountArchiveService implements AccountArchiveUseCase {
 			}
 
 			AccountBalanceReadPort.PostedPrimaryBalance balance = postedPrimaryBalance(accountId);
-			if (balance.currency() != current.currency()) {
+			if (postedPrimaryCurrency(balance) != current.currency()) {
 				throw new AccountArchiveException.Persistence(new IllegalStateException("账户与 PRIMARY 余额币种不一致。"));
 			}
 			if (balance.amount().signum() != 0 && !confirmNonZeroBalance) {
@@ -151,6 +152,15 @@ public final class AccountArchiveService implements AccountArchiveUseCase {
 					new IllegalStateException("账户 PRIMARY 余额不存在。")));
 		} catch (AccountArchiveException.Persistence exception) {
 			throw exception;
+		} catch (RuntimeException exception) {
+			throw new AccountArchiveException.Persistence(exception);
+		}
+	}
+
+	private static AccountCurrency postedPrimaryCurrency(AccountBalanceReadPort.PostedPrimaryBalance balance) {
+		try {
+			// 跨模块端口只传递稳定机器编码，账户模块在自己的领域边界内完成严格转换。
+			return AccountCurrency.fromCode(balance.currencyCode());
 		} catch (RuntimeException exception) {
 			throw new AccountArchiveException.Persistence(exception);
 		}

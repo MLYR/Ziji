@@ -74,6 +74,27 @@ class AccountArchiveServiceTests {
 	}
 
 	@Test
+	void unsupportedLedgerCurrencyFailsClosedBeforeArchive() {
+		Fixture fixture = fixture(BigDecimal.ZERO, "OWNER", "XXX");
+
+		// 账务端返回无法识别的币种时，账户 application 必须 fail-closed，不能继续归档。
+		assertThrows(AccountArchiveException.Persistence.class,
+			() -> fixture.service().archive(USER_ID, ACCOUNT_ID, 1, "清理", true, "request-invalid-currency-01"));
+
+		assertEquals(AccountStatus.ACTIVE, fixture.accounts().findById(ACCOUNT_ID).orElseThrow().status());
+		assertTrue(fixture.audits().entries.isEmpty());
+	}
+
+	@Test
+	void incompleteBalanceSnapshotIsRejectedAtPortBoundary() {
+		// 端口快照缺少稳定币种编码时必须拒绝，避免归档把不完整事实当作零余额。
+		assertThrows(IllegalArgumentException.class,
+			() -> new AccountBalanceReadPort.PostedPrimaryBalance(BigDecimal.ZERO, null));
+		assertThrows(IllegalArgumentException.class,
+			() -> new AccountBalanceReadPort.PostedPrimaryBalance(BigDecimal.ZERO, " "));
+	}
+
+	@Test
 	void onlyCurrentOwnerCanArchiveAndInvisibleMembershipDoesNotLeak() {
 		Fixture editor = fixture(BigDecimal.ZERO, "EDITOR");
 		assertThrows(AccountPermissionDeniedException.class,
@@ -103,13 +124,17 @@ class AccountArchiveServiceTests {
 	}
 
 	private static Fixture fixture(BigDecimal balance, String role) {
+		return fixture(balance, role, "CNY");
+	}
+
+	private static Fixture fixture(BigDecimal balance, String role, String currencyCode) {
 		FakeAccounts accounts = new FakeAccounts();
 		accounts.put(account());
 		FakeMemberships memberships = new FakeMemberships();
 		if (role != null) {
 			memberships.membership = new ActiveMembership(ACCOUNT_ID, role, BigDecimal.ONE);
 		}
-		FakeBalances balances = new FakeBalances(balance);
+		FakeBalances balances = new FakeBalances(balance, currencyCode);
 		FakeAudits audits = new FakeAudits();
 		AccountArchiveService service = new AccountArchiveService(
 			new DirectTransactions(), accounts, accounts, memberships, balances, audits,
@@ -209,8 +234,8 @@ class AccountArchiveServiceTests {
 		private final PostedPrimaryBalance balance;
 		private int reads;
 
-		private FakeBalances(BigDecimal amount) {
-			this.balance = new PostedPrimaryBalance(amount, AccountCurrency.CNY);
+		private FakeBalances(BigDecimal amount, String currencyCode) {
+			this.balance = new PostedPrimaryBalance(amount, currencyCode);
 		}
 
 		@Override

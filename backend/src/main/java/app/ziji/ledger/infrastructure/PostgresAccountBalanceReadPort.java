@@ -4,7 +4,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 import app.ziji.account.application.AccountBalanceReadPort;
-import app.ziji.account.domain.AccountCurrency;
 import app.ziji.ledger.application.LedgerAccountStore;
 import app.ziji.ledger.domain.LedgerAccountReference;
 import app.ziji.ledger.domain.Money;
@@ -35,6 +34,6 @@ public class PostgresAccountBalanceReadPort implements AccountBalanceReadPort {
 		}
 		Money balance = ledgerAccounts.currentBalance(primary.get().id());
 		return Optional.of(new PostedPrimaryBalance(
-			balance.amount(), AccountCurrency.fromCode(balance.currency().name())));
+			balance.amount(), balance.currency().name()));
 	}
 }
