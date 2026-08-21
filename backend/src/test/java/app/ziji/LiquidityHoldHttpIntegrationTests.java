@@ -652,6 +652,7 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 	void membershipRevocationSerializesBeforeLiquidityHoldCreateAndLeavesNoFactOrIdempotencyRecord() throws Exception {
 		UserFixture owner = insertUser("hold-membership-revocation-race");
 		AccountFixture account = seedAccount(owner.userId(), "撤权竞态");
+		addRetainedOwner(account, "hold-membership-revocation-create-retained-owner");
 		String token = bearer(owner);
 		String key = "hold-membership-revocation-race-key";
 		CountDownLatch revocationLocked = new CountDownLatch(1);
@@ -703,6 +704,7 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 	void listSerializesBeforeMembershipRevocationAndDoesNotReadAfterAccessEnds() throws Exception {
 		UserFixture owner = insertUser("hold-membership-revocation-list-race");
 		AccountFixture account = seedAccount(owner.userId(), "撤权列表竞态");
+		addRetainedOwner(account, "hold-membership-revocation-list-retained-owner");
 		seedHold(account.accountId(), owner.userId());
 		String token = bearer(owner);
 		CountDownLatch revocationLocked = new CountDownLatch(1);
@@ -749,6 +751,7 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 	void replaySerializesBeforeMembershipRevocationAndDoesNotReadAfterAccessEnds() throws Exception {
 		UserFixture owner = insertUser("hold-membership-revocation-replay-race");
 		AccountFixture account = seedAccount(owner.userId(), "撤权重放竞态");
+		addRetainedOwner(account, "hold-membership-revocation-replay-retained-owner");
 		UUID holdId = seedHold(account.accountId(), owner.userId());
 		LiquidityHoldService service = new LiquidityHoldService(
 			accounts, memberships, holds, cursors, entry -> {}, transactions, clock, UUID::randomUUID);
@@ -1120,6 +1123,12 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 				insertCurrentInclusion(membershipId, userId, now);
 			}
 		});
+	}
+
+	private void addRetainedOwner(AccountFixture account, String emailLabel) {
+		// V007 的延迟约束要求撤权事务提交时仍有 ACTIVE OWNER；保留成员不参与请求，仅使竞态夹具合法。
+		UserFixture retainedOwner = insertUser(emailLabel);
+		addMembership(account.accountId(), retainedOwner.userId(), "OWNER", "ACTIVE");
 	}
 
 	private void insertCurrentInclusion(UUID membershipId, UUID userId, Instant now) {
