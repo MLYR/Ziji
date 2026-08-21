@@ -12,7 +12,8 @@ import org.springframework.stereotype.Repository;
 
 /** 将已入账 PRIMARY Ledger 余额转换为账户模块的最小读取快照，不暴露账务表或投影。 */
 @Repository
-public final class PostgresAccountBalanceReadPort implements AccountBalanceReadPort {
+// 该适配器参与账户归档事务，保留可被 Spring 代理子类化的边界。
+public class PostgresAccountBalanceReadPort implements AccountBalanceReadPort {
 
 	private final LedgerAccountStore ledgerAccounts;
 
