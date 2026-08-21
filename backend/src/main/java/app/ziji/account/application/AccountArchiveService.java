@@ -16,7 +16,8 @@ import app.ziji.audit.application.AuditLogWritePort;
 import app.ziji.shared.application.TransactionRunner;
 
 /** 账户归档应用编排：余额确认、当前 OWNER、版本条件写入、审计和历史保留共享同一事务。 */
-public final class AccountArchiveService implements AccountArchiveUseCase {
+// Spring Modulith observability 会为应用服务创建 CGLIB 代理，保留可子类化边界。
+public class AccountArchiveService implements AccountArchiveUseCase {
 
 	private final TransactionRunner transactions;
 	private final AccountStore accounts;
