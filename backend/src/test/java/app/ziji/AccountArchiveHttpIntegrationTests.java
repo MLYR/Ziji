@@ -344,10 +344,13 @@ class AccountArchiveHttpIntegrationTests extends PostgresIntegrationTestSupport 
 			if (ledgerStatus == 201) {
 				JsonNode ledgerResponse = objectMapper.readTree(ledgerResult.getResponse().getContentAsString());
 				assertTrue(ledgerResponse.at("/data/id").isTextual(), "成功账务响应必须包含交易 ID");
+				UUID ledgerTransactionId = UUID.fromString(ledgerResponse.at("/data/id").asText());
 				assertEquals("SUCCEEDED", jdbc.queryForObject("""
 					SELECT status FROM idempotency_records
 					WHERE user_id = ? AND operation_id = 'postTransaction' AND idempotency_key = ?
 					""", String.class, owner.userId(), ledgerKey));
+				// 账户侧统计只包含可见 PRIMARY 分录；再按交易 ID 固定验证收入仍产生完整复式分录。
+				assertEquals(2, count("SELECT count(*) FROM ledger_entries WHERE transaction_id = ?", ledgerTransactionId));
 			} else {
 				JsonNode ledgerProblem = objectMapper.readTree(ledgerResult.getResponse().getContentAsString());
 				String code = ledgerProblem.at("/code").asText();
@@ -360,7 +363,7 @@ class AccountArchiveHttpIntegrationTests extends PostgresIntegrationTestSupport 
 			assertEquals(before.auditLogs() + 1, after.auditLogs());
 			if (ledgerStatus == 201) {
 				assertEquals(before.transactions() + 1, after.transactions());
-				assertEquals(before.entries() + 2, after.entries());
+				assertEquals(before.entries() + 1, after.entries());
 				assertEquals(before.outboxEvents() + 1, after.outboxEvents());
 			} else {
 				assertEquals(before.transactions(), after.transactions());
@@ -403,15 +406,14 @@ class AccountArchiveHttpIntegrationTests extends PostgresIntegrationTestSupport 
 			Future<MvcResult> archive = executor.submit(() ->
 				archiveWithToken(token, account.accountId(), archiveKey, archiveBody(true), "\"1\"").andReturn());
 			awaitAccountRowLockWaiters(holderPid.get(), 1);
-			// 先让归档请求排队，再让 Ledger 请求排队；两个等待者都由同一个只锁目标账户的 holder 阻塞。
+			// 提交 Ledger 请求；真正的业务结果在释放 holder 后验证，不把 Future 提交当成已进入账户行锁。
 			Future<MvcResult> ledger = executor.submit(() -> mvc.perform(post("/api/v1/transactions")
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
 				.header("Idempotency-Key", ledgerKey)
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(ledgerBody))
 				.andReturn());
-			awaitAccountRowLockWaiters(holderPid.get(), 2);
-			// PostgreSQL 按同一行锁的等待队列顺序放行归档，再让 Ledger 重新读取 ARCHIVED。
+			// holder 已证明归档请求确实等待账户行锁；释放后验证 Ledger 必须重新读取 ARCHIVED，避免把瞬时等待队列宽度当成业务契约。
 			releaseHolder.countDown();
 			MvcResult archiveResult = archive.get(15, TimeUnit.SECONDS);
 			assertEquals(200, archiveResult.getResponse().getStatus());
@@ -606,8 +608,8 @@ class AccountArchiveHttpIntegrationTests extends PostgresIntegrationTestSupport 
 			if (accountRowLockWaiterCount(holderPid) >= expectedWaiters) {
 				return;
 			}
-			// 以 deadline 限定轮询上界，不依赖固定 sleep 时长判断数据库锁状态。
-			Thread.onSpinWait();
+			// 让出测试线程给请求工作线程进入真实 FOR UPDATE 等待；仍由 deadline 控制，不依赖固定 sleep 时长。
+			Thread.yield();
 		}
 		throw new AssertionError("未在 PostgreSQL 中观察到预期账户行锁等待数：" + expectedWaiters);
 	}
