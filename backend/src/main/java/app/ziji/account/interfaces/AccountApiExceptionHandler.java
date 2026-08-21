@@ -4,6 +4,7 @@ import java.net.URI;
 import java.util.Map;
 
 import app.ziji.account.application.AccountNotVisibleException;
+import app.ziji.account.application.AccountArchiveException;
 import app.ziji.account.application.AccountPermissionDeniedException;
 import app.ziji.account.application.AccountPersistenceException;
 import app.ziji.account.application.AccountCreationException;
@@ -27,7 +28,7 @@ public final class AccountApiExceptionHandler {
 
 	@ExceptionHandler({
 		AccountCreationException.class, AccountQueryValidationException.class, AccountDomainException.class,
-		LiquidityHoldException.Validation.class})
+		LiquidityHoldException.Validation.class, AccountArchiveException.Validation.class})
 	ProblemDetail validation(HttpServletRequest request, HttpServletResponse response) {
 		return base(HttpStatus.BAD_REQUEST, "请求校验失败", "VALIDATION_ERROR", request, response);
 	}
@@ -58,6 +59,28 @@ public final class AccountApiExceptionHandler {
 
 	@ExceptionHandler(AccountPersistenceException.class)
 	ProblemDetail persistence(HttpServletRequest request, HttpServletResponse response) {
+		return base(HttpStatus.INTERNAL_SERVER_ERROR, "服务器处理请求失败", "INTERNAL_ERROR", request, response);
+	}
+
+	@ExceptionHandler(AccountArchiveException.AlreadyArchived.class)
+	ProblemDetail alreadyArchived(HttpServletRequest request, HttpServletResponse response) {
+		return base(HttpStatus.CONFLICT, "账户已经归档", "ACCOUNT_ALREADY_ARCHIVED", request, response);
+	}
+
+	@ExceptionHandler(AccountArchiveException.NonZeroBalanceConfirmationRequired.class)
+	ProblemDetail nonZeroBalanceConfirmationRequired(HttpServletRequest request, HttpServletResponse response) {
+		return base(
+			HttpStatus.UNPROCESSABLE_ENTITY,
+			"非零余额归档需要显式确认",
+			"NON_ZERO_BALANCE_CONFIRMATION_REQUIRED",
+			request,
+			response);
+	}
+
+	@ExceptionHandler({
+		AccountArchiveException.SafeReplayUnavailable.class,
+		AccountArchiveException.Persistence.class})
+	ProblemDetail archiveInternalError(HttpServletRequest request, HttpServletResponse response) {
 		return base(HttpStatus.INTERNAL_SERVER_ERROR, "服务器处理请求失败", "INTERNAL_ERROR", request, response);
 	}
 

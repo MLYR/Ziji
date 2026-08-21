@@ -24,6 +24,12 @@ public class PostgresAccountPostingReferencePort implements AccountPostingRefere
 		return accounts.findById(accountId).map(PostgresAccountPostingReferencePort::toReference);
 	}
 
+	@Override
+	public Optional<AccountPostingReference> findByIdForUpdate(UUID accountId) {
+		// Ledger 与归档共享 accounts 行锁，避免旧 ACTIVE 快照在归档提交后继续落账。
+		return accounts.findByIdForUpdate(accountId).map(PostgresAccountPostingReferencePort::toReference);
+	}
+
 	private static AccountPostingReference toReference(Account account) {
 		return new AccountPostingReference(
 			account.id(),

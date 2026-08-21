@@ -7,4 +7,9 @@ import java.util.UUID;
 public interface AccountPostingReferencePort {
 
 	Optional<AccountPostingReference> findById(UUID accountId);
+
+	/** 账务事实写入前必须锁定账户行；未实现锁语义的替身/适配器必须显式失败。 */
+	default Optional<AccountPostingReference> findByIdForUpdate(UUID accountId) {
+		throw new UnsupportedOperationException("账务账户锁定读取未实现。");
+	}
 }

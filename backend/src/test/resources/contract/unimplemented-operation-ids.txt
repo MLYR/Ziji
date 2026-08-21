@@ -1,5 +1,4 @@
 # ENG-API-004：仅保存尚未落地的稳定 operationId；实现 Controller 后必须从这里移除。
-archiveAccount
 getAccountBalance
 listAccountBalanceHistory
 listCategories

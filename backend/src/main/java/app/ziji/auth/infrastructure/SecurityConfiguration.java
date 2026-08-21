@@ -73,6 +73,7 @@ class SecurityConfiguration {
 				"/api/v1/accounts/*/liquidity-holds",
 				"/api/v1/accounts/*/liquidity-holds/*/revisions",
 				"/api/v1/accounts/*/liquidity-holds/*/release",
+				"/api/v1/accounts/*/archive",
 				"/api/v1/transactions",
 				"/api/v1/transactions/*/revisions",
 				"/api/v1/transactions/*/reversal",
@@ -143,6 +144,7 @@ class SecurityConfiguration {
 				|| "/api/v1/users/me/password-change".equals(path)
 				|| "/api/v1/sync/operations".equals(path)
 				|| "/api/v1/transactions".equals(path)
+				|| path.matches("/api/v1/accounts/[^/]+/archive")
 				|| path.matches("/api/v1/transactions/[^/]+/(revisions|reversal)")
 				|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds")
 				|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds/[^/]+/(revisions|release)")

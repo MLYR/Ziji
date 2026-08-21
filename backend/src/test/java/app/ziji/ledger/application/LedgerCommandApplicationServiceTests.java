@@ -416,6 +416,26 @@ class LedgerCommandApplicationServiceTests {
 	}
 
 	@Test
+	void revisePostedTransactionRejectsArchivedOriginalAccountBeforeWritingFacts() {
+		Fixture fixture = fixture();
+		fixture.accounts.accounts.put(ASSET_ACCOUNT_ID,
+			new AccountPostingReference(ASSET_ACCOUNT_ID, "ASSET", "BANK", "CNY", false));
+		Transaction original = postedExpense(UUID.randomUUID(), ASSET_LEDGER_ID, EXPENSE_LEDGER_ID, "50.00");
+		fixture.store.posted = new LedgerTransactionStore.PostedTransactionSnapshot(
+			original, 1, false, null, "原商户", "原备注", EXPENSE_CATEGORY_ID, new NoTransactionDetails());
+
+		assertThrows(LedgerCommandValidationException.class, () -> fixture.service.revisePostedTransaction(
+			new RevisePostedTransactionCommand(
+				USER_ID, original.transactionId(), 1, BUSINESS_AT.plusSeconds(60), BUSINESS_DATE,
+				"Asia/Shanghai", null, "修订商户", "修订金额", "归档后禁止修改",
+				new TransactionRevisionDetails.Expense(
+					money("60.00", CurrencyCode.CNY), EXPENSE_LEDGER_ID, EXPENSE_CATEGORY_ID))));
+		assertFalse(fixture.store.persisted);
+		assertTrue(fixture.audits.entries.isEmpty());
+		assertTrue(fixture.outbox.events.isEmpty());
+	}
+
+	@Test
 	void voidPostedTransactionCreatesOnlyReversalAndRejectsStaleUnauthorizedOrDependentOrigins() {
 		Fixture fixture = fixture();
 		Transaction original = postedExpense(UUID.randomUUID(), ASSET_LEDGER_ID, EXPENSE_LEDGER_ID, "50.00");
@@ -624,6 +644,12 @@ class LedgerCommandApplicationServiceTests {
 		@Override
 		public Optional<AccountPostingReference> findById(UUID accountId) {
 			return Optional.ofNullable(accounts.get(accountId));
+		}
+
+		@Override
+		public Optional<AccountPostingReference> findByIdForUpdate(UUID accountId) {
+			// 单元替身没有数据库锁，但显式实现端口以保持生产锁边界不可静默降级。
+			return findById(accountId);
 		}
 	}
 
