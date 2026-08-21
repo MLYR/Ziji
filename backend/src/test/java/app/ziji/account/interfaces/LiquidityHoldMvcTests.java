@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import app.ziji.account.application.AccountNotVisibleException;
 import app.ziji.account.application.LiquidityHoldCommand;
 import app.ziji.account.application.LiquidityHoldException;
 import app.ziji.account.application.LiquidityHoldPage;
@@ -28,6 +29,7 @@ import app.ziji.user.application.CurrentUserIdResolver;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -44,6 +46,7 @@ class LiquidityHoldMvcTests {
 	private static final UUID USER_ID = UUID.fromString("00000000-0000-0000-0000-000000000801");
 	private static final UUID ACCOUNT_ID = UUID.fromString("00000000-0000-0000-0000-000000000802");
 	private static final UUID HOLD_ID = UUID.fromString("00000000-0000-0000-0000-000000000803");
+	private static final UUID REVISION_ID = UUID.fromString("00000000-0000-0000-0000-000000000804");
 	private static final Instant NOW = Instant.parse("2026-08-15T01:02:03Z");
 
 	@Test
@@ -149,6 +152,24 @@ class LiquidityHoldMvcTests {
 	}
 
 	@Test
+	void controllerPassesExplicitArchivedSemanticsToTheMandatoryMutationPreflight() throws Exception {
+		Fixture fixture = fixture(new FakeUseCase());
+
+		fixture.mvc().perform(post(path() + "/{holdId}/revisions", HOLD_ID)
+				.principal(principal()).header("Idempotency-Key", "explicit-revise-preflight")
+				.header("If-Match", "\"1\"").contentType(MediaType.APPLICATION_JSON)
+				.content(commandJson("12.50", "CNY")))
+			.andExpect(status().isCreated());
+		assertEquals(Boolean.FALSE, fixture.useCase().lastAllowArchivedAccount);
+
+		fixture.mvc().perform(post(path() + "/{holdId}/release", HOLD_ID)
+				.principal(principal()).header("Idempotency-Key", "explicit-release-preflight")
+				.header("If-Match", "\"1\""))
+			.andExpect(status().isOk());
+		assertEquals(Boolean.TRUE, fixture.useCase().lastAllowArchivedAccount);
+	}
+
+	@Test
 	void reviseAndReleaseRejectMalformedIfMatchBeforeIdempotency() throws Exception {
 		Fixture fixture = fixture(new FakeUseCase());
 		for (String value : List.of("W/\"1\"", "*", "1", "\"0\"", "\"-1\"", "\"abc\"", "\"2147483648\"")) {
@@ -168,21 +189,46 @@ class LiquidityHoldMvcTests {
 	}
 
 	@Test
-	void staleMutationsMustBeRejectedBeforeIdempotencyAcquisition() throws Exception {
-		Fixture fixture = fixture(new FakeUseCase().staleRevision());
+	void staleMutationIsStoredAndSafelyReplayedWithoutReexecutingTheWrite() throws Exception {
+		Fixture fixture = fixture(new FakeUseCase().staleMutation());
+		String key = "stale-revision-key-001";
 
 		fixture.mvc().perform(post(path() + "/{holdId}/revisions", HOLD_ID)
 				.principal(principal())
-				.header("Idempotency-Key", "stale-revision-key-001")
+				.header("Idempotency-Key", key)
 				.header("If-Match", "\"2\"")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(commandJson("12.50", "CNY")))
 			.andExpect(status().isConflict())
 			.andExpect(header().doesNotExist("ETag"))
-			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(1))
+			.andExpect(jsonPath("$.versionConflict.currentEtag").value("\"1\""))
+			.andExpect(jsonPath("$.versionConflict.resourceLocation").value(path()));
 
-		assertEquals(0, fixture.idempotency().acquisitions);
-		assertEquals(0, fixture.idempotency().committedRecords.size());
+		fixture.mvc().perform(post(path() + "/{holdId}/revisions", HOLD_ID)
+				.principal(principal())
+				.header("Idempotency-Key", key)
+				.header("If-Match", "\"2\"")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(commandJson("12.50", "CNY")))
+			.andExpect(status().isConflict())
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(1));
+
+		fixture.mvc().perform(post(path() + "/{holdId}/revisions", HOLD_ID)
+				.principal(principal())
+				.header("Idempotency-Key", key)
+				.header("If-Match", "\"2\"")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(commandJson("13.50", "CNY")))
+			.andExpect(status().isConflict())
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
+
+		assertEquals(1, fixture.idempotency().acquisitions);
+		assertEquals(1, fixture.idempotency().committedRecords.size());
+		assertEquals(1, fixture.useCase().reviseCalls);
 
 		fixture.mvc().perform(post(path() + "/{holdId}/release", HOLD_ID)
 				.principal(principal())
@@ -190,10 +236,12 @@ class LiquidityHoldMvcTests {
 				.header("If-Match", "\"2\""))
 			.andExpect(status().isConflict())
 			.andExpect(header().doesNotExist("ETag"))
-			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(1));
 
-		assertEquals(0, fixture.idempotency().acquisitions);
-		assertEquals(0, fixture.idempotency().committedRecords.size());
+		assertEquals(2, fixture.idempotency().acquisitions);
+		assertEquals(2, fixture.idempotency().committedRecords.size());
+		assertEquals(1, fixture.useCase().releaseCalls);
 	}
 
 	@Test
@@ -269,20 +317,31 @@ class LiquidityHoldMvcTests {
 	}
 
 	@Test
-	void currencyMismatchIsBusinessRuleAndDoesNotCommitIdempotency() throws Exception {
+	void currencyMismatchIsBusinessRuleAndIsSafelyReplayedFromFinalIdempotency() throws Exception {
 		Fixture fixture = fixture(new FakeUseCase().rejectNonCnyCurrency());
+		String key = "mismatch-key-0001";
+		String body = commandJson("10.00", "USD");
 
 		fixture.mvc().perform(post(path())
 				.principal(principal())
-				.header("Idempotency-Key", "mismatch-key-0001")
+				.header("Idempotency-Key", key)
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(commandJson("10.00", "USD")))
+				.content(body))
+			.andExpect(status().isUnprocessableEntity())
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(jsonPath("$.code").value("BUSINESS_RULE_VIOLATION"));
+		fixture.mvc().perform(post(path())
+				.principal(principal())
+				.header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(body))
 			.andExpect(status().isUnprocessableEntity())
 			.andExpect(header().doesNotExist("ETag"))
 			.andExpect(jsonPath("$.code").value("BUSINESS_RULE_VIOLATION"));
 
 		assertEquals(1, fixture.idempotency().acquisitions);
-		assertEquals(0, fixture.idempotency().committedRecords.size());
+		assertEquals(1, fixture.idempotency().committedRecords.size());
+		assertEquals(1, fixture.useCase().createCalls);
 	}
 
 	@Test
@@ -301,6 +360,202 @@ class LiquidityHoldMvcTests {
 			.andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
 
 		assertEquals(1, fixture.idempotency().committedRecords.size());
+	}
+
+	@Test
+	void storedProblemsOnlyReplayWhitelistedFinalOrRetryableResponses() throws Exception {
+		assertStoredProblem(
+			IdempotencyResponse.failedFinal(422, "BUSINESS_RULE_VIOLATION"), 422, "BUSINESS_RULE_VIOLATION", null);
+		assertStoredProblem(
+			IdempotencyResponse.failedRetryable(503, "INTERNAL_ERROR"), 503, "INTERNAL_ERROR", "5");
+		assertStoredProblem(
+			IdempotencyResponse.failedFinal(400, "BUSINESS_RULE_VIOLATION"), 500, "INTERNAL_ERROR", null);
+		assertStoredProblem(IdempotencyResponse.failedFinal(400, "VALIDATION_ERROR"), 500, "INTERNAL_ERROR", null);
+		assertStoredProblem(IdempotencyResponse.failedFinal(403, "PERMISSION_DENIED"), 500, "INTERNAL_ERROR", null);
+		assertStoredProblem(IdempotencyResponse.failedFinal(404, "RESOURCE_NOT_FOUND"), 500, "INTERNAL_ERROR", null);
+		assertStoredProblem(IdempotencyResponse.failedFinal(409, "IDEMPOTENCY_KEY_REUSED"), 500, "INTERNAL_ERROR", null);
+	}
+
+	@Test
+	void revokedAccessAfterInspectionDoesNotRenderStoredTerminalSummary() throws Exception {
+		Fixture fixture = fixture(new FakeUseCase());
+		String key = "revoked-after-inspection-key";
+		String body = commandJson("10.00", "CNY");
+
+		fixture.mvc().perform(post(path()).principal(principal()).header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isCreated());
+		fixture.idempotency().replaceCompletedResponse(key, IdempotencyResponse.failedFinalVersionConflict(409, 1, path()));
+		fixture.useCase().denyAtAccessCall(3);
+
+		fixture.mvc().perform(post(path()).principal(principal()).header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isNotFound())
+			.andExpect(header().doesNotExist("Retry-After"))
+			.andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"))
+			.andExpect(jsonPath("$.versionConflict").doesNotExist());
+
+		assertEquals(0, fixture.useCase().replayCalls);
+	}
+
+	@Test
+	void revokedAccessAfterInspectionDoesNotRevealKeyReuseOrInProgress() throws Exception {
+		Fixture inProgress = fixture(new FakeUseCase().denyAtAccessCall(2));
+		inProgress.idempotency().forceInspection("revoked-in-progress-key", new IdempotencyRecordStore.Acquisition.InProgress());
+		inProgress.mvc().perform(post(path()).principal(principal())
+				.header("Idempotency-Key", "revoked-in-progress-key").contentType(MediaType.APPLICATION_JSON)
+				.content(commandJson("10.00", "CNY")))
+			.andExpect(status().isNotFound())
+			.andExpect(header().doesNotExist("Retry-After"))
+			.andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+
+		Fixture reused = fixture(new FakeUseCase());
+		String key = "revoked-key-reused-key";
+		reused.mvc().perform(post(path()).principal(principal()).header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson("10.00", "CNY")))
+			.andExpect(status().isCreated());
+		reused.useCase().denyAtAccessCall(3);
+		reused.mvc().perform(post(path()).principal(principal()).header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson("11.00", "CNY")))
+			.andExpect(status().isNotFound())
+			.andExpect(header().doesNotExist("Retry-After"))
+			.andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+	}
+
+	@Test
+	void revokedAccessAfterEmptyInspectionDoesNotRevealAcquireDiscoveredStates() throws Exception {
+		Fixture replayedCreate = fixture(new FakeUseCase().denyAtAccessCall(2));
+		replayedCreate.idempotency().forceAcquisition("empty-then-replay-key",
+			new IdempotencyRecordStore.Acquisition.Replay(IdempotencyResponse.succeededResource(
+				201, "LIQUIDITY_HOLD", HOLD_ID,
+				new IdempotencyResponse.ResourceReference(path(), "\"1\"", 1L))));
+		assertRevokedAfterEmptyInspection(replayedCreate,
+			post(path()).principal(principal()).header("Idempotency-Key", "empty-then-replay-key")
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson("10.00", "CNY")));
+		assertEquals(0, replayedCreate.useCase().replayCalls);
+
+		Fixture keyReusedRevision = fixture(new FakeUseCase().denyAtAccessCall(2));
+		keyReusedRevision.idempotency().forceAcquisition("empty-then-key-reused",
+			new IdempotencyRecordStore.Acquisition.KeyReused());
+		assertRevokedAfterEmptyInspection(keyReusedRevision,
+			post(path() + "/{holdId}/revisions", HOLD_ID).principal(principal())
+				.header("Idempotency-Key", "empty-then-key-reused").header("If-Match", "\"1\"")
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson("10.00", "CNY")));
+		assertEquals(0, keyReusedRevision.useCase().reviseCalls);
+
+		Fixture inProgressRelease = fixture(new FakeUseCase().denyAtAccessCall(2));
+		inProgressRelease.idempotency().forceAcquisition("empty-then-in-progress",
+			new IdempotencyRecordStore.Acquisition.InProgress());
+		assertRevokedAfterEmptyInspection(inProgressRelease,
+			post(path() + "/{holdId}/release", HOLD_ID).principal(principal())
+				.header("Idempotency-Key", "empty-then-in-progress").header("If-Match", "\"1\""));
+		assertEquals(0, inProgressRelease.useCase().releaseCalls);
+
+		Fixture unavailableCreate = fixture(new FakeUseCase().denyAtAccessCall(2));
+		unavailableCreate.idempotency().forceAcquisition("empty-then-unavailable",
+			new IdempotencyRecordStore.Acquisition.SafeReplayUnavailable());
+		assertRevokedAfterEmptyInspection(unavailableCreate,
+			post(path()).principal(principal()).header("Idempotency-Key", "empty-then-unavailable")
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson("10.00", "CNY")));
+
+		Fixture versionConflictRevision = fixture(new FakeUseCase().denyAtAccessCall(2));
+		versionConflictRevision.idempotency().forceAcquisition("empty-then-version-conflict",
+			new IdempotencyRecordStore.Acquisition.Replay(
+				IdempotencyResponse.failedFinalVersionConflict(409, 2, path())));
+		assertRevokedAfterEmptyInspection(versionConflictRevision,
+			post(path() + "/{holdId}/revisions", HOLD_ID).principal(principal())
+				.header("Idempotency-Key", "empty-then-version-conflict").header("If-Match", "\"1\"")
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson("10.00", "CNY")));
+	}
+
+	@Test
+	void mutationReplaysValidateTheirOperationSpecificReferences() throws Exception {
+		Fixture revise = fixture(new FakeUseCase());
+		String reviseKey = "valid-revision-replay-key";
+		for (int attempt = 0; attempt < 2; attempt++) {
+			revise.mvc().perform(post(path() + "/{holdId}/revisions", HOLD_ID).principal(principal())
+					.header("Idempotency-Key", reviseKey).header("If-Match", "\"1\"")
+					.contentType(MediaType.APPLICATION_JSON).content(commandJson("10.00", "CNY")))
+				.andExpect(status().isCreated())
+				.andExpect(header().string("ETag", "\"1\""))
+				.andExpect(jsonPath("$.data.id").value(REVISION_ID.toString()));
+		}
+		assertEquals(1, revise.useCase().replayCalls);
+
+		Fixture release = fixture(new FakeUseCase());
+		String releaseKey = "valid-release-replay-key";
+		for (int attempt = 0; attempt < 2; attempt++) {
+			release.mvc().perform(post(path() + "/{holdId}/release", HOLD_ID).principal(principal())
+					.header("Idempotency-Key", releaseKey).header("If-Match", "\"1\""))
+				.andExpect(status().isOk())
+				.andExpect(header().string("ETag", "\"2\""))
+				.andExpect(jsonPath("$.data.id").value(HOLD_ID.toString()))
+				.andExpect(jsonPath("$.data.status").value("RELEASED"));
+		}
+		assertEquals(1, release.useCase().replayCalls);
+	}
+
+	@Test
+	void resourceReferencesMustMatchTheirOperationBeforeReplay() throws Exception {
+		assertMalformedCreateReference(
+			IdempotencyResponse.succeededResource(200, "LIQUIDITY_HOLD", HOLD_ID,
+				new IdempotencyResponse.ResourceReference(path(), "\"1\"", 1L)));
+		assertMalformedCreateReference(
+			IdempotencyResponse.succeededResource(201, "OTHER_RESOURCE", HOLD_ID,
+				new IdempotencyResponse.ResourceReference(path(), "\"1\"", 1L)));
+
+		Fixture revise = fixture(new FakeUseCase());
+		String reviseKey = "bad-revision-reference-key";
+		revise.mvc().perform(post(path() + "/{holdId}/revisions", HOLD_ID).principal(principal())
+				.header("Idempotency-Key", reviseKey).header("If-Match", "\"1\"")
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson("10.00", "CNY")))
+			.andExpect(status().isCreated());
+		revise.idempotency().replaceCompletedResponse(reviseKey,
+			IdempotencyResponse.succeededResource(201, "LIQUIDITY_HOLD", REVISION_ID,
+				new IdempotencyResponse.ResourceReference(path(), "\"1\"", 1L)));
+		revise.mvc().perform(post(path() + "/{holdId}/revisions", HOLD_ID).principal(principal())
+				.header("Idempotency-Key", reviseKey).header("If-Match", "\"1\"")
+				.contentType(MediaType.APPLICATION_JSON).content(commandJson("10.00", "CNY")))
+			.andExpect(status().isInternalServerError())
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
+		assertEquals(0, revise.useCase().replayCalls);
+
+		Fixture release = fixture(new FakeUseCase());
+		String releaseKey = "bad-release-reference-key";
+		release.mvc().perform(post(path() + "/{holdId}/release", HOLD_ID).principal(principal())
+				.header("Idempotency-Key", releaseKey).header("If-Match", "\"1\""))
+			.andExpect(status().isOk());
+		release.idempotency().replaceCompletedResponse(releaseKey,
+			IdempotencyResponse.succeededResource(200, "LIQUIDITY_HOLD", REVISION_ID,
+				new IdempotencyResponse.ResourceReference(path() + "/" + HOLD_ID + "/release", "\"2\"", 2L)));
+		release.mvc().perform(post(path() + "/{holdId}/release", HOLD_ID).principal(principal())
+				.header("Idempotency-Key", releaseKey).header("If-Match", "\"1\""))
+			.andExpect(status().isInternalServerError())
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
+		assertEquals(0, release.useCase().replayCalls);
+	}
+
+	@Test
+	void impossibleInspectionStatesFailClosedWhileInProgressKeepsRetryAfter() throws Exception {
+		Fixture inProgress = fixture(new FakeUseCase());
+		inProgress.idempotency().forceInspection("inspection-progress-key", new IdempotencyRecordStore.Acquisition.InProgress());
+		inProgress.mvc().perform(post(path()).principal(principal())
+				.header("Idempotency-Key", "inspection-progress-key").contentType(MediaType.APPLICATION_JSON)
+				.content(commandJson("10.00", "CNY")))
+			.andExpect(status().isConflict())
+			.andExpect(header().string("Retry-After", "5"))
+			.andExpect(jsonPath("$.code").value("IDEMPOTENCY_REQUEST_IN_PROGRESS"));
+
+		Fixture unavailable = fixture(new FakeUseCase());
+		unavailable.idempotency().forceInspection("inspection-unavailable-key", new IdempotencyRecordStore.Acquisition.SafeReplayUnavailable());
+		unavailable.mvc().perform(post(path()).principal(principal())
+				.header("Idempotency-Key", "inspection-unavailable-key").contentType(MediaType.APPLICATION_JSON)
+				.content(commandJson("10.00", "CNY")))
+			.andExpect(status().isInternalServerError())
+			.andExpect(header().doesNotExist("Retry-After"))
+			.andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
 	}
 
 	@Test
@@ -387,6 +642,61 @@ class LiquidityHoldMvcTests {
 			.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
 	}
 
+	private static void assertStoredProblem(
+		IdempotencyResponse stored,
+		int expectedStatus,
+		String expectedCode,
+		String retryAfter) throws Exception {
+		Fixture fixture = fixture(new FakeUseCase());
+		String key = "stored-problem-key-" + UUID.randomUUID();
+		String body = commandJson("10.00", "CNY");
+		fixture.mvc().perform(post(path()).principal(principal()).header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isCreated());
+		fixture.idempotency().replaceCompletedResponse(key, stored);
+		var result = fixture.mvc().perform(post(path()).principal(principal()).header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().is(expectedStatus))
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(jsonPath("$.type").exists())
+			.andExpect(jsonPath("$.title").exists())
+			.andExpect(jsonPath("$.status").value(expectedStatus))
+			.andExpect(jsonPath("$.code").value(expectedCode))
+			.andExpect(jsonPath("$.requestId").exists())
+			.andReturn();
+		if (retryAfter == null) {
+			assertEquals(null, result.getResponse().getHeader("Retry-After"));
+		} else {
+			assertEquals(retryAfter, result.getResponse().getHeader("Retry-After"));
+		}
+	}
+
+	private static void assertMalformedCreateReference(IdempotencyResponse stored) throws Exception {
+		Fixture fixture = fixture(new FakeUseCase());
+		String key = "bad-create-reference-" + UUID.randomUUID();
+		String body = commandJson("10.00", "CNY");
+		fixture.mvc().perform(post(path()).principal(principal()).header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isCreated());
+		fixture.idempotency().replaceCompletedResponse(key, stored);
+		fixture.mvc().perform(post(path()).principal(principal()).header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isInternalServerError())
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
+		assertEquals(0, fixture.useCase().replayCalls);
+	}
+
+	private static void assertRevokedAfterEmptyInspection(Fixture fixture, MockHttpServletRequestBuilder request) throws Exception {
+		fixture.mvc().perform(request)
+			.andExpect(status().isNotFound())
+			.andExpect(header().doesNotExist("ETag"))
+			.andExpect(header().doesNotExist("Retry-After"))
+			.andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"))
+			.andExpect(jsonPath("$.versionConflict").doesNotExist());
+		assertEquals(1, fixture.idempotency().acquisitions);
+	}
+
 	private static java.security.Principal principal() {
 		return () -> USER_ID.toString();
 	}
@@ -396,12 +706,17 @@ class LiquidityHoldMvcTests {
 	private static final class FakeUseCase implements LiquidityHoldUseCase {
 		private LiquidityHoldCommand lastCommand;
 		private boolean rejectNonCnyCurrency;
-		private boolean staleRevision;
+		private boolean staleMutation;
 		private boolean futurePending;
 		private boolean safeReplayUnavailable;
 		private int replayVersion = 1;
+		private int accessCalls;
+		private int denyAtAccessCall;
 		private int createCalls;
+		private int reviseCalls;
+		private int releaseCalls;
 		private int replayCalls;
+		private Boolean lastAllowArchivedAccount;
 
 		private FakeUseCase rejectNonCnyCurrency() {
 			rejectNonCnyCurrency = true;
@@ -413,8 +728,8 @@ class LiquidityHoldMvcTests {
 			return this;
 		}
 
-		private FakeUseCase staleRevision() {
-			staleRevision = true;
+		private FakeUseCase staleMutation() {
+			staleMutation = true;
 			return this;
 		}
 
@@ -428,6 +743,11 @@ class LiquidityHoldMvcTests {
 			return this;
 		}
 
+		private FakeUseCase denyAtAccessCall(int value) {
+			denyAtAccessCall = value;
+			return this;
+		}
+
 		@Override
 		public LiquidityHoldPage list(UUID userId, UUID accountId, Integer requestedLimit, String cursor) {
 			return new LiquidityHoldPage(List.of(hold(AccountCurrency.CNY)), null, false);
@@ -437,10 +757,23 @@ class LiquidityHoldMvcTests {
 		public void preflightCreate(UUID userId, UUID accountId) {}
 
 		@Override
-		public void preflightMutation(UUID userId, UUID accountId, UUID holdId, int expectedVersion) {
-			if (staleRevision) {
-				throw new LiquidityHoldException.VersionConflict(hold(AccountCurrency.CNY));
-			}
+		public void preflightCreateAccess(UUID userId, UUID accountId) {
+			denyWhenConfigured();
+		}
+
+		@Override
+		public void preflightMutationAccess(UUID userId, UUID accountId, UUID holdId, int expectedVersion) {
+			denyWhenConfigured();
+		}
+
+		@Override
+		public void preflightMutation(
+			UUID userId,
+			UUID accountId,
+			UUID holdId,
+			int expectedVersion,
+			boolean allowArchivedAccount) {
+			lastAllowArchivedAccount = allowArchivedAccount;
 		}
 
 		@Override
@@ -456,13 +789,21 @@ class LiquidityHoldMvcTests {
 		@Override
 		public LiquidityHold revise(UUID userId, UUID accountId, UUID holdId, int expectedVersion,
 			LiquidityHoldCommand command, String requestId) {
+			reviseCalls++;
+			if (staleMutation) {
+				throw new LiquidityHoldException.VersionConflict(hold(AccountCurrency.CNY));
+			}
 			lastCommand = command;
-			return hold(command.currency());
+			return revision(command.currency());
 		}
 
 		@Override
 		public LiquidityHold release(UUID userId, UUID accountId, UUID holdId, int expectedVersion, String requestId) {
-			return hold(AccountCurrency.CNY);
+			releaseCalls++;
+			if (staleMutation) {
+				throw new LiquidityHoldException.VersionConflict(hold(AccountCurrency.CNY));
+			}
+			return releasedHold(AccountCurrency.CNY);
 		}
 
 		@Override
@@ -471,7 +812,20 @@ class LiquidityHoldMvcTests {
 			if (safeReplayUnavailable) {
 				throw new LiquidityHoldException.SafeReplayUnavailable();
 			}
+			if (holdId.equals(REVISION_ID)) {
+				return revision(AccountCurrency.CNY);
+			}
+			if (expectedVersion == 2) {
+				return releasedHold(AccountCurrency.CNY);
+			}
 			return hold(AccountCurrency.CNY, replayVersion);
+		}
+
+		private void denyWhenConfigured() {
+			accessCalls++;
+			if (accessCalls == denyAtAccessCall) {
+				throw new AccountNotVisibleException();
+			}
 		}
 	}
 
@@ -491,17 +845,50 @@ class LiquidityHoldMvcTests {
 			app.ziji.account.domain.LiquidityHoldSource.MANUAL, "人工冻结", null, null, USER_ID, NOW, NOW, 1);
 	}
 
+	private static LiquidityHold revision(AccountCurrency currency) {
+		return LiquidityHold.restore(REVISION_ID, ACCOUNT_ID, HOLD_ID, HOLD_ID, 2, LiquidityHoldType.FROZEN,
+			new BigDecimal("10.00"), currency, NOW.minusSeconds(1), null, null,
+			app.ziji.account.domain.LiquidityHoldSource.MANUAL, "人工冻结", null, null, USER_ID, NOW, NOW, 1);
+	}
+
+	private static LiquidityHold releasedHold(AccountCurrency currency) {
+		return LiquidityHold.restore(HOLD_ID, ACCOUNT_ID, HOLD_ID, null, 1, LiquidityHoldType.FROZEN,
+			new BigDecimal("10.00"), currency, NOW.minusSeconds(1), null, NOW,
+			app.ziji.account.domain.LiquidityHoldSource.MANUAL, "人工冻结", NOW,
+			app.ziji.account.domain.LiquidityHoldEndReason.RELEASED, USER_ID, NOW, NOW, 2);
+	}
+
 	private static final class MemoryIdempotencyStore implements IdempotencyRecordStore {
 		private final List<IdempotencyRequest> requests = new ArrayList<>();
 		private final List<IdempotencyResponse> committedRecords = new ArrayList<>();
 		private final Map<UUID, IdempotencyRequest> acquired = new HashMap<>();
 		private final Map<String, CompletedRecord> completed = new HashMap<>();
+		private final Map<String, Acquisition> forcedInspections = new HashMap<>();
+		private final Map<String, Acquisition> forcedAcquisitions = new HashMap<>();
 		private int acquisitions;
+
+		@Override
+		public java.util.Optional<Acquisition> inspect(IdempotencyRequest request, Instant now) {
+			Acquisition forced = forcedInspections.get(request.idempotencyKey());
+			if (forced != null) {
+				return java.util.Optional.of(forced);
+			}
+			CompletedRecord prior = completed.get(request.idempotencyKey());
+			if (prior == null) {
+				return java.util.Optional.empty();
+			}
+			return java.util.Optional.of(prior.request().requestHash().equals(request.requestHash())
+				? new Acquisition.Replay(prior.response()) : new Acquisition.KeyReused());
+		}
 
 		@Override
 		public Acquisition acquire(IdempotencyRequest request, Instant now) {
 			acquisitions++;
 			requests.add(request);
+			Acquisition forced = forcedAcquisitions.get(request.idempotencyKey());
+			if (forced != null) {
+				return forced;
+			}
 			CompletedRecord prior = completed.get(request.idempotencyKey());
 			if (prior != null) {
 				return prior.request().requestHash().equals(request.requestHash())
@@ -526,6 +913,22 @@ class LiquidityHoldMvcTests {
 		@Override
 		public int deleteExpiredTerminalRecords(Instant now, int maximumRecords) {
 			return 0;
+		}
+
+		private void replaceCompletedResponse(String key, IdempotencyResponse response) {
+			CompletedRecord prior = completed.get(key);
+			if (prior == null) {
+				throw new IllegalStateException("测试幂等终态不存在");
+			}
+			completed.put(key, new CompletedRecord(prior.request(), response));
+		}
+
+		private void forceInspection(String key, Acquisition acquisition) {
+			forcedInspections.put(key, acquisition);
+		}
+
+		private void forceAcquisition(String key, Acquisition acquisition) {
+			forcedAcquisitions.put(key, acquisition);
 		}
 
 		private record CompletedRecord(IdempotencyRequest request, IdempotencyResponse response) {}

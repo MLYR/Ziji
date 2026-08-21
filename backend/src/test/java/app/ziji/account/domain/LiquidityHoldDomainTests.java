@@ -32,7 +32,30 @@ class LiquidityHoldDomainTests {
 		assertThrows(AccountDomainException.class, () -> root(LiquidityHoldType.FROZEN, BigDecimal.ZERO, AccountCurrency.CNY, NOW, null, "r"));
 		assertThrows(AccountDomainException.class, () -> root(LiquidityHoldType.FROZEN, new BigDecimal("1.001"), AccountCurrency.CNY, NOW, null, "r"));
 		assertThrows(AccountDomainException.class, () -> root(LiquidityHoldType.FROZEN, new BigDecimal("1.1"), AccountCurrency.JPY, NOW, null, "r"));
+		assertThrows(AccountDomainException.class, () -> root(LiquidityHoldType.FROZEN,
+			new BigDecimal("10000000000000000000000"), AccountCurrency.CNY, NOW, null, "r"));
 		assertEquals(new BigDecimal("1.00"), root(LiquidityHoldType.FROZEN, new BigDecimal("1.00"), AccountCurrency.USD, NOW, null, "r").amount());
+	}
+
+	@Test
+	void appliesTheSameIntegerAndMinorUnitBoundaryToEverySupportedCurrency() {
+		BigDecimal maximumTwoDecimal = new BigDecimal("9999999999999999999999.99");
+		BigDecimal maximumInteger = new BigDecimal("9999999999999999999999");
+		for (AccountCurrency currency : java.util.List.of(
+			AccountCurrency.CNY, AccountCurrency.USD, AccountCurrency.HKD, AccountCurrency.EUR)) {
+			assertEquals(maximumTwoDecimal, root(LiquidityHoldType.FROZEN, maximumTwoDecimal, currency, NOW, null, "r").amount());
+			assertThrows(AccountDomainException.class,
+				() -> root(LiquidityHoldType.FROZEN, new BigDecimal("1.001"), currency, NOW, null, "r"));
+		}
+		assertEquals(maximumInteger,
+			root(LiquidityHoldType.FROZEN, maximumInteger, AccountCurrency.JPY, NOW, null, "r").amount());
+		// JPY 禁止非零最小单位；尾随零仍是同一个整数金额，不能错误拒绝。
+		assertEquals(new BigDecimal("1.00"),
+			root(LiquidityHoldType.FROZEN, new BigDecimal("1.00"), AccountCurrency.JPY, NOW, null, "r").amount());
+		assertEquals(new BigDecimal("1E+21"),
+			root(LiquidityHoldType.FROZEN, new BigDecimal("1E+21"), AccountCurrency.CNY, NOW, null, "r").amount());
+		assertThrows(AccountDomainException.class,
+			() -> root(LiquidityHoldType.FROZEN, new BigDecimal("1E+22"), AccountCurrency.CNY, NOW, null, "r"));
 	}
 
 	@Test
@@ -69,6 +92,22 @@ class LiquidityHoldDomainTests {
 		assertThrows(AccountDomainException.class, () -> root(LiquidityHoldType.FROZEN, new BigDecimal("1"), AccountCurrency.JPY, NOW, NOW, "r"));
 		LiquidityHold expired = root(LiquidityHoldType.FROZEN, new BigDecimal("1"), AccountCurrency.JPY, NOW.minusSeconds(10), NOW, "r");
 		assertFalse(expired.isOperableAt(NOW));
+		assertThrows(AccountDomainException.class, () -> LiquidityHold.restore(
+			expired.id(), expired.accountId(), expired.rootHoldId(), null, 1, expired.type(), expired.amount(),
+			expired.currency(), expired.effectiveAt(), expired.expiresAt(), null, expired.source(), expired.note(),
+			NOW, LiquidityHoldEndReason.RELEASED, expired.createdBy(), expired.createdAt(), NOW, 2));
+		assertThrows(AccountDomainException.class, () -> LiquidityHold.restore(
+			expired.id(), expired.accountId(), expired.rootHoldId(), null, 1, expired.type(), expired.amount(),
+			expired.currency(), expired.effectiveAt(), expired.expiresAt(), NOW.minusSeconds(1), expired.source(), expired.note(),
+			NOW, LiquidityHoldEndReason.RELEASED, expired.createdBy(), expired.createdAt(), NOW, 2));
+		assertThrows(AccountDomainException.class, () -> LiquidityHold.restore(
+			expired.id(), expired.accountId(), expired.rootHoldId(), null, 1, expired.type(), expired.amount(),
+			expired.currency(), expired.effectiveAt(), expired.expiresAt(), NOW, expired.source(), expired.note(),
+			NOW, LiquidityHoldEndReason.SUPERSEDED, expired.createdBy(), expired.createdAt(), NOW, 2));
+		assertThrows(AccountDomainException.class, () -> LiquidityHold.restore(
+			expired.id(), expired.accountId(), expired.rootHoldId(), null, 1, expired.type(), expired.amount(),
+			expired.currency(), expired.effectiveAt(), expired.expiresAt(), NOW, expired.source(), expired.note(),
+			NOW, LiquidityHoldEndReason.EXPIRED, expired.createdBy(), expired.createdAt(), NOW, 2));
 	}
 
 	private static LiquidityHold root(

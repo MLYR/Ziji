@@ -44,6 +44,14 @@ public class PostgresAccountStore implements AccountStore, AccountQueryReadPort,
 		WHERE id = ?
 		""";
 
+	private static final String SELECT_BY_ID_FOR_UPDATE_SQL = """
+		SELECT id, account_class, account_type, name, institution, currency, note,
+			status, archived_at, created_by, created_at, updated_at, version
+		FROM accounts
+		WHERE id = ?
+		FOR UPDATE
+		""";
+
 	private static final String UPDATE_NAME_SQL = """
 		UPDATE accounts
 		SET name = ?, updated_at = CAST(? AS timestamptz), version = version + 1
@@ -114,6 +122,20 @@ public class PostgresAccountStore implements AccountStore, AccountQueryReadPort,
 		}
 		try {
 			Record record = dsl.resultQuery(SELECT_BY_ID_SQL, accountId).fetchOne();
+			return record == null ? Optional.empty() : Optional.of(toDomain(record));
+		} catch (DataAccessException | org.jooq.exception.DataAccessException exception) {
+			throw new AccountPersistenceException(exception);
+		}
+	}
+
+	@Override
+	public Optional<Account> findByIdForUpdate(UUID accountId) {
+		if (accountId == null) {
+			throw new AccountPersistenceException(new IllegalArgumentException("账户 ID 不能为空。"));
+		}
+		try {
+			// 账户归档必须与流动性事实写入按同一账户行串行化，锁取得后再读取状态。
+			Record record = dsl.resultQuery(SELECT_BY_ID_FOR_UPDATE_SQL, accountId).fetchOne();
 			return record == null ? Optional.empty() : Optional.of(toDomain(record));
 		} catch (DataAccessException | org.jooq.exception.DataAccessException exception) {
 			throw new AccountPersistenceException(exception);

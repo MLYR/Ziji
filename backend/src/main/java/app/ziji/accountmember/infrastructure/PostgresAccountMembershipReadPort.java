@@ -37,6 +37,18 @@ public class PostgresAccountMembershipReadPort implements AccountMembershipReadP
 		  AND s.valid_from <= CURRENT_TIMESTAMP
 		""";
 
+	private static final String FIND_ACTIVE_FOR_UPDATE_SQL = """
+		/* 写入事实前锁定当前成员行，使撤权与事实提交只能按一个顺序生效。 */
+		SELECT m.role, s.ratio
+		FROM account_members m
+		JOIN account_inclusion_settings s ON s.membership_id = m.id
+		WHERE m.user_id = ? AND m.account_id = ? AND m.status = 'ACTIVE' AND s.valid_to IS NULL
+		  AND m.joined_at <= CURRENT_TIMESTAMP
+		  AND (m.ended_at IS NULL OR m.ended_at > CURRENT_TIMESTAMP)
+		  AND s.valid_from <= CURRENT_TIMESTAMP
+		FOR UPDATE OF m
+		""";
+
 	private final JdbcTemplate jdbc;
 
 	public PostgresAccountMembershipReadPort(JdbcTemplate jdbc) {
@@ -63,6 +75,18 @@ public class PostgresAccountMembershipReadPort implements AccountMembershipReadP
 			return Optional.empty();
 		}
 		List<ActiveMembership> memberships = jdbc.query(FIND_ACTIVE_SQL, (result, rowNum) -> new ActiveMembership(
+			accountId,
+			result.getString("role"),
+			result.getBigDecimal("ratio")), userId, accountId);
+		return memberships.isEmpty() ? Optional.empty() : Optional.of(memberships.getFirst());
+	}
+
+	@Override
+	public Optional<ActiveMembership> findActiveMembershipForUpdate(UUID userId, UUID accountId) {
+		if (userId == null || accountId == null) {
+			return Optional.empty();
+		}
+		List<ActiveMembership> memberships = jdbc.query(FIND_ACTIVE_FOR_UPDATE_SQL, (result, rowNum) -> new ActiveMembership(
 			accountId,
 			result.getString("role"),
 			result.getBigDecimal("ratio")), userId, accountId);

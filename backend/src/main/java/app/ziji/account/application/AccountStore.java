@@ -14,4 +14,9 @@ public interface AccountStore {
 	void insert(Account account);
 
 	Optional<Account> findById(UUID accountId);
+
+	/** 写入流动性事实前必须锁定账户行；未实现锁语义的替身/适配器必须显式失败，不能静默降级。 */
+	default Optional<Account> findByIdForUpdate(UUID accountId) {
+		throw new UnsupportedOperationException("账户锁定读取未实现。");
+	}
 }

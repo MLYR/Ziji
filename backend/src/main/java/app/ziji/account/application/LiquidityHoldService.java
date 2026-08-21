@@ -5,9 +5,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.BiFunction;
 
 import app.ziji.account.domain.Account;
 import app.ziji.account.domain.AccountClass;
+import app.ziji.account.domain.AccountStatus;
 import app.ziji.account.domain.LiquidityHold;
 import app.ziji.accountmember.application.AccountMembershipReadPort;
 import app.ziji.accountmember.application.AccountMembershipReadPort.ActiveMembership;
@@ -61,43 +63,64 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 		if (limit < 1 || limit > MAXIMUM_LIMIT) {
 			throw new LiquidityHoldException.Validation();
 		}
-		requireReadable(userId, accountId);
-		LiquidityHoldKeysetPosition after = cursor == null ? null : cursors.decode(accountId, cursor);
-		if (after != null) {
-			LiquidityHold boundary = holds.findByAccountAndId(accountId, after.holdId())
-				.orElseThrow(LiquidityHoldException.Validation::new);
-			if (!boundary.createdAt().equals(after.createdAt())) {
-				throw new LiquidityHoldException.Validation();
+		return withCurrentAccountMembership(userId, accountId, (account, membership) -> {
+			LiquidityHoldKeysetPosition after = cursor == null ? null : cursors.decode(accountId, cursor);
+			if (after != null) {
+				LiquidityHold boundary = holds.findByAccountAndId(accountId, after.holdId())
+					.orElseThrow(LiquidityHoldException.Validation::new);
+				if (!boundary.createdAt().equals(after.createdAt())) {
+					throw new LiquidityHoldException.Validation();
+				}
 			}
-		}
-		List<LiquidityHold> rows = holds.listByAccount(accountId, after, limit + 1);
-		boolean hasMore = rows.size() > limit;
-		List<LiquidityHold> page = hasMore ? List.copyOf(rows.subList(0, limit)) : rows;
-		String nextCursor = hasMore ? cursors.encode(accountId,
-			new LiquidityHoldKeysetPosition(page.getLast().createdAt(), page.getLast().id())) : null;
-		return new LiquidityHoldPage(page, nextCursor, hasMore);
+			List<LiquidityHold> rows = holds.listByAccount(accountId, after, limit + 1);
+			boolean hasMore = rows.size() > limit;
+			List<LiquidityHold> page = hasMore ? List.copyOf(rows.subList(0, limit)) : rows;
+			String nextCursor = hasMore ? cursors.encode(accountId,
+				new LiquidityHoldKeysetPosition(page.getLast().createdAt(), page.getLast().id())) : null;
+			return new LiquidityHoldPage(page, nextCursor, hasMore);
+		});
+	}
+
+	@Override
+	public void preflightCreateAccess(UUID userId, UUID accountId) {
+		withCurrentAccountMembership(userId, accountId, (account, membership) -> {
+			requireWritable(membership);
+			return null;
+		});
 	}
 
 	@Override
 	public void preflightCreate(UUID userId, UUID accountId) {
-		requireIds(userId, accountId);
-		requireWritable(userId, accountId);
-		requireEligibleAccount(accountId);
+		// 账户生命周期业务规则必须留到幂等工作内，避免稳定 422 绕过 FAILED_FINAL。
+		preflightCreateAccess(userId, accountId);
 	}
 
 	@Override
-	public void preflightMutation(UUID userId, UUID accountId, UUID holdId, int expectedVersion) {
+	public void preflightMutationAccess(
+		UUID userId,
+		UUID accountId,
+		UUID holdId,
+		int expectedVersion) {
 		requireIds(userId, accountId);
 		if (holdId == null || expectedVersion < 1) {
 			throw new LiquidityHoldException.Validation();
 		}
-		requireWritable(userId, accountId);
-		LiquidityHold current = holds.findByAccountAndId(accountId, holdId)
-			.orElseThrow(AccountNotVisibleException::new);
-		if (current.version() != expectedVersion) {
-			// 版本冲突在幂等记录取得前返回，避免把失败写请求变成可重放事实。
-			throw new LiquidityHoldException.VersionConflict(current);
-		}
+		withCurrentAccountMembership(userId, accountId, (account, membership) -> {
+			holds.findByAccountAndId(accountId, holdId).orElseThrow(AccountNotVisibleException::new);
+			requireWritable(membership);
+			return null;
+		});
+	}
+
+	@Override
+	public void preflightMutation(
+		UUID userId,
+		UUID accountId,
+		UUID holdId,
+		int expectedVersion,
+		boolean allowArchivedAccount) {
+		// allowArchivedAccount 由真实写事务消费；新请求预检不能先消费可变账户资格。
+		preflightMutationAccess(userId, accountId, holdId, expectedVersion);
 	}
 
 	@Override
@@ -105,9 +128,14 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 		if (command == null) {
 			throw new LiquidityHoldException.Validation();
 		}
-		return transactions.required(() -> {
-			requireWritable(userId, accountId);
-			Account account = requireEligibleAccount(accountId);
+		// 创建的稳定业务失败也要回滚到幂等外层的 savepoint，才能提交 FAILED_FINAL 终态。
+		return transactions.nested(() -> {
+			// 统一按账户→membership→hold 加锁，避免归档/撤权与事实写入在校验后交错。
+			Account account = accounts.findByIdForUpdate(accountId).orElseThrow(AccountNotVisibleException::new);
+			ActiveMembership membership = memberships.findActiveMembershipForUpdate(userId, accountId)
+				.orElseThrow(AccountNotVisibleException::new);
+			requireWritable(membership);
+			requireEligibleAccount(account, false);
 			if (command.currency() != account.currency()) {
 				throw new LiquidityHoldException.BusinessRule();
 			}
@@ -116,7 +144,7 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 				ids.get(), accountId, command.type(), command.amount(), command.currency(), command.effectiveAt(),
 				command.expiresAt(), command.reason(), userId, now);
 			holds.insert(created);
-			auditLogs.append(audit(created, userId, requestId, "LIQUIDITY_HOLD_CREATED", null, null));
+			auditLogs.append(audit(created, userId, requestId, "LIQUIDITY_HOLD_CREATED", null, null, null));
 			return created;
 		});
 	}
@@ -132,10 +160,15 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 		if (holdId == null || expectedVersion < 1 || command == null) {
 			throw new LiquidityHoldException.Validation();
 		}
-		return transactions.required(() -> {
-			requireWritable(userId, accountId);
-			Account account = requireEligibleAccount(accountId);
+		// VERSION_CONFLICT 由外层统一幂等事务固化；savepoint 回滚不能污染该 FAILED_FINAL 终态。
+		return transactions.nested(() -> {
+			// 与创建保持账户→membership→hold 的锁顺序，撤权/归档先提交则本次写入重新发现不可见或不可写。
+			Account account = accounts.findByIdForUpdate(accountId).orElseThrow(AccountNotVisibleException::new);
+			ActiveMembership membership = memberships.findActiveMembershipForUpdate(userId, accountId)
+				.orElseThrow(AccountNotVisibleException::new);
 			LiquidityHold current = holds.lockByAccountAndId(accountId, holdId).orElseThrow(AccountNotVisibleException::new);
+			requireWritable(membership);
+			requireEligibleAccount(account, false);
 			if (current.version() != expectedVersion) {
 				throw new LiquidityHoldException.VersionConflict(current);
 			}
@@ -152,7 +185,8 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 				ids.get(), closed, command.type(), command.amount(), command.currency(), command.effectiveAt(),
 				command.expiresAt(), command.reason(), userId, now);
 			holds.insert(revised);
-			auditLogs.append(audit(revised, userId, requestId, "LIQUIDITY_HOLD_REVISED", closed, "SUPERSEDED"));
+			// 审计引用修订前的稳定版本；数据库关闭后的 version 递增值由 expectedVersion/新事实共同表达。
+			auditLogs.append(audit(revised, userId, requestId, "LIQUIDITY_HOLD_REVISED", current, "SUPERSEDED", expectedVersion));
 			return revised;
 		});
 	}
@@ -162,10 +196,15 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 		if (holdId == null || expectedVersion < 1) {
 			throw new LiquidityHoldException.Validation();
 		}
-		return transactions.required(() -> {
-			requireWritable(userId, accountId);
-			requireEligibleAccount(accountId);
+		// release 与修订共享冲突重放语义，预期冲突只回滚生命周期子事务。
+		return transactions.nested(() -> {
+			// 释放也必须先锁账户和当前 membership，不能因归档放行而绕过撤权串行化。
+			Account account = accounts.findByIdForUpdate(accountId).orElseThrow(AccountNotVisibleException::new);
+			ActiveMembership membership = memberships.findActiveMembershipForUpdate(userId, accountId)
+				.orElseThrow(AccountNotVisibleException::new);
 			LiquidityHold current = holds.lockByAccountAndId(accountId, holdId).orElseThrow(AccountNotVisibleException::new);
+			requireWritable(membership);
+			requireEligibleAccount(account, true);
 			if (current.version() != expectedVersion) {
 				throw new LiquidityHoldException.VersionConflict(current);
 			}
@@ -175,24 +214,26 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 			}
 			LiquidityHold released = holds.releaseIfVersion(accountId, holdId, expectedVersion, now)
 				.orElseThrow(() -> concurrentConflict(accountId, holdId));
-			auditLogs.append(audit(released, userId, requestId, "LIQUIDITY_HOLD_RELEASED", current, "RELEASED"));
+			auditLogs.append(audit(released, userId, requestId, "LIQUIDITY_HOLD_RELEASED", current, "RELEASED", expectedVersion));
 			return released;
 		});
 	}
 
 	@Override
 	public LiquidityHold replay(UUID userId, UUID accountId, UUID holdId, int expectedVersion) {
-		requireReadable(userId, accountId);
-		LiquidityHold hold = holds.findByAccountAndId(accountId, holdId).orElseThrow(AccountNotVisibleException::new);
-		if (hold.version() != expectedVersion) {
-			// 幂等重放不是新的写入；历史版本无法精确重建时必须 fail closed。
-			throw new LiquidityHoldException.SafeReplayUnavailable();
-		}
-		if (logicalStatusMayHaveChanged(hold, clock.instant())) {
-			// statusAt(asOf) 不是持久化字段；跨过 effectiveAt/expiresAt 后不能重建首次响应。
-			throw new LiquidityHoldException.SafeReplayUnavailable();
-		}
-		return hold;
+		return withCurrentAccountMembership(userId, accountId, (account, membership) -> {
+			LiquidityHold hold = holds.findByAccountAndId(accountId, holdId)
+				.orElseThrow(AccountNotVisibleException::new);
+			if (hold.version() != expectedVersion) {
+				// 幂等重放不是新的写入；历史版本无法精确重建时必须 fail closed。
+				throw new LiquidityHoldException.SafeReplayUnavailable();
+			}
+			if (logicalStatusMayHaveChanged(hold, clock.instant())) {
+				// statusAt(asOf) 不是持久化字段；跨过 effectiveAt/expiresAt 后不能重建首次响应。
+				throw new LiquidityHoldException.SafeReplayUnavailable();
+			}
+			return hold;
+		});
 	}
 
 	private static boolean logicalStatusMayHaveChanged(LiquidityHold hold, Instant asOf) {
@@ -212,21 +253,35 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 		return new LiquidityHoldException.VersionConflict(current);
 	}
 
-	private Account requireEligibleAccount(UUID accountId) {
-		Account account = accounts.findById(accountId).orElseThrow(AccountNotVisibleException::new);
+	private Account requireEligibleAccount(Account account, boolean allowArchived) {
 		if (account.accountClass() != AccountClass.ASSET && account.accountClass() != AccountClass.INVESTMENT) {
+			throw new LiquidityHoldException.BusinessRule();
+		}
+		if (!allowArchived && account.status() != AccountStatus.ACTIVE) {
+			// 归档账户不再接受新增/修订事实；释放既有事实由调用方显式允许。
 			throw new LiquidityHoldException.BusinessRule();
 		}
 		return account;
 	}
 
-	private void requireReadable(UUID userId, UUID accountId) {
-		memberships.findActiveMembership(userId, accountId).orElseThrow(AccountNotVisibleException::new);
+	private <T> T withCurrentAccountMembership(
+		UUID userId,
+		UUID accountId,
+		BiFunction<Account, ActiveMembership, T> action) {
+		requireIds(userId, accountId);
+		if (action == null) {
+			throw new LiquidityHoldException.Validation();
+		}
+		return transactions.required(() -> {
+			// 读取和历史幂等重放沿用账户→membership 锁序，撤权提交后不能继续读取旧主体的数据。
+			Account account = accounts.findByIdForUpdate(accountId).orElseThrow(AccountNotVisibleException::new);
+			ActiveMembership membership = memberships.findActiveMembershipForUpdate(userId, accountId)
+				.orElseThrow(AccountNotVisibleException::new);
+			return action.apply(account, membership);
+		});
 	}
 
-	private void requireWritable(UUID userId, UUID accountId) {
-		ActiveMembership membership = memberships.findActiveMembership(userId, accountId)
-			.orElseThrow(AccountNotVisibleException::new);
+	private void requireWritable(ActiveMembership membership) {
 		if (!"OWNER".equals(membership.role()) && !"EDITOR".equals(membership.role())) {
 			throw new AccountPermissionDeniedException();
 		}
@@ -238,14 +293,25 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 		String requestId,
 		String action,
 		LiquidityHold previous,
-		String reasonCode) {
+		String reasonCode,
+		Integer expectedVersion) {
+		java.util.Map<String, String> metadata = new java.util.LinkedHashMap<>();
+		metadata.put("holdId", hold.id().toString());
+		if (previous != null) {
+			metadata.put("previousHoldId", previous.id().toString());
+			metadata.put("previousVersion", Integer.toString(previous.version()));
+			metadata.put("fromType", previous.type().name());
+		}
+		metadata.put("version", Integer.toString(hold.version()));
+		if (expectedVersion != null) {
+			// 审计保留乐观锁前置版本，便于区分并发胜者与后续事实版本。
+			metadata.put("expectedVersion", Integer.toString(expectedVersion));
+		}
+		metadata.put(previous == null ? "type" : "toType", hold.type().name());
 		return new AuditLogWritePort.AuditLogEntry(
 			hold.updatedAt(), actorUserId, AuditLogWritePort.ActorType.USER, action, "LIQUIDITY_HOLD", hold.id(),
 			hold.accountId(), requestId, AuditLogWritePort.Result.SUCCESS, reasonCode,
-			previous == null
-				? java.util.Map.of("holdId", hold.id().toString(), "version", Integer.toString(hold.version()), "type", hold.type().name())
-				: java.util.Map.of("holdId", hold.id().toString(), "previousHoldId", previous.id().toString(),
-					"version", Integer.toString(hold.version()), "fromType", previous.type().name(), "toType", hold.type().name()));
+			metadata);
 	}
 
 	private static void requireIds(UUID userId, UUID accountId) {
