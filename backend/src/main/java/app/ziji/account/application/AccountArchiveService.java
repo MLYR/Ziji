@@ -2,6 +2,7 @@ package app.ziji.account.application;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -95,7 +96,8 @@ public class AccountArchiveService implements AccountArchiveUseCase {
 				throw new AccountArchiveException.NonZeroBalanceConfirmationRequired();
 			}
 
-			Instant now = clock.instant();
+			// PostgreSQL timestamptz 只保留微秒；先统一精度，避免往返后误判归档时间未持久化。
+			Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
 			// 先通过领域迁移校验，再由 SQL 以 ACTIVE+version 条件原子落盘。
 			Account archivedCandidate = current.archive(now);
 			Account archived = archives.archiveIfVersion(accountId, expectedVersion, now)
