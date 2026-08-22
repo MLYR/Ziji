@@ -49,7 +49,10 @@ import tools.jackson.databind.ObjectMapper;
 @SpringBootTest
 @ActiveProfiles("test")
 @AutoConfigureMockMvc
-@Import(TransactionHttpIntegrationTests.PermissionRaceConfiguration.class)
+@Import({
+	TransactionHttpIntegrationTests.PermissionRaceConfiguration.class,
+	IdempotencyInspectRaceTestConfiguration.class
+})
 class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 
 	@Autowired private MockMvc mvc;
@@ -58,6 +61,7 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 	@Autowired private DeviceSessionApplicationService deviceSessions;
 	@Autowired private TransactionRunner transactions;
 	@Autowired private PermissionRacePostingAccessPort permissionRace;
+	@Autowired private IdempotencyInspectRaceTestConfiguration.InspectRaceIdempotencyService inspectRace;
 
 	@Test
 	void postsExpenseReplaysSameKeyAndIsImmediatelyQueryable() throws Exception {
@@ -231,7 +235,138 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 				.content(revisionBody))
 			.andExpect(status().isInternalServerError()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
 			.andExpect(jsonPath("$.code").value("INTERNAL_ERROR"))
-			.andExpect(jsonPath("$.versionConflict").doesNotExist());
+			.andExpect(jsonPath("$.versionConflict").doesNotExist())
+			.andExpect(result -> {
+				String body = result.getResponse().getContentAsString();
+				assertTrue(!body.contains("00000000-0000-0000-0000-000000000999"));
+				assertTrue(!body.contains("currentVersion"));
+				assertTrue(!body.contains("currentEtag"));
+			});
+	}
+
+	@Test
+	void replayedReverseWithMisbindingHistoryFailsClosedWithoutNewFacts() throws Exception {
+		User owner = user("ledger-reverse-reference-owner");
+		Account account = account(owner.id());
+		UUID categoryId = category(owner.id());
+		UUID originalId = postLedgerTransaction(bearer(owner), "reverse-reference-create-key", """
+			{"type":"EXPENSE","businessAt":"2026-08-17T15:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"10.00","currency":"CNY","categoryId":"%s"}
+			""".formatted(account.id(), categoryId), "EXPENSE");
+		String token = bearer(owner);
+		String key = "reverse-reference-stale-key";
+		mvc.perform(staleReverseRequest(token, originalId, key))
+			.andExpect(status().isConflict())
+			.andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(1))
+			.andExpect(jsonPath("$.versionConflict.currentEtag").value("\"1\""))
+			.andExpect(jsonPath("$.versionConflict.resourceLocation").value(
+				"/api/v1/transactions/" + originalId));
+		assertEquals("FAILED_FINAL", jdbc.queryForObject(
+			"SELECT status FROM idempotency_records WHERE user_id = ? AND operation_id = 'reverseTransaction' AND idempotency_key = ?",
+			String.class, owner.id(), key));
+		FactCounts beforeReplay = factCounts();
+
+		// 历史引用即使仍符合共享层的安全路径形状，也必须绑定当前 reverse operation 的原交易地址。
+		jdbc.update("""
+			UPDATE idempotency_records
+			SET response_reference = jsonb_build_object(
+				'kind', 'VERSION_CONFLICT', 'errorCode', 'VERSION_CONFLICT',
+				'currentVersion', 1, 'currentEtag', '"1"',
+				'resourceLocation', ?)
+			WHERE user_id = ? AND operation_id = 'reverseTransaction' AND idempotency_key = ?
+			""", "/api/v1/transactions/00000000-0000-0000-0000-000000000999", owner.id(), key);
+		mvc.perform(staleReverseRequest(token, originalId, key))
+			.andExpect(status().isInternalServerError())
+			.andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("INTERNAL_ERROR"))
+			.andExpect(jsonPath("$.versionConflict").doesNotExist())
+			.andExpect(result -> {
+				String body = result.getResponse().getContentAsString();
+				assertTrue(!body.contains("00000000-0000-0000-0000-000000000999"));
+				assertTrue(!body.contains("currentVersion"));
+				assertTrue(!body.contains("currentEtag"));
+			});
+
+		assertEquals(beforeReplay, factCounts());
+		assertEquals("POSTED", jdbc.queryForObject(
+			"SELECT status FROM transactions WHERE id = ?", String.class, originalId));
+		assertEquals(1, jdbc.queryForObject(
+			"SELECT entity_version FROM transactions WHERE id = ?", Integer.class, originalId));
+	}
+
+	@Test
+	void inspectAcquireRevocationRaceHidesConcurrentReverseConflictBeforeRendering() throws Exception {
+		User owner = user("ledger-inspect-race-owner");
+		User editor = user("ledger-inspect-race-editor");
+		Account account = account(owner.id());
+		membership(account.id(), editor.id(), "EDITOR", "ACTIVE", null);
+		UUID categoryId = category(owner.id());
+		UUID originalId = postLedgerTransaction(bearer(owner), "inspect-race-create-key", """
+			{"type":"EXPENSE","businessAt":"2026-08-17T14:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"10.00","currency":"CNY","categoryId":"%s"}
+			""".formatted(account.id(), categoryId), "EXPENSE");
+		String token = bearer(editor);
+		String key = "inspect-acquire-revocation-key";
+		FactCounts before = factCounts();
+		IdempotencyInspectRaceTestConfiguration.InspectRaceGate gate =
+			inspectRace.arm("reverseTransaction", key);
+		ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+		Future<MvcResult> requestA = null;
+		Future<MvcResult> requestB = null;
+		try {
+			requestA = executor.submit(() -> mvc.perform(staleReverseRequest(token, originalId, key)).andReturn());
+			assertTrue(gate.inspectCompleted().await(10, TimeUnit.SECONDS), "请求 A 未完成空 inspect");
+
+			// 请求 B 在请求 A 暂停期间取得幂等记录并固化 VERSION_CONFLICT 终态。
+			requestB = executor.submit(() -> mvc.perform(staleReverseRequest(token, originalId, key)).andReturn());
+			MvcResult concurrent = requestB.get(10, TimeUnit.SECONDS);
+			assertEquals(409, concurrent.getResponse().getStatus());
+			assertEquals("VERSION_CONFLICT", json(concurrent).at("/code").asString());
+			assertEquals(1, json(concurrent).at("/versionConflict/currentVersion").asInt());
+			assertEquals("\"1\"", json(concurrent).at("/versionConflict/currentEtag").asString());
+			assertEquals("/api/v1/transactions/" + originalId,
+				json(concurrent).at("/versionConflict/resourceLocation").asString());
+			assertEquals("FAILED_FINAL", jdbc.queryForObject(
+				"SELECT status FROM idempotency_records WHERE user_id = ? AND idempotency_key = ?",
+				String.class, editor.id(), key));
+
+			gate.release().countDown();
+			assertTrue(gate.acquireCompleted().await(10, TimeUnit.SECONDS), "请求 A 未完成幂等 acquire");
+			int updated = jdbc.update("""
+				UPDATE account_members
+				SET status = 'REMOVED', ended_at = CURRENT_TIMESTAMP, version = version + 1
+				WHERE account_id = ? AND user_id = ? AND status = 'ACTIVE'
+				""", account.id(), editor.id());
+			assertEquals(1, updated);
+			gate.acquireRelease().countDown();
+
+			MvcResult requestAResult = requestA.get(10, TimeUnit.SECONDS);
+			assertEquals(404, requestAResult.getResponse().getStatus());
+			assertEquals("RESOURCE_NOT_FOUND", json(requestAResult).at("/code").asString());
+			assertTrue(json(requestAResult).at("/versionConflict").isMissingNode());
+			assertEquals(null, requestAResult.getResponse().getHeader(HttpHeaders.ETAG));
+
+			FactCounts after = factCounts();
+			assertEquals(before.transactions(), after.transactions());
+			assertEquals(before.entries(), after.entries());
+			assertEquals(before.audits(), after.audits());
+			assertEquals(before.outbox(), after.outbox());
+			assertEquals(before.idempotency() + 1, after.idempotency());
+		} finally {
+			gate.release().countDown();
+			gate.acquireRelease().countDown();
+			inspectRace.disarm(gate);
+			if (requestA != null && !requestA.isDone()) {
+				requestA.cancel(true);
+			}
+			if (requestB != null && !requestB.isDone()) {
+				requestB.cancel(true);
+			}
+			executor.shutdownNow();
+			assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS), "inspect 竞争测试线程未在超时内终止");
+		}
 	}
 
 	@Test
@@ -836,6 +971,15 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			.andExpect(status().isCreated()).andExpect(header().string(HttpHeaders.ETAG, "\"1\""))
 			.andExpect(jsonPath("$.data.type").value(expectedType)).andReturn();
 		return UUID.fromString(json(result).at("/data/id").asString());
+	}
+
+	private MockHttpServletRequestBuilder staleReverseRequest(String token, UUID transactionId, String key) {
+		return post("/api/v1/transactions/{id}/reversal", transactionId)
+			.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+			.header("Idempotency-Key", key)
+			.header("If-Match", "\"2\"")
+			.contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+			.content("{\"reason\":\"并发冲突重放\"}");
 	}
 
 	private void assertWriteFailure(User user, String body, String key, int statusCode, String code) throws Exception {
