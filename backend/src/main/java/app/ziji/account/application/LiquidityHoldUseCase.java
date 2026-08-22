@@ -15,6 +15,9 @@ public interface LiquidityHoldUseCase {
 	void preflightCreate(UUID userId, UUID accountId);
 
 	/** 修订/释放在幂等重放前只校验当前可见性与角色，不能读取可变账户状态。 */
+	void preflightMutationAccess(UUID userId, UUID accountId, UUID holdId);
+
+	/** 解析 If-Match 前的访问证明不能借用版本参数，避免不可见资源因畸形条件头先返回 400。 */
 	void preflightMutationAccess(UUID userId, UUID accountId, UUID holdId, int expectedVersion);
 
 	/** 五参数调用一律按修订处理，归档账户只有显式 release 路径才可放行。 */

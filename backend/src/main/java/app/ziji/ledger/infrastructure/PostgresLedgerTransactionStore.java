@@ -228,7 +228,7 @@ public class PostgresLedgerTransactionStore implements LedgerTransactionStore, L
 		}
 		try {
 			List<PostedTransactionBase> bases = jdbc.query("""
-				SELECT t.id, t.transaction_type, t.business_at, t.business_date, t.timezone,
+				SELECT t.id, t.transaction_type, t.status, t.business_at, t.business_date, t.timezone,
 					t.counterparty, t.merchant, t.note, t.source,
 					t.root_transaction_id, t.previous_version_id, t.reversal_of_id, t.version_no,
 					t.posted_at, t.entity_version,
@@ -239,12 +239,13 @@ public class PostgresLedgerTransactionStore implements LedgerTransactionStore, L
 						WHERE related.reversal_of_id = t.id OR related.previous_version_id = t.id
 					) AS has_dependent_facts
 				FROM transactions t
-				WHERE t.id = ? AND t.status = 'POSTED'
+				WHERE t.id = ? AND t.status IN ('POSTED', 'REVERSED', 'SUPERSEDED')
 				FOR UPDATE
 				""",
 				(result, rowNumber) -> new PostedTransactionBase(
 					result.getObject("id", UUID.class),
 					TransactionType.valueOf(result.getString("transaction_type")),
+					TransactionStatus.valueOf(result.getString("status")),
 					result.getTimestamp("business_at").toInstant(),
 					result.getDate("business_date").toLocalDate(),
 					result.getString("timezone"),
@@ -280,7 +281,7 @@ public class PostgresLedgerTransactionStore implements LedgerTransactionStore, L
 					result.getDate("business_date").toLocalDate()),
 				transactionId);
 			Transaction transaction = new Transaction(
-				base.transactionId(), base.type(), TransactionStatus.POSTED, base.businessAt(), base.businessDate(),
+				base.transactionId(), base.type(), base.status(), base.businessAt(), base.businessDate(),
 				base.timezone(), base.source(), base.rootTransactionId(), base.previousVersionId(), base.reversalOfId(),
 				base.versionNo(), base.postedAt(), entries);
 			CurrencyCode currency = entries.get(0).currency();
@@ -551,6 +552,7 @@ public class PostgresLedgerTransactionStore implements LedgerTransactionStore, L
 	private record PostedTransactionBase(
 		UUID transactionId,
 		TransactionType type,
+		TransactionStatus status,
 		Instant businessAt,
 		java.time.LocalDate businessDate,
 		String timezone,

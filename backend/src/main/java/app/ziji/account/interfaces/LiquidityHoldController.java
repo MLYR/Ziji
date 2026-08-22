@@ -28,6 +28,7 @@ import app.ziji.shared.application.UnifiedIdempotencyService;
 import app.ziji.user.application.CurrentUserIdResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
@@ -40,6 +41,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /** LiquidityHold 四个冻结 operation 的 HTTP 边界；校验后只调用 application port。 */
 @RestController
@@ -52,16 +54,28 @@ public class LiquidityHoldController {
 	private final CurrentUserIdResolver currentUserIdResolver;
 	private final UnifiedIdempotencyService idempotency;
 	private final Clock clock;
+	private final ObjectMapper objectMapper;
 
 	public LiquidityHoldController(
 		LiquidityHoldUseCase useCase,
 		CurrentUserIdResolver currentUserIdResolver,
 		UnifiedIdempotencyService idempotency,
 		Clock clock) {
+		this(useCase, currentUserIdResolver, idempotency, clock, new ObjectMapper());
+	}
+
+	@Autowired
+	public LiquidityHoldController(
+		LiquidityHoldUseCase useCase,
+		CurrentUserIdResolver currentUserIdResolver,
+		UnifiedIdempotencyService idempotency,
+		Clock clock,
+		ObjectMapper objectMapper) {
 		this.useCase = useCase;
 		this.currentUserIdResolver = currentUserIdResolver;
 		this.idempotency = idempotency;
 		this.clock = clock;
+		this.objectMapper = objectMapper;
 	}
 
 	@GetMapping(name = "listLiquidityHolds")
@@ -81,14 +95,15 @@ public class LiquidityHoldController {
 	@PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, name = "createLiquidityHold")
 	public ResponseEntity<?> create(
 		@PathVariable String accountId,
-		@RequestBody JsonNode body,
+		@RequestBody(required = false) String rawBody,
 		java.security.Principal principal,
 		HttpServletRequest request,
 		HttpServletResponse response) {
 		UUID userId = currentUserIdResolver.resolve(principal);
 		UUID parsedAccountId = parseUuid(accountId);
-		LiquidityHoldCommand command = parseCommand(body);
+		// 先证明账户对当前用户可见，再手动解析 JSON，避免不可见账户因畸形 body 先暴露 400。
 		useCase.preflightCreateAccess(userId, parsedAccountId);
+		LiquidityHoldCommand command = parseCommand(rawBody);
 		String key = idempotencyKey(request);
 		String resource = "/api/v1/accounts/" + parsedAccountId + "/liquidity-holds";
 		String requestHash = requestHash(resource, commandPayload(command), null);
@@ -122,16 +137,17 @@ public class LiquidityHoldController {
 	public ResponseEntity<?> revise(
 		@PathVariable String accountId,
 		@PathVariable String holdId,
-		@RequestBody JsonNode body,
+		@RequestBody(required = false) String rawBody,
 		java.security.Principal principal,
 		HttpServletRequest request,
 		HttpServletResponse response) {
 		UUID userId = currentUserIdResolver.resolve(principal);
 		UUID parsedAccountId = parseUuid(accountId);
 		UUID parsedHoldId = parseUuid(holdId);
-		LiquidityHoldCommand command = parseCommand(body);
+		// If-Match 和 body 的格式尚未可信前，只使用路径资源做可见性证明，隐藏不可见 hold 的输入差异。
+		useCase.preflightMutationAccess(userId, parsedAccountId, parsedHoldId);
+		LiquidityHoldCommand command = parseCommand(rawBody);
 		int expectedVersion = parseIfMatch(request);
-		useCase.preflightMutationAccess(userId, parsedAccountId, parsedHoldId, expectedVersion);
 		String key = idempotencyKey(request);
 		String resource = "/api/v1/accounts/" + parsedAccountId + "/liquidity-holds/" + parsedHoldId + "/revisions";
 		String requestHash = requestHash(resource, commandPayload(command), request.getHeader("If-Match"));
@@ -175,8 +191,9 @@ public class LiquidityHoldController {
 		UUID userId = currentUserIdResolver.resolve(principal);
 		UUID parsedAccountId = parseUuid(accountId);
 		UUID parsedHoldId = parseUuid(holdId);
+		// release 没有 body，但仍须先证明 hold 可见，才能把畸形 If-Match 映射为 404 或 400。
+		useCase.preflightMutationAccess(userId, parsedAccountId, parsedHoldId);
 		int expectedVersion = parseIfMatch(request);
-		useCase.preflightMutationAccess(userId, parsedAccountId, parsedHoldId, expectedVersion);
 		String key = idempotencyKey(request);
 		String resource = "/api/v1/accounts/" + parsedAccountId + "/liquidity-holds/" + parsedHoldId + "/release";
 		String requestHash = requestHash(resource, Map.of(), request.getHeader("If-Match"));
@@ -228,7 +245,7 @@ public class LiquidityHoldController {
 		if (execution.status() == IdempotencyExecution.Status.EXECUTED) {
 			if (!(execution.value() instanceof LiquidityHold hold)
 				|| !validResourceResponse(execution.response(), 201, "LIQUIDITY_HOLD", resource, hold.id(), hold, false, false)) {
-				return storedProblem(execution.response(), request, response);
+				return storedProblem(execution.response(), holdLocation(accountId), request, response);
 			}
 			return ResponseEntity.status(HttpStatus.CREATED).eTag(hold.etag())
 				.body(new LiquidityHoldEnvelope(view(hold), new ResponseMeta(requestId(response))));
@@ -236,7 +253,7 @@ public class LiquidityHoldController {
 		if (execution.status() == IdempotencyExecution.Status.REPLAYED
 			&& execution.response() != null) {
 			if (execution.response().status() != IdempotencyResponse.Status.SUCCEEDED) {
-				return storedProblem(execution.response(), request, response);
+				return storedProblem(execution.response(), holdLocation(accountId), request, response);
 			}
 			if (validResourceReference(execution.response(), 201, "LIQUIDITY_HOLD", resource, null)) {
 				IdempotencyResponse.ResourceReference reference = (IdempotencyResponse.ResourceReference) execution.response().reference();
@@ -265,7 +282,7 @@ public class LiquidityHoldController {
 			if (!(execution.value() instanceof LiquidityHold hold)
 				|| !validResourceResponse(execution.response(), successStatus.value(), "LIQUIDITY_HOLD", resource,
 					hold.id(), hold, revision, release, holdId)) {
-				return storedProblem(execution.response(), request, response);
+				return storedProblem(execution.response(), holdLocation(accountId), request, response);
 			}
 			return ResponseEntity.status(successStatus).eTag(hold.etag())
 				.body(new LiquidityHoldEnvelope(view(hold), new ResponseMeta(requestId(response))));
@@ -273,7 +290,7 @@ public class LiquidityHoldController {
 		if (execution.status() == IdempotencyExecution.Status.REPLAYED
 			&& execution.response() != null) {
 			if (execution.response().status() != IdempotencyResponse.Status.SUCCEEDED) {
-				return storedProblem(execution.response(), request, response);
+				return storedProblem(execution.response(), holdLocation(accountId), request, response);
 			}
 			if (validResourceReference(execution.response(), successStatus.value(), "LIQUIDITY_HOLD", resource,
 				release ? holdId : null)) {
@@ -347,11 +364,17 @@ public class LiquidityHoldController {
 
 	private ResponseEntity<ProblemDetail> storedProblem(
 		IdempotencyResponse stored,
+		String expectedVersionConflictLocation,
 		HttpServletRequest request,
 		HttpServletResponse response) {
 		if (stored != null && stored.status() == IdempotencyResponse.Status.FAILED_FINAL
 			&& stored.responseStatus() == 409
 			&& stored.reference() instanceof IdempotencyResponse.VersionConflictReference conflict) {
+			// 共享层只保证路径形状；当前账户的 canonical hold 集合路径必须再次绑定，错绑历史行直接拒绝回显。
+			if (expectedVersionConflictLocation == null
+				|| !expectedVersionConflictLocation.equals(conflict.resourceLocation())) {
+				return problem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", request, response, false);
+			}
 			ProblemDetail detail = problemDetail(HttpStatus.CONFLICT, "VERSION_CONFLICT", request, response);
 			detail.setProperty("versionConflict", Map.of(
 				"currentVersion", conflict.currentVersion(),
@@ -443,7 +466,14 @@ public class LiquidityHoldController {
 		return detail;
 	}
 
-	private LiquidityHoldCommand parseCommand(JsonNode body) {
+	private LiquidityHoldCommand parseCommand(String rawBody) {
+		final JsonNode body;
+		try {
+			// 访问证明已在 Controller 入口完成；手动解析可避免 Spring 消息转换器先暴露不可见资源的格式差异。
+			body = rawBody == null ? null : objectMapper.readTree(rawBody);
+		} catch (RuntimeException exception) {
+			throw new app.ziji.account.application.LiquidityHoldException.Validation();
+		}
 		if (body == null || !body.isObject() || body.size() < 5) {
 			throw new app.ziji.account.application.LiquidityHoldException.Validation();
 		}

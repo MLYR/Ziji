@@ -12,7 +12,7 @@ public interface LedgerTransactionStore {
 
 	Optional<RefundCandidate> findRefundCandidate(UUID originalTransactionId);
 
-	/** 以数据库行锁读取可被冲正的 POSTED 交易，供修改和作废在同一事务内串行化。 */
+	/** 以数据库行锁读取已确认交易，供修改和作废在同一事务内串行化并判定陈旧版本。 */
 	Optional<PostedTransactionSnapshot> findPostedForMutation(UUID transactionId);
 
 	void persistRevision(TransactionRevisionWrite write);

@@ -564,10 +564,11 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 	private TransactionRevisionResult revisePostedTransactionInTransaction(RevisePostedTransactionCommand command) {
 		LedgerTransactionStore.PostedTransactionSnapshot snapshot = postedForMutation(command.transactionId());
 		Transaction original = snapshot.transaction();
-		requireIndependentOriginal(snapshot);
 		lockRevisionAccounts(original, command.details());
 		validateOriginalAccess(command.userId(), original);
 		requireExpectedVersion(command.transactionId(), command.expectedEntityVersion(), snapshot.entityVersion());
+		// 先比较锁定快照的实体版本，再判断历史状态，陈旧的 SUPERSEDED/REVERSED 请求仍须返回 VERSION_CONFLICT。
+		requireIndependentOriginal(snapshot);
 		RevisionBuild build = buildRevision(command, snapshot);
 
 		Transaction reversal = transactionFactory.createReversal(original, UUID.randomUUID(), clock.instant());
@@ -593,10 +594,11 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 	private TransactionVoidResult voidPostedTransactionInTransaction(VoidPostedTransactionCommand command) {
 		LedgerTransactionStore.PostedTransactionSnapshot snapshot = postedForMutation(command.transactionId());
 		Transaction original = snapshot.transaction();
-		requireIndependentOriginal(snapshot);
 		lockOriginalAccounts(original);
 		validateOriginalAccess(command.userId(), original);
 		requireExpectedVersion(command.transactionId(), command.expectedEntityVersion(), snapshot.entityVersion());
+		// 与修订一致：版本冲突优先于“已有后续事实”的业务失败，避免旧版本请求被改写为 422。
+		requireIndependentOriginal(snapshot);
 
 		Transaction reversal = transactionFactory.createReversal(original, UUID.randomUUID(), clock.instant());
 		LedgerTransactionStore.TransactionVoidWrite write = new LedgerTransactionStore.TransactionVoidWrite(

@@ -762,6 +762,11 @@ class LiquidityHoldMvcTests {
 		}
 
 		@Override
+		public void preflightMutationAccess(UUID userId, UUID accountId, UUID holdId) {
+			denyWhenConfigured();
+		}
+
+		@Override
 		public void preflightMutationAccess(UUID userId, UUID accountId, UUID holdId, int expectedVersion) {
 			denyWhenConfigured();
 		}

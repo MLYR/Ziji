@@ -158,6 +158,7 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 		assertEquals(2, jdbc.queryForObject("SELECT entity_version FROM transactions WHERE id = ?", Integer.class, UUID.fromString(originalId)));
 		assertEquals("SUPERSEDED", jdbc.queryForObject("SELECT status FROM transactions WHERE id = ?", String.class, UUID.fromString(originalId)));
 
+		FactCounts beforeStaleRevision = factCounts();
 		mvc.perform(post("/api/v1/transactions/{id}/revisions", originalId)
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", "mutation-stale-key-01")
 				.header("If-Match", "\"1\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
@@ -171,7 +172,16 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", "mutation-stale-key-01")
 				.header("If-Match", "\"1\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
 				.content(revisionBody))
-			.andExpect(status().isConflict()).andExpect(jsonPath("$.versionConflict.currentVersion").value(2));
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(2))
+			.andExpect(jsonPath("$.versionConflict.currentEtag").value("\"2\""))
+			.andExpect(jsonPath("$.versionConflict.resourceLocation").value("/api/v1/transactions/" + originalId));
+		FactCounts afterStaleRevision = factCounts();
+		assertEquals(beforeStaleRevision.transactions(), afterStaleRevision.transactions());
+		assertEquals(beforeStaleRevision.entries(), afterStaleRevision.entries());
+		assertEquals(beforeStaleRevision.audits(), afterStaleRevision.audits());
+		assertEquals(beforeStaleRevision.outbox(), afterStaleRevision.outbox());
+		assertEquals(beforeStaleRevision.idempotency() + 1, afterStaleRevision.idempotency());
 
 		String reasonBody = "{\"reason\":\"作废\"}";
 		mvc.perform(post("/api/v1/transactions/{id}/reversal", replacementId)
@@ -180,6 +190,48 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 				.content(reasonBody))
 			.andExpect(status().isCreated()).andExpect(header().string(HttpHeaders.ETAG, "\"1\""))
 			.andExpect(jsonPath("$.data.reversalOfId").value(replacementId));
+		FactCounts beforeStaleReverse = factCounts();
+		mvc.perform(post("/api/v1/transactions/{id}/reversal", replacementId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", "mutation-reverse-stale-key-01")
+				.header("If-Match", "\"1\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content(reasonBody))
+			.andExpect(status().isConflict()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(2))
+			.andExpect(jsonPath("$.versionConflict.currentEtag").value("\"2\""))
+			.andExpect(jsonPath("$.versionConflict.resourceLocation").value("/api/v1/transactions/" + replacementId));
+		mvc.perform(post("/api/v1/transactions/{id}/reversal", replacementId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", "mutation-reverse-stale-key-01")
+				.header("If-Match", "\"1\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content(reasonBody))
+			.andExpect(status().isConflict()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(2))
+			.andExpect(jsonPath("$.versionConflict.currentEtag").value("\"2\""))
+			.andExpect(jsonPath("$.versionConflict.resourceLocation").value("/api/v1/transactions/" + replacementId));
+		FactCounts afterStaleReverse = factCounts();
+		assertEquals(beforeStaleReverse.transactions(), afterStaleReverse.transactions());
+		assertEquals(beforeStaleReverse.entries(), afterStaleReverse.entries());
+		assertEquals(beforeStaleReverse.audits(), afterStaleReverse.audits());
+		assertEquals(beforeStaleReverse.outbox(), afterStaleReverse.outbox());
+		assertEquals(beforeStaleReverse.idempotency() + 1, afterStaleReverse.idempotency());
+
+		// 直接篡改历史安全引用，验证交易 operation 只回放当前原交易的 canonical 地址。
+		String staleKey = "mutation-stale-key-01";
+		jdbc.update("""
+			UPDATE idempotency_records
+			SET response_reference = jsonb_build_object(
+				'kind', 'VERSION_CONFLICT', 'errorCode', 'VERSION_CONFLICT',
+				'currentVersion', 2, 'currentEtag', '"2"',
+				'resourceLocation', ?)
+			WHERE user_id = ? AND operation_id = 'reviseTransaction' AND idempotency_key = ?
+			""", "/api/v1/transactions/00000000-0000-0000-0000-000000000999", owner.id(), staleKey);
+		mvc.perform(post("/api/v1/transactions/{id}/revisions", originalId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", staleKey)
+				.header("If-Match", "\"1\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content(revisionBody))
+			.andExpect(status().isInternalServerError()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("INTERNAL_ERROR"))
+			.andExpect(jsonPath("$.versionConflict").doesNotExist());
 	}
 
 	@Test
@@ -521,6 +573,49 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			.andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
 		mvc.perform(get("/api/v1/transactions")).andExpect(status().isUnauthorized())
 			.andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+	}
+
+	@Test
+	void hidesInvisibleTransactionBeforeMalformedMutationInput() throws Exception {
+		User owner = user("ledger-mutation-hidden-owner");
+		User stranger = user("ledger-mutation-hidden-stranger");
+		Account account = account(owner.id());
+		UUID categoryId = category(owner.id());
+		UUID transactionId = transaction(owner.id(), account.ledgerId(), Instant.parse("2026-08-16T01:00:00Z"));
+		String token = bearer(stranger);
+		String validRevisionBody = """
+			{"reason":"修订","replacement":{"type":"EXPENSE",
+			 "businessAt":"2026-08-16T02:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"11.00","currency":"CNY","categoryId":"%s"}}
+			""".formatted(account.id(), categoryId);
+
+		for (var request : List.of(
+			post("/api/v1/transactions/{id}/revisions", transactionId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", "hidden-revise-body-key")
+				.header("If-Match", "\"abc\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content("{not-json"),
+			post("/api/v1/transactions/{id}/revisions", transactionId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", "hidden-revise-header-key")
+				.header("If-Match", "\"abc\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content(validRevisionBody),
+			post("/api/v1/transactions/{id}/reversal", transactionId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", "hidden-reverse-body-key")
+				.header("If-Match", "\"abc\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content("{not-json"),
+			post("/api/v1/transactions/{id}/reversal", transactionId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", "hidden-reverse-header-key")
+				.header("If-Match", "\"abc\"").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.content("{\"reason\":\"作废\"}"))) {
+			mvc.perform(request)
+				.andExpect(status().isNotFound()).andExpect(header().doesNotExist(HttpHeaders.ETAG))
+				.andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"))
+				.andExpect(jsonPath("$.versionConflict").doesNotExist());
+		}
+		assertEquals(0, jdbc.queryForObject("""
+			SELECT count(*) FROM idempotency_records
+			WHERE user_id = ? AND idempotency_key IN (?, ?, ?, ?)
+			""", Integer.class, stranger.id(), "hidden-revise-body-key", "hidden-revise-header-key",
+			"hidden-reverse-body-key", "hidden-reverse-header-key"));
 	}
 
 	@Test

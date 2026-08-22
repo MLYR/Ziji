@@ -96,13 +96,9 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 	}
 
 	@Override
-	public void preflightMutationAccess(
-		UUID userId,
-		UUID accountId,
-		UUID holdId,
-		int expectedVersion) {
+	public void preflightMutationAccess(UUID userId, UUID accountId, UUID holdId) {
 		requireIds(userId, accountId);
-		if (holdId == null || expectedVersion < 1) {
+		if (holdId == null) {
 			throw new LiquidityHoldException.Validation();
 		}
 		withCurrentAccountMembership(userId, accountId, (account, membership) -> {
@@ -110,6 +106,18 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 			requireWritable(membership);
 			return null;
 		});
+	}
+
+	@Override
+	public void preflightMutationAccess(
+		UUID userId,
+		UUID accountId,
+		UUID holdId,
+		int expectedVersion) {
+		if (expectedVersion < 1) {
+			throw new LiquidityHoldException.Validation();
+		}
+		preflightMutationAccess(userId, accountId, holdId);
 	}
 
 	@Override

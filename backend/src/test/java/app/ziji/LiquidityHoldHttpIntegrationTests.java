@@ -142,6 +142,29 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 	}
 
 	@Test
+	void invisibleHoldReturnsNotFoundBeforeMalformedBodyOrIfMatch() throws Exception {
+		UserFixture owner = insertUser("hold-hidden-malformed-owner");
+		UserFixture stranger = insertUser("hold-hidden-malformed-stranger");
+		AccountFixture account = seedAccount(owner.userId(), "畸形输入不可见账户");
+		UUID holdId = seedHold(account.accountId(), owner.userId());
+		String token = bearer(stranger);
+
+		assertNotFoundWithoutIdempotency(post(path(account.accountId()))
+			.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+			.contentType(MediaType.APPLICATION_JSON).content("{not-json"),
+			stranger.userId(), "hidden-malformed-create-key");
+		assertNotFoundWithoutIdempotency(post(path(account.accountId()) + "/{holdId}/revisions", holdId)
+			.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+			.header("If-Match", "\"abc\"")
+			.contentType(MediaType.APPLICATION_JSON).content("{not-json"),
+			stranger.userId(), "hidden-malformed-revise-key");
+		assertNotFoundWithoutIdempotency(post(path(account.accountId()) + "/{holdId}/release", holdId)
+			.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+			.header("If-Match", "\"abc\""),
+			stranger.userId(), "hidden-malformed-release-key");
+	}
+
+	@Test
 	void malformedIfMatchFailuresDoNotWriteIdempotencyRecords() throws Exception {
 		UserFixture owner = insertUser("hold-if-match-owner");
 		AccountFixture account = seedAccount(owner.userId(), "If-Match");
@@ -211,6 +234,25 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			.andExpect(status().isConflict())
 			.andExpect(header().doesNotExist(HttpHeaders.ETAG))
 			.andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
+		assertEquals(1, idempotencyCount(owner.userId(), key));
+
+		// 历史引用即使仍是合法的相对路径，也必须绑定当前账户 collection，错绑时不得回显冲突摘要。
+		jdbc.update("""
+			UPDATE idempotency_records
+			SET response_reference = jsonb_build_object(
+				'kind', 'VERSION_CONFLICT', 'errorCode', 'VERSION_CONFLICT',
+				'currentVersion', 1, 'currentEtag', '"1"', 'resourceLocation', ?)
+			WHERE user_id = ? AND operation_id = 'reviseLiquidityHold' AND idempotency_key = ?
+			""", path(UUID.fromString("00000000-0000-0000-0000-000000000999")), owner.userId(), key);
+		mvc.perform(post(path(account.accountId()) + "/{holdId}/revisions", holdId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", key)
+				.header("If-Match", "\"2\"")
+				.contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isInternalServerError())
+			.andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("INTERNAL_ERROR"))
+			.andExpect(jsonPath("$.versionConflict").doesNotExist());
 		assertEquals(1, idempotencyCount(owner.userId(), key));
 	}
 
@@ -986,7 +1028,8 @@ class LiquidityHoldHttpIntegrationTests extends PostgresIntegrationTestSupport {
 		mvc.perform(request.header("Idempotency-Key", key))
 			.andExpect(status().isNotFound())
 			.andExpect(header().doesNotExist(HttpHeaders.ETAG))
-			.andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+			.andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"))
+			.andExpect(jsonPath("$.versionConflict").doesNotExist());
 		assertEquals(0, idempotencyCount(userId, key));
 	}
 
