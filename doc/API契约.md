@@ -133,7 +133,7 @@ LiquidityHold 的 `status` 由查询时点 `asOf` 从 `effectiveAt`、`expiresAt
 }
 ```
 
-`reason` 与 `confirmNonZeroBalance` 均必填，未知字段拒绝。服务端在同一事务内锁定账户、读取 `POSTED` PRIMARY LedgerEntry 重建的当前账面余额并按账户币种判断是否为零；不读取或写入余额投影，也不产生 Transaction、LedgerEntry 或 outbox。余额非零且 `confirmNonZeroBalance=false` 时返回 `422 NON_ZERO_BALANCE_CONFIRMATION_REQUIRED`，Problem 不回显具体余额或币种，并将结果作为 `FAILED_FINAL` 保存；客户端修改确认值时必须使用新的 `Idempotency-Key`。余额为零时确认值为 `true` 或 `false` 均不阻止归档，余额非零且确认值为 `true` 才允许归档。
+`reason` 必填，`confirmNonZeroBalance` 为可选兼容字段，未知字段拒绝；省略确认字段按 `false` 规范化。服务端在同一事务内锁定账户、读取 `POSTED` PRIMARY LedgerEntry 重建的当前账面余额并按账户币种判断是否为零；不读取或写入余额投影，也不产生 Transaction、LedgerEntry 或 outbox。余额非零且确认值为缺失或 `false` 时返回 `422 NON_ZERO_BALANCE_CONFIRMATION_REQUIRED`，Problem 不回显具体余额或币种，并将结果作为 `FAILED_FINAL` 保存；客户端修改确认值时必须使用新的 `Idempotency-Key`。余额为零时确认值为 `true`、`false` 或省略均不阻止归档，余额非零且确认值为 `true` 才允许归档，因此旧客户端不会因新增字段在零余额账户上被拒绝。
 
 成功归档返回现有 `200 AccountOk`，保留强 `If-Match`（必须匹配 `"[1-9][0-9]*"`），账户状态变为 `ARCHIVED`、版本递增并保存归档时间；历史流水、历史趋势、成员周期和审计记录保留。已归档账户在当前 OWNER 使用新的请求再次归档返回 `409 ACCOUNT_ALREADY_ARCHIVED`，该稳定失败同样保存为 `FAILED_FINAL`；不可见请求仍按 `404` 处理。归档成功只追加 `ACCOUNT_ARCHIVED` 审计，metadata 不包含 `reason`、余额、完整请求体或幂等键。历史幂等引用或资源版本无法安全、精确重建时返回 `500 INTERNAL_ERROR`，不得重新执行业务写入或以当前账户快照伪造首次响应。
 

@@ -1747,8 +1747,8 @@ export interface components {
         };
         ArchiveAccountRequest: {
             reason: string;
-            /** @description 明确表示用户已看到并接受非零余额归档风险；余额为零时该字段仍必须提交。 */
-            confirmNonZeroBalance: boolean;
+            /** @description 可选的非零余额风险确认；省略等价于 false，余额非零时必须显式提交 true 才能归档。 */
+            confirmNonZeroBalance?: boolean;
         };
         CreateLiquidityHoldRequest: {
             /** @enum {string} */
@@ -3324,22 +3324,6 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description 归档专用冲突；可为版本冲突、幂等冲突或当前账户已归档。仅 VERSION_CONFLICT 携带有界 versionConflict；无法安全重放历史幂等结果使用 500 INTERNAL_ERROR。 */
-        AccountArchiveConflict: {
-            headers: {
-                /** @description 仅 IDEMPOTENCY_REQUEST_IN_PROGRESS 返回的重试等待秒数 */
-                "Retry-After"?: 5;
-                [name: string]: unknown;
-            };
-            content: {
-                "application/problem+json": components["schemas"]["Problem"] & {
-                    /** @constant */
-                    status: 409;
-                    /** @enum {string} */
-                    code: "VERSION_CONFLICT" | "ACCOUNT_ALREADY_ARCHIVED" | "IDEMPOTENCY_KEY_REUSED" | "IDEMPOTENCY_REQUEST_IN_PROGRESS";
-                };
-            };
-        };
         /** @description 业务规则不允许本次操作 */
         BusinessRuleViolation: {
             headers: {
@@ -4066,7 +4050,7 @@ export interface components {
         IdempotencyKey: string;
         /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
         IfMatch: string;
-        /** @description 账户归档使用强 ETag，必须是双引号包围的正整数，例如 "7"；缺失、重复、弱 ETag、*、未加双引号、非正整数或溢出（超出服务端整数范围）均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。 */
+        /** @description 账户归档运行时使用强 ETag，必须是双引号包围的正整数，例如 "7"；缺失、重复、弱 ETag、*、未加双引号、非正整数或溢出（超出服务端整数范围）均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。机器 schema 保留与既有 If-Match 相同的兼容字符串范围，精确格式由运行时校验。 */
         ArchiveIfMatch: string;
         /** @description LiquidityHold 修订和释放使用强 ETag，必须是双引号包围的正整数，例如 "7"；缺失、重复、弱 ETag、*、未加双引号、非正整数或溢出（超出服务端整数范围）均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。 */
         LiquidityHoldIfMatch: string;
@@ -4595,7 +4579,7 @@ export interface operations {
             header: {
                 /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description 账户归档使用强 ETag，必须是双引号包围的正整数，例如 "7"；缺失、重复、弱 ETag、*、未加双引号、非正整数或溢出（超出服务端整数范围）均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。 */
+                /** @description 账户归档运行时使用强 ETag，必须是双引号包围的正整数，例如 "7"；缺失、重复、弱 ETag、*、未加双引号、非正整数或溢出（超出服务端整数范围）均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。机器 schema 保留与既有 If-Match 相同的兼容字符串范围，精确格式由运行时校验。 */
                 "If-Match": components["parameters"]["ArchiveIfMatch"];
             };
             path: {
@@ -4614,7 +4598,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            409: components["responses"]["AccountArchiveConflict"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["NonZeroBalanceConfirmationRequired"];
             500: components["responses"]["InternalError"];
         };

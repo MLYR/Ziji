@@ -319,7 +319,7 @@ public class AccountArchiveController {
 		} catch (RuntimeException exception) {
 			throw new AccountArchiveException.Validation();
 		}
-		if (body == null || !body.isObject() || body.size() != REQUEST_FIELDS.size()) {
+		if (body == null || !body.isObject() || body.size() < 1 || body.size() > REQUEST_FIELDS.size()) {
 			throw new AccountArchiveException.Validation();
 		}
 		for (String field : body.propertyNames()) {
@@ -330,14 +330,15 @@ public class AccountArchiveController {
 		JsonNode reasonNode = body.get("reason");
 		JsonNode confirmationNode = body.get("confirmNonZeroBalance");
 		if (reasonNode == null || !reasonNode.isTextual()
-			|| confirmationNode == null || !confirmationNode.isBoolean()) {
+			|| (confirmationNode != null && !confirmationNode.isBoolean())) {
 			throw new AccountArchiveException.Validation();
 		}
 		String reason = reasonNode.textValue();
 		if (reason == null || reason.isBlank() || reason.codePointCount(0, reason.length()) > 500) {
 			throw new AccountArchiveException.Validation();
 		}
-		return new ArchiveRequest(reason, confirmationNode.booleanValue());
+		// 兼容归档端点已有客户端：省略确认字段等价于 false，非零余额仍必须显式传 true。
+		return new ArchiveRequest(reason, confirmationNode != null && confirmationNode.booleanValue());
 	}
 
 	private static String requestHash(

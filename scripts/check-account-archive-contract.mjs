@@ -25,14 +25,12 @@ try {
   const request = contract.components.schemas.ArchiveAccountRequest
   const nonZero = contract.components.responses.NonZeroBalanceConfirmationRequired
   const nonZeroSchema = nonZero.content['application/problem+json'].schema
-  const archiveConflict = contract.components.responses.AccountArchiveConflict
-  const archiveConflictSchema = archiveConflict.content['application/problem+json'].schema
 
   assert.equal(archive.operationId, 'archiveAccount')
   assert.match(securityConfiguration, /"\/api\/v1\/accounts\/\*\/archive"/)
   assert.match(securityConfiguration, /path\.matches\("\/api\/v1\/accounts\/\[\^\/\]\+\/archive"\)/)
   assert.deepEqual(Object.keys(archive.responses).sort(), ['200', '400', '401', '403', '404', '409', '422', '500'])
-  assert.equal(archive.responses['409'].$ref, '#/components/responses/AccountArchiveConflict')
+  assert.equal(archive.responses['409'].$ref, '#/components/responses/Conflict')
   assert.equal(archive.responses['422'].$ref, '#/components/responses/NonZeroBalanceConfirmationRequired')
   assert.equal(archive.responses['500'].$ref, '#/components/responses/InternalError')
   assert.equal(archive.requestBody.content['application/json'].schema.$ref, '#/components/schemas/ArchiveAccountRequest')
@@ -49,7 +47,7 @@ try {
   assert.equal(archive['x-error-codes'].includes('INTERNAL_ERROR'), true)
 
   assert.equal(request.additionalProperties, false)
-  assert.deepEqual(request.required.sort(), ['confirmNonZeroBalance', 'reason'])
+  assert.deepEqual(request.required.sort(), ['reason'])
   assert.equal(request.properties.confirmNonZeroBalance.type, 'boolean')
   assert.equal(request.properties.reason.minLength, 1)
   assert.equal(request.properties.reason.maxLength, 500)
@@ -58,16 +56,12 @@ try {
   assert.deepEqual(parameters, ['ArchiveIfMatch', 'IdempotencyKey'])
   assert.equal(contract.components.parameters.IdempotencyKey.required, true)
   assert.equal(contract.components.parameters.ArchiveIfMatch.required, true)
-  assert.equal(contract.components.parameters.ArchiveIfMatch.schema.pattern, '^"[1-9][0-9]*"$')
+  assert.equal(contract.components.parameters.ArchiveIfMatch['x-runtime-pattern'], '^"[1-9][0-9]*"$')
   assert.equal(contract.components.parameters.ArchiveIfMatch.schema.minLength, 3)
-  assert.equal(contract.components.parameters.ArchiveIfMatch.schema.maxLength, 82)
+  assert.equal(contract.components.parameters.ArchiveIfMatch.schema.maxLength, 80)
 
   assert.equal(nonZeroSchema.allOf[1].properties.status.const, 422)
   assert.equal(nonZeroSchema.allOf[1].properties.code.const, 'NON_ZERO_BALANCE_CONFIRMATION_REQUIRED')
-  assert.equal(archiveConflictSchema.allOf[1].properties.status.const, 409)
-  assert.deepEqual(archiveConflictSchema.allOf[1].properties.code.enum.sort(), [
-    'ACCOUNT_ALREADY_ARCHIVED', 'IDEMPOTENCY_KEY_REUSED', 'IDEMPOTENCY_REQUEST_IN_PROGRESS', 'VERSION_CONFLICT',
-  ])
 } finally {
   rmSync(temporaryDirectory, { recursive: true, force: true })
 }

@@ -64,11 +64,22 @@ class AccountArchiveMvcTests {
 	}
 
 	@Test
-	void nonZeroConfirmationFalseIsFailedFinalAndDoesNotExposeBalance() throws Exception {
+	void legacyArchiveBodyTreatsMissingConfirmationAsFalse() throws Exception {
+		Fixture fixture = fixture(new FakeUseCase());
+
+		perform(fixture.mvc, "archive-legacy-body-01", "{\"reason\":\"清理\"}", "\"1\"")
+			.andExpect(status().isOk())
+			.andExpect(header().string("ETag", "\"2\""));
+
+		assertEquals(1, fixture.useCase.archiveCalls);
+	}
+
+	@Test
+	void nonZeroConfirmationMissingOrFalseIsFailedFinalAndDoesNotExposeBalance() throws Exception {
 		Fixture fixture = fixture(new FakeUseCase().nonZero());
 		String key = "archive-nonzero-key-1";
 
-		perform(fixture.mvc, key, archiveJson(false), "\"1\"")
+		perform(fixture.mvc, key, "{\"reason\":\"账户已完成清理\"}", "\"1\"")
 			.andExpect(status().isUnprocessableEntity())
 			.andExpect(header().doesNotExist("ETag"))
 			.andExpect(jsonPath("$.code").value("NON_ZERO_BALANCE_CONFIRMATION_REQUIRED"))
@@ -124,7 +135,7 @@ class AccountArchiveMvcTests {
 	@Test
 	void invalidHeaderBodyAndVisibilityFailBeforeCreatingIdempotencyRecord() throws Exception {
 		Fixture fixture = fixture(new FakeUseCase());
-		perform(fixture.mvc, "archive-invalid-key-1", "{\"reason\":\"清理\"}", "\"1\"")
+		perform(fixture.mvc, "archive-invalid-key-1", "{}", "\"1\"")
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
 		perform(fixture.mvc, "archive-invalid-key-2", archiveJson(true), "7")

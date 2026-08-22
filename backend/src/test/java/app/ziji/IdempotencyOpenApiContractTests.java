@@ -28,10 +28,7 @@ class IdempotencyOpenApiContractTests {
 		Map<String, Object> components = objectMap(document.get("components"), "OpenAPI components");
 		Map<String, Object> componentResponses = objectMap(components.get("responses"), "OpenAPI component responses");
 		Map<String, Object> conflict = objectMap(componentResponses.get("Conflict"), "Conflict response");
-		Map<String, Object> accountArchiveConflict = objectMap(
-			componentResponses.get("AccountArchiveConflict"), "AccountArchiveConflict response");
 		assertFixedRetryAfter(conflict);
-		assertFixedRetryAfter(accountArchiveConflict);
 
 		int idempotencyOperationCount = 0;
 		Map<String, Object> paths = objectMap(document.get("paths"), "OpenAPI paths");
@@ -50,11 +47,7 @@ class IdempotencyOpenApiContractTests {
 				String operationId = requiredOperationId(definition, operation.getKey(), path.getKey());
 				Map<String, Object> responses = objectMap(definition.get("responses"), operationId + " responses");
 				Map<String, Object> conflictResponse = objectMap(responses.get("409"), operationId + " 409 response");
-				// 归档的 409 还要约束账户专用错误码，其 Retry-After 仍复用统一幂等门禁。
-				String expectedConflict = "archiveAccount".equals(operationId)
-					? "#/components/responses/AccountArchiveConflict"
-					: "#/components/responses/Conflict";
-				assertEquals(expectedConflict, conflictResponse.get("$ref"),
+				assertEquals("#/components/responses/Conflict", conflictResponse.get("$ref"),
 					operationId + " 必须引用符合统一幂等门禁的冲突响应");
 			}
 		}
