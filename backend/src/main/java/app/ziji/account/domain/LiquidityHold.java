@@ -54,7 +54,9 @@ public final class LiquidityHold {
 			|| (revisionNo == 1 && (previousRevisionId != null || !rootHoldId.equals(id)))
 			|| (revisionNo > 1 && previousRevisionId == null)
 			|| ((endedAt == null) != (endReason == null))
-			|| (releasedAt != null && endReason != LiquidityHoldEndReason.RELEASED)) {
+			|| ((releasedAt != null) != (endReason == LiquidityHoldEndReason.RELEASED))
+			// RELEASED 只有一个终止时点，不能让 releasedAt 与 endedAt 表达不同的生命周期事实。
+			|| (endReason == LiquidityHoldEndReason.RELEASED && !releasedAt.equals(endedAt))) {
 			throw invalid();
 		}
 		this.id = id;
@@ -168,7 +170,9 @@ public final class LiquidityHold {
 			throw invalid();
 		}
 		int maximumScale = currency == AccountCurrency.JPY ? 0 : 2;
-		if (amount.stripTrailingZeros().scale() > maximumScale) {
+		int integerDigits = Math.max(0, amount.precision() - amount.scale());
+		// PositiveMoney 最多 22 位整数；指数形式也必须在同一边界内落地，不能交给数据库溢出兜底。
+		if (integerDigits > 22 || amount.stripTrailingZeros().scale() > maximumScale) {
 			throw invalid();
 		}
 	}

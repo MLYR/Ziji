@@ -10,6 +10,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import app.ziji.account.application.AccountPersistenceException;
+import app.ziji.account.application.AccountArchiveStore;
 import app.ziji.account.application.AccountKeysetPosition;
 import app.ziji.account.application.AccountQueryReadPort;
 import app.ziji.account.application.AccountStore;
@@ -27,7 +28,7 @@ import org.springframework.stereotype.Repository;
 
 /** accounts 表适配器；只写入账户聚合本身，不顺带创建成员、计入设置或科目。 */
 @Repository
-public class PostgresAccountStore implements AccountStore, AccountQueryReadPort, AccountUpdatePort {
+public class PostgresAccountStore implements AccountStore, AccountQueryReadPort, AccountUpdatePort, AccountArchiveStore {
 
 	private static final String INSERT_SQL = """
 		INSERT INTO accounts (
@@ -42,6 +43,14 @@ public class PostgresAccountStore implements AccountStore, AccountQueryReadPort,
 			status, archived_at, created_by, created_at, updated_at, version
 		FROM accounts
 		WHERE id = ?
+		""";
+
+	private static final String SELECT_BY_ID_FOR_UPDATE_SQL = """
+		SELECT id, account_class, account_type, name, institution, currency, note,
+			status, archived_at, created_by, created_at, updated_at, version
+		FROM accounts
+		WHERE id = ?
+		FOR UPDATE
 		""";
 
 	private static final String UPDATE_NAME_SQL = """
@@ -64,6 +73,15 @@ public class PostgresAccountStore implements AccountStore, AccountQueryReadPort,
 		UPDATE accounts
 		SET name = ?, institution = ?, updated_at = CAST(? AS timestamptz), version = version + 1
 		WHERE id = ? AND version = ?
+		RETURNING id, account_class, account_type, name, institution, currency, note,
+			status, archived_at, created_by, created_at, updated_at, version
+		""";
+
+	private static final String ARCHIVE_SQL = """
+		UPDATE accounts
+		SET status = 'ARCHIVED', archived_at = CAST(? AS timestamptz),
+			updated_at = CAST(? AS timestamptz), version = version + 1
+		WHERE id = ? AND status = 'ACTIVE' AND version = ?
 		RETURNING id, account_class, account_type, name, institution, currency, note,
 			status, archived_at, created_by, created_at, updated_at, version
 		""";
@@ -121,6 +139,34 @@ public class PostgresAccountStore implements AccountStore, AccountQueryReadPort,
 	}
 
 	@Override
+	public Optional<Account> findByIdForUpdate(UUID accountId) {
+		if (accountId == null) {
+			throw new AccountPersistenceException(new IllegalArgumentException("账户 ID 不能为空。"));
+		}
+		try {
+			// 账户归档必须与流动性事实写入按同一账户行串行化，锁取得后再读取状态。
+			Record record = dsl.resultQuery(SELECT_BY_ID_FOR_UPDATE_SQL, accountId).fetchOne();
+			return record == null ? Optional.empty() : Optional.of(toDomain(record));
+		} catch (DataAccessException | org.jooq.exception.DataAccessException exception) {
+			throw new AccountPersistenceException(exception);
+		}
+	}
+
+	@Override
+	public Optional<Account> archiveIfVersion(UUID accountId, int expectedVersion, Instant archivedAt) {
+		if (accountId == null || expectedVersion < 1 || archivedAt == null) {
+			throw new AccountPersistenceException(new IllegalArgumentException("账户归档参数无效。"));
+		}
+		try {
+			Record record = dsl.resultQuery(
+				ARCHIVE_SQL, utc(archivedAt), utc(archivedAt), accountId, expectedVersion).fetchOne();
+			return record == null ? Optional.empty() : Optional.of(toDomain(record));
+		} catch (DataAccessException | org.jooq.exception.DataAccessException exception) {
+			throw new AccountPersistenceException(exception);
+		}
+	}
+
+	@Override
 	public List<Account> listByIds(
 		Collection<UUID> accountIds,
 		AccountKeysetPosition after,
@@ -137,7 +183,7 @@ public class PostgresAccountStore implements AccountStore, AccountQueryReadPort,
 			SELECT id, account_class, account_type, name, institution, currency, note,
 				status, archived_at, created_by, created_at, updated_at, version
 			FROM accounts
-			WHERE id IN (%s)
+			WHERE status = 'ACTIVE' AND id IN (%s)
 			%s
 			ORDER BY created_at DESC, id DESC
 			LIMIT ?

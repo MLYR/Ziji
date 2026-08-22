@@ -6,6 +6,9 @@ import java.util.Base64;
 import java.util.UUID;
 
 import app.ziji.account.application.AccountCursorCodec;
+import app.ziji.account.application.AccountArchiveService;
+import app.ziji.account.application.AccountArchiveStore;
+import app.ziji.account.application.AccountBalanceReadPort;
 import app.ziji.account.application.AccountLedgerInitializationPort;
 import app.ziji.account.application.AccountCreationService;
 import app.ziji.account.application.AccountQueryReadPort;
@@ -82,5 +85,19 @@ class AccountInfrastructureConfiguration {
 		} catch (IllegalArgumentException exception) {
 			throw new IllegalStateException("流动性占用游标密钥配置无效。", exception);
 		}
+	}
+
+	@Bean
+	AccountArchiveService accountArchiveService(
+		TransactionRunner transactions,
+		AccountStore accounts,
+		AccountArchiveStore archives,
+		AccountMembershipReadPort memberships,
+		AccountBalanceReadPort balances,
+		AuditLogWritePort auditLogs,
+		Clock clock) {
+		// 归档与余额确认共享账户、membership、审计和条件写入事务，不创建新的账务事实。
+		return new AccountArchiveService(
+			transactions, accounts, archives, memberships, balances, auditLogs, clock);
 	}
 }

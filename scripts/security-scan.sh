@@ -77,8 +77,18 @@ scan_secrets() {
     local stderr_path=''
 
     cleanup_secret_artifacts() {
-      # 报告和 Trivy stderr 都可能含敏感匹配内容，任何退出路径均不得遗留。
-      rm -f -- "$report_path" "$stderr_path" 2>/dev/null || true
+      # 报告和 Trivy stderr 都可能含敏感匹配内容，清理失败必须阻断结果，避免敏感文件残留。
+      local cleanup_status=0
+      if [ -n "$report_path" ]; then
+        rm -f -- "$report_path" 2>/dev/null || cleanup_status=$?
+      fi
+      if [ -n "$stderr_path" ]; then
+        rm -f -- "$stderr_path" 2>/dev/null || cleanup_status=$?
+      fi
+      if [ "$cleanup_status" -ne 0 ]; then
+        printf '<== repository secret scan：敏感临时产物清理失败\n' >&2
+        exit 2
+      fi
     }
 
     trap cleanup_secret_artifacts EXIT

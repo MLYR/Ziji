@@ -37,6 +37,26 @@ public class PostgresAccountMembershipReadPort implements AccountMembershipReadP
 		  AND s.valid_from <= CURRENT_TIMESTAMP
 		""";
 
+	private static final String FIND_ACTIVE_FOR_UPDATE_SQL = """
+		/* 锁等待结束后用数据库墙上时钟重判当前周期，不能用事务开始时间放行已撤权成员。 */
+		SELECT m.role, s.ratio
+		FROM account_members m
+		JOIN account_inclusion_settings s ON s.membership_id = m.id
+		WHERE m.user_id = ? AND m.account_id = ? AND m.status = 'ACTIVE' AND s.valid_to IS NULL
+		  AND m.joined_at <= clock_timestamp()
+		  AND (m.ended_at IS NULL OR m.ended_at > clock_timestamp())
+		  AND s.valid_from <= clock_timestamp()
+		""";
+
+	private static final String LOCK_MEMBERSHIPS_SQL = """
+		/* 先锁定该用户在账户上的全部成员周期，再用新命令读取锁释放后的当前状态。 */
+		SELECT m.id
+		FROM account_members m
+		WHERE m.user_id = ? AND m.account_id = ?
+		ORDER BY m.joined_at DESC, m.id DESC
+		FOR UPDATE OF m
+		""";
+
 	private final JdbcTemplate jdbc;
 
 	public PostgresAccountMembershipReadPort(JdbcTemplate jdbc) {
@@ -63,6 +83,20 @@ public class PostgresAccountMembershipReadPort implements AccountMembershipReadP
 			return Optional.empty();
 		}
 		List<ActiveMembership> memberships = jdbc.query(FIND_ACTIVE_SQL, (result, rowNum) -> new ActiveMembership(
+			accountId,
+			result.getString("role"),
+			result.getBigDecimal("ratio")), userId, accountId);
+		return memberships.isEmpty() ? Optional.empty() : Optional.of(memberships.getFirst());
+	}
+
+	@Override
+	public Optional<ActiveMembership> findActiveMembershipForUpdate(UUID userId, UUID accountId) {
+		if (userId == null || accountId == null) {
+			return Optional.empty();
+		}
+		// 当前周期查询必须在锁等待完成后作为新命令执行，避免旧事务时间和旧快照共同放行撤权成员。
+		jdbc.query(LOCK_MEMBERSHIPS_SQL, (result, rowNum) -> result.getObject("id", UUID.class), userId, accountId);
+		List<ActiveMembership> memberships = jdbc.query(FIND_ACTIVE_FOR_UPDATE_SQL, (result, rowNum) -> new ActiveMembership(
 			accountId,
 			result.getString("role"),
 			result.getBigDecimal("ratio")), userId, accountId);

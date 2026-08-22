@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
 # 离线回归：fake Trivy 的疑似密钥只能进入受控临时文件，所有退出路径均需清理。
-set -uo pipefail
+# 任一用例断言失败必须让整个回归返回非零，避免末尾成功提示掩盖失败。
+set -euo pipefail
 
 readonly ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly TEST_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ziji-security-scan-test.XXXXXX")"
@@ -44,7 +45,8 @@ case "${FAKE_TRIVY_MODE:?}" in
     exit 0
     ;;
   valid-one)
-    printf '%s\n' '{"Results":[]}' >"$output_path"
+    # 合法报告内放入模拟匹配，验证报告内容也不会进入 stdout/stderr。
+    printf '%s\n' '{"Results":[{"Target":"fixture.txt","Secrets":[{"RuleID":"mock-secret","Match":"mock-secret-value-must-not-reach-log"}]}]}' >"$output_path"
     exit 1
     ;;
   invalid-json)
@@ -53,9 +55,8 @@ case "${FAKE_TRIVY_MODE:?}" in
     ;;
   term)
     printf '%s\n' '{"Results":[]}' >"$output_path"
-    # 向拥有陷阱的扫描子 shell 发送取消信号，模拟 CI 取消正在执行的扫描。
+    # 向拥有陷阱的扫描子 shell 发送取消信号后立即退出，避免固定等待掩盖清理结果。
     kill -TERM "$PPID"
-    sleep 1
     exit 0
     ;;
   *)

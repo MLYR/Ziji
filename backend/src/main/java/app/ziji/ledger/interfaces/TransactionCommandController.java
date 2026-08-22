@@ -53,6 +53,7 @@ import app.ziji.user.application.CurrentUserIdResolver;
 import app.ziji.user.application.CurrentUserTimezonePort;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -61,6 +62,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /** 交易写 HTTP 边界；请求只转换为受控语义命令，绝不接收或拼接任意分录。 */
 @RestController
@@ -85,6 +87,7 @@ public class TransactionCommandController {
 	private final CurrentUserIdResolver currentUserIdResolver;
 	private final CurrentUserTimezonePort timezones;
 	private final UnifiedIdempotencyService idempotency;
+	private final ObjectMapper objectMapper;
 
 	public TransactionCommandController(
 		LedgerCommandApplicationService commands,
@@ -93,12 +96,25 @@ public class TransactionCommandController {
 		CurrentUserIdResolver currentUserIdResolver,
 		CurrentUserTimezonePort timezones,
 		UnifiedIdempotencyService idempotency) {
+		this(commands, preflight, queries, currentUserIdResolver, timezones, idempotency, new ObjectMapper());
+	}
+
+	@Autowired
+	public TransactionCommandController(
+		LedgerCommandApplicationService commands,
+		LedgerCommandPreflightService preflight,
+		TransactionQueryService queries,
+		CurrentUserIdResolver currentUserIdResolver,
+		CurrentUserTimezonePort timezones,
+		UnifiedIdempotencyService idempotency,
+		ObjectMapper objectMapper) {
 		this.commands = commands;
 		this.preflight = preflight;
 		this.queries = queries;
 		this.currentUserIdResolver = currentUserIdResolver;
 		this.timezones = timezones;
 		this.idempotency = idempotency;
+		this.objectMapper = objectMapper;
 	}
 
 	@PostMapping(path = "/api/v1/transactions", consumes = MediaType.APPLICATION_JSON_VALUE, name = "postTransaction")
@@ -126,14 +142,16 @@ public class TransactionCommandController {
 		name = "reviseTransaction")
 	public ResponseEntity<?> reviseTransaction(
 		@PathVariable String transactionId,
-		@RequestBody JsonNode body,
+		@RequestBody(required = false) String rawBody,
 		Principal principal,
 		HttpServletRequest request,
 		HttpServletResponse response) {
 		UUID userId = currentUserIdResolver.resolve(principal);
 		UUID parsedTransactionId = parseUuid(transactionId);
-		ParsedRevision revision = parseRevision(body, userId);
 		TransactionSnapshot original = queries.get(userId, parsedTransactionId);
+		// 先证明原交易可见且具备写权限，再解析 body，避免不可见或只读资源因畸形输入暴露 400。
+		preflight.requireWritable(userId, List.of(original.transaction()), List.of());
+		ParsedRevision revision = parseRevision(parseRequestBody(rawBody), userId);
 		List<Transaction> related = relatedTransactions(
 			userId, revision.replacement().relatedTransactionIds(), original.transaction());
 		preflight.requireWritable(
@@ -147,17 +165,17 @@ public class TransactionCommandController {
 		Optional<IdempotencyExecution<Void>> inspected = idempotency.inspectAuthenticated(
 			userId, API_MAJOR_VERSION, "reviseTransaction", key, hash);
 		if (inspected.isPresent()) {
-			return resolve(inspected.get(), userId, response);
-		}
-		if (original.entityVersion() != expectedVersion) {
-			return resolve(versionConflictExecution(
-				userId, "reviseTransaction", key, hash, parsedTransactionId, original.entityVersion()), userId, response);
+			// 幂等历史响应也要在渲染前重新证明当前对象权限，避免撤权后回显冲突摘要。
+			preflight.requireWritable(userId, related, revision.replacement().accountIds());
+			return resolve(inspected.get(), userId, response, transactionLocation(parsedTransactionId));
 		}
 		IdempotencyExecution<Transaction> execution = idempotency.executeAuthenticated(
 			userId, API_MAJOR_VERSION, "reviseTransaction", key, hash, () -> revisionWork(
 				() -> commands.revisePostedTransaction(revision.command(userId, parsedTransactionId, expectedVersion)),
 				parsedTransactionId));
-		return resolve(execution, userId, response);
+		requireCurrentAccessForExistingExecution(execution,
+			() -> preflight.requireWritable(userId, related, revision.replacement().accountIds()));
+		return resolve(execution, userId, response, transactionLocation(parsedTransactionId));
 	}
 
 	@PostMapping(
@@ -166,16 +184,16 @@ public class TransactionCommandController {
 		name = "reverseTransaction")
 	public ResponseEntity<?> reverseTransaction(
 		@PathVariable String transactionId,
-		@RequestBody JsonNode body,
+		@RequestBody(required = false) String rawBody,
 		Principal principal,
 		HttpServletRequest request,
 		HttpServletResponse response) {
 		UUID userId = currentUserIdResolver.resolve(principal);
 		UUID parsedTransactionId = parseUuid(transactionId);
-		ParsedReason parsed = parseReason(body);
 		TransactionSnapshot original = queries.get(userId, parsedTransactionId);
 		preflight.requireWritable(
 			userId, List.of(original.transaction()), List.of());
+		ParsedReason parsed = parseReason(parseRequestBody(rawBody));
 		int expectedVersion = parseIfMatch(request);
 		String canonicalIfMatch = etag(expectedVersion);
 		String key = idempotencyKey(request);
@@ -184,17 +202,17 @@ public class TransactionCommandController {
 		Optional<IdempotencyExecution<Void>> inspected = idempotency.inspectAuthenticated(
 			userId, API_MAJOR_VERSION, "reverseTransaction", key, hash);
 		if (inspected.isPresent()) {
-			return resolve(inspected.get(), userId, response);
-		}
-		if (original.entityVersion() != expectedVersion) {
-			return resolve(versionConflictExecution(
-				userId, "reverseTransaction", key, hash, parsedTransactionId, original.entityVersion()), userId, response);
+			// 幂等历史响应必须再次通过对象级写权限证明，不能只依赖未加锁的初次查询。
+			preflight.requireWritable(userId, List.of(original.transaction()), List.of());
+			return resolve(inspected.get(), userId, response, transactionLocation(parsedTransactionId));
 		}
 		IdempotencyExecution<Transaction> execution = idempotency.executeAuthenticated(
 			userId, API_MAJOR_VERSION, "reverseTransaction", key, hash, () -> voidWork(
 				() -> commands.voidPostedTransaction(new VoidPostedTransactionCommand(
 					userId, parsedTransactionId, expectedVersion, parsed.reason())), parsedTransactionId));
-		return resolve(execution, userId, response);
+		requireCurrentAccessForExistingExecution(execution,
+			() -> preflight.requireWritable(userId, List.of(original.transaction()), List.of()));
+		return resolve(execution, userId, response, transactionLocation(parsedTransactionId));
 	}
 
 	@PostMapping(
@@ -259,23 +277,18 @@ public class TransactionCommandController {
 		return transactionWork(() -> work.get().reversal(), originalTransactionId);
 	}
 
-	private IdempotencyExecution<Transaction> versionConflictExecution(
+	private ResponseEntity<?> resolve(
+		IdempotencyExecution<?> execution,
 		UUID userId,
-		String operationId,
-		String key,
-		String hash,
-		UUID transactionId,
-		int currentVersion) {
-		return idempotency.executeAuthenticated(
-			userId, API_MAJOR_VERSION, operationId, key, hash,
-			() -> IdempotencyWorkResult.completed(null, IdempotencyResponse.failedFinalVersionConflict(
-				409, currentVersion, transactionLocation(transactionId))));
+		HttpServletResponse response) {
+		return resolve(execution, userId, response, null);
 	}
 
 	private ResponseEntity<?> resolve(
 		IdempotencyExecution<?> execution,
 		UUID userId,
-		HttpServletResponse response) {
+		HttpServletResponse response,
+		String expectedVersionConflictLocation) {
 		if (execution.status() == IdempotencyExecution.Status.KEY_REUSED) {
 			throw new TransactionApiProblemException(HttpStatus.CONFLICT, "IDEMPOTENCY_KEY_REUSED", false);
 		}
@@ -291,7 +304,7 @@ public class TransactionCommandController {
 			throw internal();
 		}
 		if (stored.status() != IdempotencyResponse.Status.SUCCEEDED) {
-			throw storedProblem(stored);
+			throw storedProblem(stored, expectedVersionConflictLocation);
 		}
 		if (stored.responseStatus() != 201 || !RESOURCE_TYPE.equals(stored.resourceType())
 			|| stored.resourceId() == null
@@ -323,10 +336,26 @@ public class TransactionCommandController {
 				new TransactionController.ResponseMeta(requestId(response))));
 	}
 
-	private TransactionApiProblemException storedProblem(IdempotencyResponse response) {
+	private static void requireCurrentAccessForExistingExecution(
+		IdempotencyExecution<?> execution,
+		Runnable accessProof) {
+		if (execution.status() != IdempotencyExecution.Status.EXECUTED) {
+			// inspect 为空后 acquire 仍可能读到并发提交的历史终态，渲染前必须再次验证当前对象权限。
+			accessProof.run();
+		}
+	}
+
+	private TransactionApiProblemException storedProblem(
+		IdempotencyResponse response,
+		String expectedVersionConflictLocation) {
 		if (response.reference() instanceof IdempotencyResponse.VersionConflictReference conflict
 			&& response.status() == IdempotencyResponse.Status.FAILED_FINAL
 			&& response.responseStatus() == 409) {
+			// 共享层只能校验路径形状；当前路由必须再绑定原交易的 canonical 地址，错绑历史行直接 fail-closed。
+			if (expectedVersionConflictLocation == null
+				|| !expectedVersionConflictLocation.equals(conflict.resourceLocation())) {
+				return internal();
+			}
 			return new TransactionApiProblemException(conflict);
 		}
 		if (response.reference() instanceof IdempotencyResponse.ProblemReference problem) {
@@ -396,6 +425,15 @@ public class TransactionCommandController {
 		validateExactObject(body, Set.of("reason"));
 		String reason = requiredText(body.get("reason"), 500, false);
 		return new ParsedReason(reason, Map.of("reason", reason));
+	}
+
+	private JsonNode parseRequestBody(String rawBody) {
+		try {
+			// 资源可见性和写权限已在调用方证明；手动解析把格式错误推迟到安全边界之后。
+			return rawBody == null ? null : objectMapper.readTree(rawBody);
+		} catch (RuntimeException exception) {
+			throw invalid();
+		}
 	}
 
 	private ParsedBalanceAdjustment parseBalanceAdjustment(JsonNode body) {

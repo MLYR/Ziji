@@ -122,6 +122,23 @@ LiquidityHold 的四个公开 operation 继续复用上述统一幂等服务。�
 
 LiquidityHold 的 `status` 由查询时点 `asOf` 从 `effectiveAt`、`expiresAt` 和终止事实推导，不是幂等安全引用中的持久化字段；若重放时已跨过尚未物化版本的生效或过期边界，服务端无法精确重建首次响应，必须返回 `500 INTERNAL_ERROR`，不得以当前状态伪装重放或重复执行业务写入。
 
+账户归档也复用上述统一幂等服务。`POST /accounts/{accountId}/archive` 只允许当前 `ACTIVE` membership 的 `OWNER` 调用；`EDITOR`/`VIEWER` 返回 `403 PERMISSION_DENIED`，无 membership、已结束/已移除 membership、无关用户和不可见账户统一返回 `404 RESOURCE_NOT_FOUND`。权限和可见性检查先于条件头、请求体和幂等记录，幂等重放前也必须重新证明当前 OWNER 可见性。
+
+归档请求固定为：
+
+```json
+{
+  "reason": "账户已完成清理",
+  "confirmNonZeroBalance": true
+}
+```
+
+`reason` 必填，`confirmNonZeroBalance` 为可选兼容字段，未知字段拒绝；省略确认字段按 `false` 规范化。服务端在同一事务内锁定账户、读取 `POSTED` PRIMARY LedgerEntry 重建的当前账面余额并按账户币种判断是否为零；不读取或写入余额投影，也不产生 Transaction、LedgerEntry 或 outbox。余额非零且确认值为缺失或 `false` 时返回 `422 NON_ZERO_BALANCE_CONFIRMATION_REQUIRED`，Problem 不回显具体余额或币种，并将结果作为 `FAILED_FINAL` 保存；客户端修改确认值时必须使用新的 `Idempotency-Key`。余额为零时确认值为 `true`、`false` 或省略均不阻止归档，余额非零且确认值为 `true` 才允许归档，因此旧客户端不会因新增字段在零余额账户上被拒绝。
+
+成功归档返回现有 `200 AccountOk`，保留强 `If-Match`（必须匹配 `"[1-9][0-9]*"`），账户状态变为 `ARCHIVED`、版本递增并保存归档时间；历史流水、历史趋势、成员周期和审计记录保留。已归档账户在当前 OWNER 使用新的请求再次归档返回 `409 ACCOUNT_ALREADY_ARCHIVED`，该稳定失败同样保存为 `FAILED_FINAL`；不可见请求仍按 `404` 处理。归档成功只追加 `ACCOUNT_ARCHIVED` 审计，metadata 不包含 `reason`、余额、完整请求体或幂等键。历史幂等引用或资源版本无法安全、精确重建时返回 `500 INTERNAL_ERROR`，不得重新执行业务写入或以当前账户快照伪造首次响应。
+
+归档 request Hash 必须包含实际 `accountId`、类型化的 `reason`、`confirmNonZeroBalance` 和实际 `If-Match`；同 Key/同 Hash 精确重放首次响应，同 Key/异 Hash 返回 `409 IDEMPOTENCY_KEY_REUSED`。强 `If-Match` 格式和版本冲突遵循 §2.5；归档后的普通账务写入必须被拒绝，不能因并发请求已提前读取 `ACTIVE` 而在归档提交后落账。
+
 创建和修订请求的公共机器形状固定为 `type`、`amount`、`currency`、`effectiveAt`、`expiresAt`、`reason`：`amount` 是 `PositiveMoney` 十进制字符串，`currency` 是顶层 `Currency` 字段，二者独立提交；`expiresAt` 可为 `null`，其余必填字段按 OpenAPI 的类型和长度约束校验。嵌套 `amount` 对象、缺失或非字符串 `currency`、未知币种和额外字段均返回 `400 VALIDATION_ERROR`；格式正确但与账户事实币种不一致返回 `422 BUSINESS_RULE_VIOLATION`。服务端只以账户事实和 application 层校验结果决定写入币种，不直接信任客户端值。
 
 公共人工 API 不接收 `source`。服务端为这三个写 operation 固定写入 `MANUAL`，客户端不能伪造 `IMPORT` 或 `SYSTEM`；后两者只保留给未来受控的内部导入或系统任务。API 的 `reason` 逐字映射数据库 `liquidity_holds.note`。修订没有独立持久化的 `revisionReason` 字段，因此公共修订载荷不接收该字段；修订理由使用新版本的 `reason`/`note`，并由追加式审计 action `LIQUIDITY_HOLD_REVISED` 表示修订行为，禁止接收后静默丢弃。
@@ -222,6 +239,7 @@ GET /transactions?accountId=...&limit=50&cursor=opaque
 | 403 | PERMISSION_DENIED | 已认证但无资源操作权限 |
 | 404 | RESOURCE_NOT_FOUND | 资源不存在或用户不可见 |
 | 409 | VERSION_CONFLICT | 乐观锁冲突；携带 `versionConflict` 三字段，资源不可见时按 404 返回 |
+| 409 | ACCOUNT_ALREADY_ARCHIVED | 当前可见账户已经归档；不携带当前余额或其他账户事实 |
 | 409 | IDEMPOTENCY_KEY_REUSED | 相同幂等键载荷不同 |
 | 409 | IDEMPOTENCY_REQUEST_IN_PROGRESS | 相同幂等请求仍在处理中；返回 Retry-After: 5 |
 | 409 | DUPLICATE_RESOURCE | 唯一资源重复 |
@@ -230,6 +248,7 @@ GET /transactions?accountId=...&limit=50&cursor=opaque
 | 413 | FILE_TOO_LARGE | 导入文件超过限制 |
 | 415 | UNSUPPORTED_FILE_TYPE | 不支持的文件类型 |
 | 422 | BUSINESS_RULE_VIOLATION | 格式正确但违反领域规则 |
+| 422 | NON_ZERO_BALANCE_CONFIRMATION_REQUIRED | 当前账面余额非零且未显式确认归档风险；不回显余额或币种 |
 | 422 | INSUFFICIENT_POSITION | 卖出数量超过持仓 |
 | 429 | RATE_LIMITED | 触发限流，返回 Retry-After |
 | 500 | INTERNAL_ERROR | 无法安全重放的历史幂等结果或未预期内部失败；不得重新执行业务，也不泄漏 SQL、堆栈或敏感输入 |

@@ -48,7 +48,7 @@ class IdempotencyOpenApiContractTests {
 				Map<String, Object> responses = objectMap(definition.get("responses"), operationId + " responses");
 				Map<String, Object> conflictResponse = objectMap(responses.get("409"), operationId + " 409 response");
 				assertEquals("#/components/responses/Conflict", conflictResponse.get("$ref"),
-					operationId + " 必须复用统一 Conflict 响应");
+					operationId + " 必须引用符合统一幂等门禁的冲突响应");
 			}
 		}
 

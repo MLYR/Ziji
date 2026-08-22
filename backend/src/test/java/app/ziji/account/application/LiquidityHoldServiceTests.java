@@ -10,10 +10,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import app.ziji.account.domain.Account;
 import app.ziji.account.domain.AccountClass;
 import app.ziji.account.domain.AccountCurrency;
+import app.ziji.account.domain.AccountStatus;
 import app.ziji.account.domain.AccountType;
 import app.ziji.account.domain.LiquidityHold;
 import app.ziji.account.domain.LiquidityHoldType;
@@ -149,14 +152,184 @@ class LiquidityHoldServiceTests {
 		assertDoesNotThrow(() -> service.list(VIEWER_ID, ACCOUNT_ID, null, null));
 		assertDoesNotThrow(() -> service.preflightMutation(USER_ID, ACCOUNT_ID, holdId, 1));
 		assertDoesNotThrow(() -> service.preflightMutation(EDITOR_ID, ACCOUNT_ID, holdId, 1));
-		assertThrows(LiquidityHoldException.VersionConflict.class,
-			() -> service.preflightMutation(USER_ID, ACCOUNT_ID, holdId, 2));
+		assertDoesNotThrow(() -> service.preflightMutation(USER_ID, ACCOUNT_ID, holdId, 2));
 		assertThrows(AccountPermissionDeniedException.class,
 			() -> service.preflightMutation(VIEWER_ID, ACCOUNT_ID, holdId, 1));
+		for (UUID visibleUserId : List.of(USER_ID, EDITOR_ID, VIEWER_ID)) {
+			assertThrows(AccountNotVisibleException.class,
+				() -> service.preflightMutation(visibleUserId, ACCOUNT_ID, UUID.randomUUID(), 1));
+		}
 		for (UUID invisibleUserId : List.of(LEFT_ID, REMOVED_ID, ENDED_ID, STRANGER_ID, CREATED_BY_ONLY_ID)) {
 			assertThrows(AccountNotVisibleException.class, () -> service.list(invisibleUserId, ACCOUNT_ID, null, null));
 			assertThrows(AccountNotVisibleException.class,
 				() -> service.preflightMutation(invisibleUserId, ACCOUNT_ID, holdId, 1));
+		}
+	}
+
+	@Test
+	void mutationChecksHoldVisibilityBeforeViewerPermissionInPreflightAndTransaction() {
+		UUID holdId = UUID.randomUUID();
+		LiquidityHold hold = LiquidityHold.restore(
+			holdId, ACCOUNT_ID, holdId, null, 1, LiquidityHoldType.FROZEN,
+			new BigDecimal("10.00"), AccountCurrency.CNY, NOW.minusSeconds(1), null, null,
+			app.ziji.account.domain.LiquidityHoldSource.MANUAL, "原因", null, null, USER_ID, NOW, NOW, 1);
+		LiquidityHoldService service = service(new ArrayList<>(), new ArrayList<>(), Optional.of(hold),
+			Clock.fixed(NOW, ZoneOffset.UTC), Map.of(USER_ID, "OWNER", VIEWER_ID, "VIEWER"), USER_ID);
+		LiquidityHoldCommand command = new LiquidityHoldCommand(
+			LiquidityHoldType.RESERVED, new BigDecimal("11.00"), AccountCurrency.CNY, NOW, null, "修订");
+
+		assertThrows(AccountNotVisibleException.class,
+			() -> service.preflightMutation(VIEWER_ID, ACCOUNT_ID, UUID.randomUUID(), 1));
+		assertThrows(AccountPermissionDeniedException.class,
+			() -> service.preflightMutation(VIEWER_ID, ACCOUNT_ID, holdId, 1));
+		assertThrows(AccountNotVisibleException.class,
+			() -> service.revise(VIEWER_ID, ACCOUNT_ID, UUID.randomUUID(), 1, command, "request-missing"));
+		assertThrows(AccountPermissionDeniedException.class,
+			() -> service.revise(VIEWER_ID, ACCOUNT_ID, holdId, 1, command, "request-viewer"));
+		assertThrows(AccountNotVisibleException.class,
+			() -> service.release(VIEWER_ID, ACCOUNT_ID, UUID.randomUUID(), 1, "release-missing"));
+		assertThrows(AccountPermissionDeniedException.class,
+			() -> service.release(VIEWER_ID, ACCOUNT_ID, holdId, 1, "release-viewer"));
+	}
+
+	@Test
+	void archivedAccountRejectsNewFactsButAllowsReleaseOfAnOperableVisibleHold() {
+		UUID holdId = UUID.randomUUID();
+		LiquidityHold current = LiquidityHold.restore(
+			holdId, ACCOUNT_ID, holdId, null, 1, LiquidityHoldType.FROZEN,
+			new BigDecimal("10.00"), AccountCurrency.CNY, NOW.minusSeconds(1), null, null,
+			app.ziji.account.domain.LiquidityHoldSource.MANUAL, "原因", null, null, USER_ID, NOW, NOW, 1);
+		Account archived = Account.restore(
+			ACCOUNT_ID, AccountClass.ASSET, AccountType.BANK, "归档账户", null, AccountCurrency.CNY, null,
+			AccountStatus.ARCHIVED, NOW, USER_ID, NOW, NOW, 2);
+		List<LiquidityHold> inserted = new ArrayList<>();
+		List<AuditLogWritePort.AuditLogEntry> audits = new ArrayList<>();
+		LiquidityHoldService service = service(inserted, audits, Optional.of(current), Clock.fixed(NOW, ZoneOffset.UTC),
+			Map.of(USER_ID, "OWNER"), archived);
+		LiquidityHoldCommand command = new LiquidityHoldCommand(
+			LiquidityHoldType.RESERVED, new BigDecimal("11.00"), AccountCurrency.CNY, NOW, null, "归档后修订");
+
+		assertDoesNotThrow(() -> service.preflightCreate(USER_ID, ACCOUNT_ID));
+		assertDoesNotThrow(() -> service.preflightMutation(USER_ID, ACCOUNT_ID, holdId, 1, false));
+		assertDoesNotThrow(() -> service.preflightMutation(USER_ID, ACCOUNT_ID, holdId, 1, true));
+		assertThrows(LiquidityHoldException.BusinessRule.class,
+			() -> service.create(USER_ID, ACCOUNT_ID, command, "archived-create"));
+		assertThrows(LiquidityHoldException.BusinessRule.class,
+			() -> service.revise(USER_ID, ACCOUNT_ID, holdId, 1, command, "archived-revise"));
+		assertEquals(0, inserted.size());
+		LiquidityHold released = service.release(USER_ID, ACCOUNT_ID, holdId, 1, "archived-release");
+		assertEquals("RELEASED", released.endReason().name());
+		assertEquals(NOW, released.releasedAt());
+		assertEquals(1, audits.size());
+	}
+
+	@Test
+	void transactionRechecksArchivedStatusAfterPreflightBeforeCreatingOrRevisingFacts() {
+		UUID holdId = UUID.randomUUID();
+		LiquidityHold current = LiquidityHold.restore(
+			holdId, ACCOUNT_ID, holdId, null, 1, LiquidityHoldType.FROZEN,
+			new BigDecimal("10.00"), AccountCurrency.CNY, NOW.minusSeconds(1), null, null,
+			app.ziji.account.domain.LiquidityHoldSource.MANUAL, "原因", null, null, USER_ID, NOW, NOW, 1);
+		Account active = Account.create(
+			ACCOUNT_ID, AccountClass.ASSET, AccountType.BANK, "现金", null, AccountCurrency.CNY, null, USER_ID, NOW);
+		Account archived = Account.restore(
+			ACCOUNT_ID, AccountClass.ASSET, AccountType.BANK, "归档账户", null, AccountCurrency.CNY, null,
+			AccountStatus.ARCHIVED, NOW, USER_ID, NOW, NOW, 2);
+		AtomicReference<Account> account = new AtomicReference<>(active);
+		List<LiquidityHold> inserted = new ArrayList<>();
+		List<AuditLogWritePort.AuditLogEntry> audits = new ArrayList<>();
+		LiquidityHoldService service = service(inserted, audits, Optional.of(current), Clock.fixed(NOW, ZoneOffset.UTC),
+			Map.of(USER_ID, "OWNER"), account::get);
+		MemoryIdempotencyStore records = new MemoryIdempotencyStore();
+		UnifiedIdempotencyService idempotency = idempotency(records, Clock.fixed(NOW, ZoneOffset.UTC));
+		LiquidityHoldCommand command = new LiquidityHoldCommand(
+			LiquidityHoldType.RESERVED, new BigDecimal("11.00"), AccountCurrency.CNY, NOW, null, "归档竞争");
+
+		service.preflightCreate(USER_ID, ACCOUNT_ID);
+		account.set(archived);
+		assertThrows(LiquidityHoldException.BusinessRule.class,
+			() -> idempotency.executeAuthenticated(USER_ID, 1, "createLiquidityHold", "archive-race-create-001", "c".repeat(64), () -> {
+				LiquidityHold created = service.create(USER_ID, ACCOUNT_ID, command, "archived-after-create-preflight");
+				return IdempotencyWorkResult.completed(created, IdempotencyResponse.succeededEmpty(201));
+			}));
+		account.set(active);
+		service.preflightMutation(USER_ID, ACCOUNT_ID, holdId, 1, false);
+		account.set(archived);
+		assertThrows(LiquidityHoldException.BusinessRule.class,
+			() -> idempotency.executeAuthenticated(USER_ID, 1, "reviseLiquidityHold", "archive-race-revise-01", "d".repeat(64), () -> {
+				LiquidityHold revised = service.revise(USER_ID, ACCOUNT_ID, holdId, 1, command, "archived-after-revise-preflight");
+				return IdempotencyWorkResult.completed(revised, IdempotencyResponse.succeededEmpty(201));
+			}));
+
+		assertTrue(inserted.isEmpty());
+		assertTrue(audits.isEmpty());
+		assertTrue(records.completed.isEmpty());
+	}
+
+	@Test
+	void lifecycleAuditContainsOnlyTheRequiredVersionAndTypeMetadata() {
+		List<LiquidityHold> inserted = new ArrayList<>();
+		List<AuditLogWritePort.AuditLogEntry> audits = new ArrayList<>();
+		LiquidityHoldService service = service(inserted, audits);
+		LiquidityHold created = service.create(USER_ID, ACCOUNT_ID, new LiquidityHoldCommand(
+			LiquidityHoldType.FROZEN, new BigDecimal("10.00"), AccountCurrency.CNY, NOW, null, "创建理由"), "request-create");
+		LiquidityHold revised = service.revise(USER_ID, ACCOUNT_ID, created.id(), 1, new LiquidityHoldCommand(
+			LiquidityHoldType.IN_TRANSIT, new BigDecimal("12.00"), AccountCurrency.CNY, NOW, null, "修订理由"), "request-revise");
+		LiquidityHold released = service.release(USER_ID, ACCOUNT_ID, revised.id(), 1, "request-release");
+
+		assertEquals(3, audits.size());
+		AuditLogWritePort.AuditLogEntry create = audits.get(0);
+		assertEquals("LIQUIDITY_HOLD_CREATED", create.action());
+		assertEquals("LIQUIDITY_HOLD", create.resourceType());
+		assertEquals(created.id(), create.resourceId());
+		assertEquals(ACCOUNT_ID, create.accountId());
+		assertEquals(USER_ID, create.actorUserId());
+		assertEquals(AuditLogWritePort.ActorType.USER, create.actorType());
+		assertEquals("request-create", create.requestId());
+		assertEquals(AuditLogWritePort.Result.SUCCESS, create.result());
+		assertEquals(null, create.reasonCode());
+		assertEquals(created.id().toString(), create.metadata().get("holdId"));
+		assertEquals("1", create.metadata().get("version"));
+		assertEquals("FROZEN", create.metadata().get("type"));
+
+		AuditLogWritePort.AuditLogEntry revise = audits.get(1);
+		assertEquals("LIQUIDITY_HOLD_REVISED", revise.action());
+		assertEquals("LIQUIDITY_HOLD", revise.resourceType());
+		assertEquals("SUPERSEDED", revise.reasonCode());
+		assertEquals(revised.id(), revise.resourceId());
+		assertEquals(ACCOUNT_ID, revise.accountId());
+		assertEquals(USER_ID, revise.actorUserId());
+		assertEquals(AuditLogWritePort.ActorType.USER, revise.actorType());
+		assertEquals("request-revise", revise.requestId());
+		assertEquals(AuditLogWritePort.Result.SUCCESS, revise.result());
+		assertEquals(created.id().toString(), revise.metadata().get("previousHoldId"));
+		assertEquals("1", revise.metadata().get("previousVersion"));
+		assertEquals("1", revise.metadata().get("expectedVersion"));
+		assertEquals("1", revise.metadata().get("version"));
+		assertEquals("FROZEN", revise.metadata().get("fromType"));
+		assertEquals("IN_TRANSIT", revise.metadata().get("toType"));
+
+		AuditLogWritePort.AuditLogEntry release = audits.get(2);
+		assertEquals("LIQUIDITY_HOLD_RELEASED", release.action());
+		assertEquals("LIQUIDITY_HOLD", release.resourceType());
+		assertEquals("RELEASED", release.reasonCode());
+		assertEquals(released.id(), release.resourceId());
+		assertEquals(ACCOUNT_ID, release.accountId());
+		assertEquals(USER_ID, release.actorUserId());
+		assertEquals(AuditLogWritePort.ActorType.USER, release.actorType());
+		assertEquals("request-release", release.requestId());
+		assertEquals(AuditLogWritePort.Result.SUCCESS, release.result());
+		assertEquals(revised.id().toString(), release.metadata().get("previousHoldId"));
+		assertEquals("1", release.metadata().get("previousVersion"));
+		assertEquals("1", release.metadata().get("expectedVersion"));
+		assertEquals("2", release.metadata().get("version"));
+		assertEquals("IN_TRANSIT", release.metadata().get("fromType"));
+		assertEquals("IN_TRANSIT", release.metadata().get("toType"));
+		for (AuditLogWritePort.AuditLogEntry audit : audits) {
+			assertTrue(audit.metadata().keySet().stream().noneMatch(key ->
+				key.toLowerCase().contains("reason") || key.toLowerCase().contains("amount")
+					|| key.toLowerCase().contains("currency") || key.toLowerCase().contains("token")
+					|| key.toLowerCase().contains("cookie") || key.toLowerCase().contains("key")));
 		}
 	}
 
@@ -188,14 +361,40 @@ class LiquidityHoldServiceTests {
 		Clock clock,
 		Map<UUID, String> activeRoles,
 		UUID accountCreatedBy) {
+		return service(inserted, audits, replayHold, clock, activeRoles, Account.create(
+			ACCOUNT_ID, AccountClass.ASSET, AccountType.BANK, "现金", null, AccountCurrency.CNY, null,
+			accountCreatedBy, NOW));
+	}
+
+	private static LiquidityHoldService service(
+		List<LiquidityHold> inserted,
+		List<AuditLogWritePort.AuditLogEntry> audits,
+		Optional<LiquidityHold> replayHold,
+		Clock clock,
+		Map<UUID, String> activeRoles,
+		Account account) {
+		return service(inserted, audits, replayHold, clock, activeRoles, () -> account);
+	}
+
+	private static LiquidityHoldService service(
+		List<LiquidityHold> inserted,
+		List<AuditLogWritePort.AuditLogEntry> audits,
+		Optional<LiquidityHold> replayHold,
+		Clock clock,
+		Map<UUID, String> activeRoles,
+		Supplier<Account> account) {
 		AccountStore accounts = new AccountStore() {
 			@Override
 			public void insert(Account account) {}
 
 			@Override
 			public Optional<Account> findById(UUID accountId) {
-				return Optional.of(Account.create(ACCOUNT_ID, AccountClass.ASSET, AccountType.BANK,
-					"现金", null, AccountCurrency.CNY, null, accountCreatedBy, NOW));
+				return ACCOUNT_ID.equals(accountId) ? Optional.of(account.get()) : Optional.empty();
+			}
+
+			@Override
+			public Optional<Account> findByIdForUpdate(UUID accountId) {
+				return findById(accountId);
 			}
 		};
 		AccountMembershipReadPort memberships = new AccountMembershipReadPort() {
@@ -209,6 +408,11 @@ class LiquidityHoldServiceTests {
 			public Optional<ActiveMembership> findActiveMembership(UUID userId, UUID accountId) {
 				return ACCOUNT_ID.equals(accountId) && activeRoles.containsKey(userId)
 					? Optional.of(new ActiveMembership(ACCOUNT_ID, activeRoles.get(userId), BigDecimal.ONE)) : Optional.empty();
+			}
+
+			@Override
+			public Optional<ActiveMembership> findActiveMembershipForUpdate(UUID userId, UUID accountId) {
+				return findActiveMembership(userId, accountId);
 			}
 		};
 		Map<UUID, LiquidityHold> stored = new HashMap<>();
@@ -225,22 +429,46 @@ class LiquidityHoldServiceTests {
 			}
 
 			@Override
-			public Optional<LiquidityHold> lockByAccountAndId(UUID accountId, UUID holdId) { return Optional.empty(); }
-
-			@Override
 			public void insert(LiquidityHold hold) {
 				inserted.add(hold);
 				stored.put(hold.id(), hold);
 			}
 
 			@Override
+			public Optional<LiquidityHold> lockByAccountAndId(UUID accountId, UUID holdId) {
+				return findByAccountAndId(accountId, holdId);
+			}
+
+			@Override
 			public Optional<LiquidityHold> supersedeIfVersion(UUID accountId, UUID holdId, int expectedVersion, Instant now) {
-				return Optional.empty();
+				LiquidityHold current = stored.get(holdId);
+				if (current == null || !accountId.equals(current.accountId()) || current.version() != expectedVersion
+					|| current.endedAt() != null) {
+					return Optional.empty();
+				}
+				LiquidityHold closed = LiquidityHold.restore(
+					current.id(), current.accountId(), current.rootHoldId(), current.previousRevisionId(), current.revisionNo(),
+					current.type(), current.amount(), current.currency(), current.effectiveAt(), current.expiresAt(), null,
+					current.source(), current.note(), now, app.ziji.account.domain.LiquidityHoldEndReason.SUPERSEDED,
+					current.createdBy(), current.createdAt(), now, current.version() + 1);
+				stored.put(holdId, closed);
+				return Optional.of(closed);
 			}
 
 			@Override
 			public Optional<LiquidityHold> releaseIfVersion(UUID accountId, UUID holdId, int expectedVersion, Instant now) {
-				return Optional.empty();
+				LiquidityHold current = stored.get(holdId);
+				if (current == null || !accountId.equals(current.accountId()) || current.version() != expectedVersion
+					|| current.endedAt() != null) {
+					return Optional.empty();
+				}
+				LiquidityHold released = LiquidityHold.restore(
+					current.id(), current.accountId(), current.rootHoldId(), current.previousRevisionId(), current.revisionNo(),
+					current.type(), current.amount(), current.currency(), current.effectiveAt(), current.expiresAt(), now,
+					current.source(), current.note(), now, app.ziji.account.domain.LiquidityHoldEndReason.RELEASED,
+					current.createdBy(), current.createdAt(), now, current.version() + 1);
+				stored.put(holdId, released);
+				return Optional.of(released);
 			}
 		};
 		LiquidityHoldCursorCodec cursors = new LiquidityHoldCursorCodec() {

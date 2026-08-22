@@ -126,6 +126,28 @@ public final class Account {
 			version + 1);
 	}
 
+	/** 归档只允许 ACTIVE 账户发生一次状态迁移，保留所有身份、版本和历史事实。 */
+	public Account archive(Instant archivedAt) {
+		if (status != AccountStatus.ACTIVE) {
+			throw new AccountDomainException("已归档账户不能再次归档。");
+		}
+		Instant archived = require(archivedAt, "归档时间");
+		return new Account(
+			id,
+			accountClass,
+			accountType,
+			name,
+			institution,
+			currency,
+			note,
+			AccountStatus.ARCHIVED,
+			archived,
+			createdBy,
+			createdAt,
+			archived,
+			version + 1);
+	}
+
 	public UUID id() {
 		return id;
 	}

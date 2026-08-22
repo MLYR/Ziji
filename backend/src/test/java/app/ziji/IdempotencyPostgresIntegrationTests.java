@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -43,7 +44,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @ActiveProfiles("test")
 class IdempotencyPostgresIntegrationTests extends PostgresIntegrationTestSupport {
 
-	private static final Instant NOW = Instant.parse("2026-08-15T00:00:00Z");
+	// 使用对齐 PostgreSQL 微秒精度的类加载时钟，避免绝对日期和边界舍入污染共享清理夹具。
+	private static final Instant NOW = Instant.now().truncatedTo(ChronoUnit.MICROS);
 
 	@Autowired
 	private JdbcTemplate jdbc;
@@ -283,8 +285,15 @@ class IdempotencyPostgresIntegrationTests extends PostgresIntegrationTestSupport
 		Instant createdAt = Instant.now().minus(Duration.ofDays(8));
 		UUID userId = seedUser("cleanup");
 		UnifiedIdempotencyService oldService = serviceAt(createdAt);
-		String eligibleKey = key();
-		oldService.executeAuthenticated(userId, 1, "postTransaction", eligibleKey, hash('e'), () -> completed(new AtomicInteger()));
+		// 11 条独立候选锁定批量上限：第一次只删 10 条，第二次再删剩余 1 条。
+		String[] eligibleKeys = new String[11];
+		// 请求 Hash 使用合法十六进制样本，候选由随机幂等 Key 隔离。
+		for (int index = 0; index < eligibleKeys.length; index++) {
+			eligibleKeys[index] = key();
+			String eligibleKey = eligibleKeys[index];
+			oldService.executeAuthenticated(userId, 1, "postTransaction", eligibleKey,
+				hash('e'), () -> completed(new AtomicInteger()));
+		}
 
 		String transactionKey = key();
 		oldService.executeAuthenticated(userId, 1, "postTransaction", transactionKey, hash('f'), () -> completed(new AtomicInteger()));
@@ -296,14 +305,33 @@ class IdempotencyPostgresIntegrationTests extends PostgresIntegrationTestSupport
 		UUID syncRecordId = recordId(userId, syncKey);
 		insertSyncReference(userId, syncRecordId, createdAt);
 
+		// 负向样本覆盖到期 PROCESSING 与未到期终态，避免共享容器导致的计数修正削弱清理资格证据。
+		String unexpiredKey = key();
+		serviceAt(Instant.now()).executeAuthenticated(userId, 1, "postTransaction", unexpiredKey, hash('b'),
+			() -> completed(new AtomicInteger()));
+		String processingKey = key();
+		insertProcessing(UUID.randomUUID(), userId, processingKey, hash('f'), createdAt, createdAt.plusSeconds(30));
+
 		int deleted = serviceAt(Instant.now()).deleteExpiredTerminalRecords(10);
-		assertEquals(1, deleted);
-		assertEquals(0, count("SELECT COUNT(*) FROM idempotency_records WHERE idempotency_key = ?", eligibleKey));
+		assertEquals(10, deleted);
+		int remainingEligible = 0;
+		for (String eligibleKey : eligibleKeys) {
+			remainingEligible += count("SELECT COUNT(*) FROM idempotency_records WHERE idempotency_key = ?", eligibleKey);
+		}
+		assertEquals(1, remainingEligible);
 		assertEquals(1, count("SELECT COUNT(*) FROM idempotency_records WHERE id = ?", transactionRecordId));
 		assertEquals(1, count("SELECT COUNT(*) FROM idempotency_records WHERE id = ?", syncRecordId));
+		assertEquals(1, count("SELECT COUNT(*) FROM idempotency_records WHERE idempotency_key = ?", unexpiredKey));
+		assertEquals(1, count("SELECT COUNT(*) FROM idempotency_records WHERE idempotency_key = ?", processingKey));
+
+		int remainderDeleted = serviceAt(Instant.now()).deleteExpiredTerminalRecords(10);
+		assertEquals(1, remainderDeleted);
+		for (String eligibleKey : eligibleKeys) {
+			assertEquals(0, count("SELECT COUNT(*) FROM idempotency_records WHERE idempotency_key = ?", eligibleKey));
+		}
 
 		assertEquals(IdempotencyExecution.Status.EXECUTED, serviceAt(Instant.now()).executeAuthenticated(
-			userId, 1, "postTransaction", eligibleKey, hash('b'), () -> completed(new AtomicInteger())).status());
+			userId, 1, "postTransaction", eligibleKeys[0], hash('b'), () -> completed(new AtomicInteger())).status());
 	}
 
 	private UnifiedIdempotencyService serviceAt(Instant now) {

@@ -12,6 +12,11 @@ public interface AccountMembershipReadPort {
 
 	Optional<ActiveMembership> findActiveMembership(UUID userId, UUID accountId);
 
+	/** 写入事实前必须锁定当前 membership；未实现锁语义的替身/适配器必须显式失败，不能静默降级。 */
+	default Optional<ActiveMembership> findActiveMembershipForUpdate(UUID userId, UUID accountId) {
+		throw new UnsupportedOperationException("当前成员锁定读取未实现。");
+	}
+
 	/** 当前生效的成员视图；只包含仍有当前计入设置（valid_to IS NULL）的 ACTIVE 周期。 */
 	record ActiveMembership(UUID accountId, String role, BigDecimal inclusionRatio) {
 

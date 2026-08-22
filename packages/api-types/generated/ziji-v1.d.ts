@@ -1747,6 +1747,8 @@ export interface components {
         };
         ArchiveAccountRequest: {
             reason: string;
+            /** @description 可选的非零余额风险确认；省略等价于 false，余额非零时必须显式提交 true 才能归档。 */
+            confirmNonZeroBalance?: boolean;
         };
         CreateLiquidityHoldRequest: {
             /** @enum {string} */
@@ -3331,6 +3333,20 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description 账户当前账面余额非零，必须显式确认风险后使用新的幂等键重试。 */
+        NonZeroBalanceConfirmationRequired: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"] & {
+                    /** @constant */
+                    status: 422;
+                    /** @constant */
+                    code: "NON_ZERO_BALANCE_CONFIRMATION_REQUIRED";
+                };
+            };
+        };
         /** @description 请求过于频繁；Retry-After 为所有超限窗口中的最长剩余秒数 */
         RateLimited: {
             headers: {
@@ -4034,6 +4050,8 @@ export interface components {
         IdempotencyKey: string;
         /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
         IfMatch: string;
+        /** @description 账户归档运行时使用强 ETag，必须是双引号包围的正整数，例如 "7"；缺失、重复、弱 ETag、*、未加双引号、非正整数或溢出（超出服务端整数范围）均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。机器 schema 保留与既有 If-Match 相同的兼容字符串范围，精确格式由运行时校验。 */
+        ArchiveIfMatch: string;
         /** @description LiquidityHold 修订和释放使用强 ETag，必须是双引号包围的正整数，例如 "7"；缺失、重复、弱 ETag、*、未加双引号、非正整数或溢出（超出服务端整数范围）均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。 */
         LiquidityHoldIfMatch: string;
         /** @description 负债详情 PATCH 使用强 ETag，必须是双引号包围的正整数。缺失、重复、弱 ETag、*、未加双引号、零、负数、非数字或溢出均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。虚拟空详情的 "0" 不能用于创建。 */
@@ -4561,8 +4579,8 @@ export interface operations {
             header: {
                 /** @description 认证写操作按当前用户形成幂等作用域；公开 registerUser 与 resetPassword 按版本化匿名主体形成幂等作用域；两者都与 API 主版本、OpenAPI operationId 和 Idempotency-Key 共同形成作用域。request Hash 必须包含实际资源标识、类型化业务载荷和 If-Match（无 If-Match 时使用显式缺失标记），格式校验、未认证、权限失败和资源不可见不得创建幂等记录；同键同参重放首次响应，同键异参返回 IDEMPOTENCY_KEY_REUSED。 */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description 资源 ETag，例如双引号包围的实体版本；具体资源可以通过更严格的专用 If-Match 参数冻结格式。 */
-                "If-Match": components["parameters"]["IfMatch"];
+                /** @description 账户归档运行时使用强 ETag，必须是双引号包围的正整数，例如 "7"；缺失、重复、弱 ETag、*、未加双引号、非正整数或溢出（超出服务端整数范围）均返回 400 VALIDATION_ERROR；格式正确但版本过期返回 409 VERSION_CONFLICT。机器 schema 保留与既有 If-Match 相同的兼容字符串范围，精确格式由运行时校验。 */
+                "If-Match": components["parameters"]["ArchiveIfMatch"];
             };
             path: {
                 accountId: components["parameters"]["AccountId"];
@@ -4576,9 +4594,13 @@ export interface operations {
         };
         responses: {
             200: components["responses"]["AccountOk"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["NonZeroBalanceConfirmationRequired"];
+            500: components["responses"]["InternalError"];
         };
     };
     getAccountBalance: {
