@@ -1,9 +1,10 @@
 name: CI
 
 on:
+  # PR 是进入 main 前唯一自动完整门禁；合并后不重复执行同一套检查，手动排查仍可触发。
   pull_request:
-  push:
     branches: [main]
+  workflow_dispatch:
 
 # 同一分支只保留最新流水线，减少过时检查占用执行资源。
 concurrency:
@@ -31,7 +32,7 @@ jobs:
           node-version: 22.22.3
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # push 到 main 没有 PR base 上下文，只在 pull_request 比较 base SHA 与当前契约。
+      # 自动运行只有 pull_request；手动运行没有 PR base，只跳过破坏性变更比较。
       - name: Check OpenAPI breaking changes against PR base
         if: github.event_name == 'pull_request'
         env:

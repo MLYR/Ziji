@@ -146,14 +146,16 @@ jOOQ 生成物位于 `backend/target/generated-sources/jooq`，属于可重建�
 
 ## 5. 验证与提交流程
 
-本地验证按改动范围执行，提交后由 CI 对精确 commit 执行完整门禁。不要为了形式在本地重复跑两遍全量测试。
+本地只执行与改动相关的验证，PR CI 在统一环境执行一次完整核心门禁；合并 main 后不再自动重复同一套 CI。L3 高风险任务才增加定向深度验证和独立审查。
 
 ### 5.1 提交前最小验证
 
 - 文档、注释或原型：`git diff --check`。
-- Web/Mobile：对应的 `check` 和受影响测试。
-- OpenAPI：`pnpm api:check && pnpm api:generate && pnpm api:types:check`。
-- 后端账务、权限、迁移、幂等或同步：相关定向测试；高风险改动再执行完整后端测试。
+- Web/Mobile：只执行对应的 `check` 和受影响测试，不连带运行其他端。
+- 普通 Backend：只执行相关测试类，不默认运行完整 Maven。
+- OpenAPI 发生变化时：`pnpm api:check && pnpm api:generate && pnpm api:types:check`。
+- Migration 发生变化时：执行 PostgreSQL Testcontainers、Flyway 空库和上一版本升级验证。
+- 账务、金额、余额、权限、认证、幂等、同步冲突、并发、迁移、breaking contract、删除、审计和安全属于 L3，补充相应深度验证。
 
 提交前检查暂存区：
 
@@ -164,7 +166,7 @@ git diff --cached --stat
 
 ### 5.2 提交后完整门禁
 
-推送后等待 GitHub Actions 的 Contract、Backend、Web 和 Mobile 四个 job 全部成功，再合并。高风险改动若需要本地复测，应在干净提交快照上执行并记录证据。
+建立 PR 后等待 GitHub Actions required checks 全部成功再合并；合并后不重复执行同一套 CI。L3 高风险改动按任务风险补充独立审查和专项证据，不机械重跑已成功且适用的门禁。
 
 ### 5.3 各工程验证命令
 
