@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -43,8 +44,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @ActiveProfiles("test")
 class IdempotencyPostgresIntegrationTests extends PostgresIntegrationTestSupport {
 
-	// 使用类加载时钟固定本类夹具，避免绝对日期跨过七天保留期后污染清理测试的全局候选批次。
-	private static final Instant NOW = Instant.now();
+	// 使用对齐 PostgreSQL 微秒精度的类加载时钟，避免绝对日期和边界舍入污染共享清理夹具。
+	private static final Instant NOW = Instant.now().truncatedTo(ChronoUnit.MICROS);
 
 	@Autowired
 	private JdbcTemplate jdbc;
@@ -286,11 +287,12 @@ class IdempotencyPostgresIntegrationTests extends PostgresIntegrationTestSupport
 		UnifiedIdempotencyService oldService = serviceAt(createdAt);
 		// 11 条独立候选锁定批量上限：第一次只删 10 条，第二次再删剩余 1 条。
 		String[] eligibleKeys = new String[11];
+		// 请求 Hash 使用合法十六进制样本，候选由随机幂等 Key 隔离。
 		for (int index = 0; index < eligibleKeys.length; index++) {
 			eligibleKeys[index] = key();
 			String eligibleKey = eligibleKeys[index];
 			oldService.executeAuthenticated(userId, 1, "postTransaction", eligibleKey,
-				hash((char) ('e' + index)), () -> completed(new AtomicInteger()));
+				hash('e'), () -> completed(new AtomicInteger()));
 		}
 
 		String transactionKey = key();
