@@ -310,7 +310,7 @@ class IdempotencyPostgresIntegrationTests extends PostgresIntegrationTestSupport
 		serviceAt(Instant.now()).executeAuthenticated(userId, 1, "postTransaction", unexpiredKey, hash('b'),
 			() -> completed(new AtomicInteger()));
 		String processingKey = key();
-		insertProcessing(UUID.randomUUID(), userId, processingKey, hash('g'), createdAt, createdAt.plusSeconds(30));
+		insertProcessing(UUID.randomUUID(), userId, processingKey, hash('f'), createdAt, createdAt.plusSeconds(30));
 
 		int deleted = serviceAt(Instant.now()).deleteExpiredTerminalRecords(10);
 		assertEquals(10, deleted);
