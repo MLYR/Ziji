@@ -1,6 +1,6 @@
 name: Workflow security
 
-on: # 只读取 PR 元数据，不获取或执行不受信代码；此边界已审计。 zizmor: ignore[dangerous-triggers]
+on: # zizmor: ignore[dangerous-triggers]；只读取 PR 元数据，不获取或执行不受信代码，此边界已审计。
   # 只由默认分支版本执行；PR 中的 workflow 文件通过 API 作为不可执行数据读取。
   pull_request_target:
     branches: [main]
