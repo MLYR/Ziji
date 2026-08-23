@@ -1,0 +1,181 @@
+name: Workflow security
+
+on:
+  # 只由默认分支版本执行；PR 中的 workflow 文件通过 API 作为不可执行数据读取。
+  pull_request_target:
+    branches: [main]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  workflow-security:
+    name: Workflow security
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Collect changed workflow files as data
+        id: collect
+        env:
+          API_URL: ${{ github.api_url }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # 所有事件字段先做窄校验，避免把 PR 元数据解释成 shell 语法或路径。
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$HEAD_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+
+          scan_root="$GITHUB_WORKSPACE"
+          mkdir -p "$scan_root/.github/workflows"
+          scan_inputs=''
+          page=1
+
+          while :; do
+            response="$(curl --fail --silent --show-error --location \
+              --proto '=https' --proto-redir '=https' --retry 3 \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "$API_URL/repos/$REPOSITORY/pulls/$PR_NUMBER/files?per_page=100&page=$page")"
+            printf '%s' "$response" | jq -e 'type == "array"' >/dev/null
+            page_count="$(printf '%s' "$response" | jq 'length')"
+
+            # 只下载发生变更的 workflow；删除项读取 base 版本，确保本次门禁始终有实际输入。
+            workflow_items="$(printf '%s' "$response" | jq -r --arg base "$BASE_SHA" --arg head "$HEAD_SHA" --arg base_repo "$REPOSITORY" --arg head_repo "$HEAD_REPOSITORY" '
+              .[] as $item
+              | if ($item | type) != "object" then
+                  error("PR files item must be an object")
+                elif ($item.filename | type) != "string" then
+                  error("PR files item filename must be a string")
+                elif ($item.status | type) != "string" then
+                  error("PR files item status must be a string")
+                elif (($item.filename | startswith(".github/workflows/")) | not) then
+                  empty
+                elif (($item.filename | test("^\\.github/workflows/[A-Za-z0-9._/-]+\\.(yml|yaml)$")) | not)
+                  or (($item.filename | contains(".."))) then
+                  error("unsupported workflow path: \($item.filename)")
+                elif (($item.status | test("^(added|modified|renamed|copied|removed)$")) | not) then
+                  error("unknown workflow file status: \($item.status)")
+                else
+                  [$item.status, $item.filename,
+                    (if $item.status == "removed" then $base else $head end),
+                    (if $item.status == "removed" then $base_repo else $head_repo end)]
+                  | @tsv
+                end
+            ' )" || {
+              printf 'PR workflow file list validation failed\n' >&2
+              exit 1
+            }
+
+            if [ -n "$workflow_items" ]; then
+              while IFS=$'\t' read -r status filename ref source_repository; do
+                [[ -n "$filename" ]]
+                [[ "$filename" =~ ^\.github/workflows/[A-Za-z0-9._/-]+\.(yml|yaml)$ ]]
+                [[ "$filename" != *'..'* ]]
+                [[ "$ref" =~ ^[0-9a-f]{40}$ ]]
+                [[ "$source_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+
+                target="$scan_root/$filename"
+                mkdir -p "$(dirname "$target")"
+                curl --fail --silent --show-error --location \
+                  --proto '=https' --proto-redir '=https' --retry 3 \
+                  "https://raw.githubusercontent.com/$source_repository/$ref/$filename" \
+                  --output "$target"
+                scan_input="$filename"
+                if [ -n "$scan_inputs" ]; then
+                  scan_inputs="$scan_inputs $scan_input"
+                else
+                  scan_inputs="$scan_input"
+                fi
+              done <<< "$workflow_items"
+            fi
+
+            # GitHub 的 PR files API 最多返回 3000 个文件；到达该上限时拒绝不完整输入，避免漏扫后通过。
+            if [ "$page" -ge 30 ] && [ "$page_count" -eq 100 ]; then
+              printf 'PR files API reached its 3000-file limit; refusing incomplete workflow input\n' >&2
+              exit 1
+            fi
+            if [ "$page_count" -lt 100 ]; then
+              break
+            fi
+            page=$((page + 1))
+          done
+
+          # 文件列表 API 没有 workflow 变更时显式成功结束；required job 本身始终运行。
+          if [ -z "$scan_inputs" ]; then
+            printf '%s\n' 'no workflow changes / not applicable'
+            printf 'has_workflow_changes=false\n' >> "$GITHUB_OUTPUT"
+            printf 'inputs=\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'has_workflow_changes=true\n' >> "$GITHUB_OUTPUT"
+            printf 'inputs=%s\n' "$scan_inputs" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate collected workflow YAML
+        # 先由受信解析器拒绝不可解析的 PR 数据，避免扫描器的收集警告被误记为通过。
+        env:
+          HAS_WORKFLOW_CHANGES: ${{ steps.collect.outputs.has_workflow_changes }}
+          SCAN_ROOT: ${{ github.workspace }}/.github/workflows
+        run: |
+          set -euo pipefail
+          if [[ "$HAS_WORKFLOW_CHANGES" == "false" ]]; then
+            printf '%s\n' 'no workflow changes / not applicable'
+            exit 0
+          fi
+          if [[ "$HAS_WORKFLOW_CHANGES" != "true" ]]; then
+            printf 'invalid workflow-change state: %s\n' "$HAS_WORKFLOW_CHANGES" >&2
+            exit 1
+          fi
+
+          ruby - "$SCAN_ROOT" <<'RUBY'
+          require 'yaml'
+
+          root = ARGV.fetch(0)
+          paths = Dir.glob(File.join(root, '**', '*.{yml,yaml}')).sort
+          abort '没有可解析的 workflow 输入' if paths.empty?
+
+          paths.each do |path|
+            YAML.parse_file(path)
+          end
+          RUBY
+
+      - name: Audit workflow data with pinned zizmor
+        # 固定镜像 digest 并启用 strict collection；下载、解析、审计和输出失败均保持非零。
+        env:
+          HAS_WORKFLOW_CHANGES: ${{ steps.collect.outputs.has_workflow_changes }}
+          SCAN_INPUTS: ${{ steps.collect.outputs.inputs }}
+        run: |
+          set -euo pipefail
+          if [[ "$HAS_WORKFLOW_CHANGES" == "false" ]]; then
+            printf '%s\n' 'no workflow changes / not applicable'
+            exit 0
+          fi
+          if [[ "$HAS_WORKFLOW_CHANGES" != "true" ]]; then
+            printf 'invalid workflow-change state: %s\n' "$HAS_WORKFLOW_CHANGES" >&2
+            exit 1
+          fi
+
+          image='ghcr.io/zizmorcore/zizmor:1.29.0@sha256:863026d54f91271b10b60b67ad8054cb37120167e162482597db102b3026a284'
+          docker pull "$image"
+          read -r -a inputs <<< "$SCAN_INPUTS"
+          ((${#inputs[@]} > 0))
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace:ro" \
+            --workdir /workspace \
+            "$image" \
+            --offline \
+            --strict-collection \
+            --persona=regular \
+            --collect=default \
+            --color=never \
+            -- "${inputs[@]}"
