@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 permissions:
-  # 门禁只读取 PR 元数据，不获取或执行不受信的 PR 代码。
+  # pull_request_target 只读取 PR 元数据，不获取或执行不受信代码；此边界已审计。 zizmor: ignore[dangerous-triggers]
   pull-requests: read
 
 jobs:
