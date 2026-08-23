@@ -1,7 +1,7 @@
 name: Workflow security
 
 on:
-  # zizmor: ignore[dangerous-triggers]；仅使用默认分支受信逻辑，PR workflow 只作为 API 数据读取，不执行不受信代码。
+  # zizmor: ignore[dangerous-triggers] 仅使用默认分支受信逻辑，PR workflow 只作为 API 数据读取，不执行不受信代码。
   pull_request_target:
     branches: [main]
 
