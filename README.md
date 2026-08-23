@@ -203,4 +203,4 @@ pnpm --filter mobile test:e2e
 
 - 所有工作先关联 `doc/开发进度与任务跟踪.md` 中的叶子任务。
 - 账务事实、权限、幂等、同步和客户端职责遵守根目录 `AGENTS.md`。
-- shadcn/ui 的初始化、组件引入和修改必须使用已安装的 `shadcn` skill。
+- shadcn/ui 的初始化、组件引入和修改优先使用已安装的 `shadcn` skill；skill 不可用时按 `web/AGENTS.md` 的 `components.json`、官方文档、项目 pnpm CLI fallback 执行。
