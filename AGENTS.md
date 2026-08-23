@@ -139,7 +139,7 @@ Tushare Pro 是 V1 股票、ETF 和基金信息及盘后数据的首选来源，
 5. 提交前检查暂存区（`git diff --cached --check`、`git diff --cached`）。PR required CI 是统一干净环境的最终核心回归证据；自动完整 CI 只在 PR 执行一次，合并 main 后不重复运行同一套门禁，也不要求精确 merge SHA 再验证才能 `DONE`。
 6. L3 可按风险补充本地或隔离环境验证，但不得机械重复已经成功且适用的同一套 PR CI。E2E 默认在 B1～B4 批次门禁、发布候选或显式手动验证时执行，不作为普通任务或普通 PR 的固定要求。
 7. 任务自身要求的验证通过后可记录完成；其他模块无因果关系的失败另建缺陷，不得让任务长期滞留 `VERIFYING`，但任何 required check 失败的 PR 仍不得合并 main。
-8. 扫描器无法运行、结果无法解析或确认存在密钥泄露、危险 workflow、HIGH/CRITICAL 漏洞时必须 fail closed；LOW/MODERATE 和普通许可证提示进入风险台账，不默认阻塞普通 PR。不得把 CI 的 `skipped` 步骤记为通过。
+8. 扫描器无法运行、结果无法解析或确认存在密钥泄露、危险 workflow、HIGH/CRITICAL 漏洞时必须 fail closed；LOW/MODERATE finding、普通许可证信息或提示进入风险台账，不默认阻塞普通 PR；明确违反仓库许可证策略的结果仍可阻断 CI。不得把 CI 的 `skipped` 步骤记为通过。
 
 ## 10. 注释要求
 - 只为无法从代码本身理解的业务不变量、财务语义、安全边界、并发原因、兼容性 workaround 和非常规实现添加简洁中文注释。
