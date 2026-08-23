@@ -6,6 +6,7 @@ on:
     branches: [main]
 
 permissions:
+  # 门禁只读取 PR 元数据，不获取或执行不受信的 PR 代码。
   pull-requests: read
 
 jobs:
