@@ -63,6 +63,22 @@ public class PostgresLiquidityHoldStore implements LiquidityHoldStore {
 		RETURNING %s
 		""".formatted(COLUMNS);
 
+	private static final String FIND_EXPIRED_UNENDED_SQL = """
+		SELECT %s
+		FROM liquidity_holds
+		WHERE ended_at IS NULL AND expires_at IS NOT NULL AND expires_at <= CAST(? AS timestamptz)
+		ORDER BY expires_at ASC, id ASC
+		LIMIT ?
+		""".formatted(COLUMNS);
+
+	private static final String EXPIRE_SQL = """
+		UPDATE liquidity_holds
+		SET ended_at = expires_at, end_reason = 'EXPIRED', updated_at = CAST(? AS timestamptz), version = version + 1
+		WHERE account_id = ? AND id = ? AND ended_at IS NULL AND expires_at IS NOT NULL
+			AND expires_at <= CAST(? AS timestamptz) AND version = ?
+		RETURNING %s
+		""".formatted(COLUMNS);
+
 	private final DSLContext dsl;
 
 	public PostgresLiquidityHoldStore(DSLContext dsl) {
@@ -141,6 +157,37 @@ public class PostgresLiquidityHoldStore implements LiquidityHoldStore {
 	@Override
 	public Optional<LiquidityHold> releaseIfVersion(UUID accountId, UUID holdId, int expectedVersion, Instant now) {
 		return conditional(RELEASE_SQL, accountId, holdId, expectedVersion, now, true);
+	}
+
+	@Override
+	public List<LiquidityHold> findExpiredUnended(Instant asOf, int maximumRecords) {
+		if (asOf == null || maximumRecords < 1 || maximumRecords > 1_000) {
+			throw new LiquidityHoldException.Persistence(new IllegalArgumentException("流动性占用过期扫描参数无效。"));
+		}
+		try {
+			List<LiquidityHold> rows = new ArrayList<>();
+			for (Record record : dsl.resultQuery(FIND_EXPIRED_UNENDED_SQL, utc(asOf), maximumRecords).fetch()) {
+				rows.add(toDomain(record));
+			}
+			return List.copyOf(rows);
+		} catch (org.jooq.exception.DataAccessException exception) {
+			throw new LiquidityHoldException.Persistence(exception);
+		}
+	}
+
+	@Override
+	public Optional<LiquidityHold> expireIfVersion(
+		UUID accountId, UUID holdId, int expectedVersion, Instant asOf, Instant finalizedAt) {
+		if (accountId == null || holdId == null || expectedVersion < 1 || asOf == null || finalizedAt == null) {
+			throw new LiquidityHoldException.Persistence(new IllegalArgumentException("流动性占用过期条件更新参数无效。"));
+		}
+		try {
+			Record record = dsl.resultQuery(
+				EXPIRE_SQL, utc(finalizedAt), accountId, holdId, utc(asOf), expectedVersion).fetchOne();
+			return record == null ? Optional.empty() : Optional.of(toDomain(record));
+		} catch (org.jooq.exception.DataAccessException exception) {
+			throw new LiquidityHoldException.Persistence(exception);
+		}
 	}
 
 	private Optional<LiquidityHold> conditional(
