@@ -76,6 +76,20 @@ class LiquidityHoldDomainTests {
 	}
 
 	@Test
+	void finalizesExpiryAtTheExactBoundaryAndKeepsReleasedAtEmpty() {
+		LiquidityHold hold = root(LiquidityHoldType.RESERVED, new BigDecimal("1"), AccountCurrency.JPY,
+			NOW.minusSeconds(10), NOW, "到期");
+
+		LiquidityHold finalized = hold.finalizeExpiry(NOW, NOW.plusSeconds(3));
+
+		assertEquals(NOW, finalized.endedAt());
+		assertEquals(LiquidityHoldEndReason.EXPIRED, finalized.endReason());
+		assertEquals(null, finalized.releasedAt());
+		assertEquals(2, finalized.version());
+		assertEquals(NOW.plusSeconds(3), finalized.updatedAt());
+	}
+
+	@Test
 	void revisionCarriesRootAndPreviousAndCanChangeType() {
 		LiquidityHold root = root(LiquidityHoldType.FROZEN, new BigDecimal("10.00"), AccountCurrency.CNY, NOW, null, "old");
 		LiquidityHold revised = LiquidityHold.createRevision(UUID.randomUUID(), root, LiquidityHoldType.IN_TRANSIT,

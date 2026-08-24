@@ -161,6 +161,20 @@ public final class LiquidityHold {
 		return statusAt(asOf) == LiquidityHoldStatus.PENDING || statusAt(asOf) == LiquidityHoldStatus.ACTIVE;
 	}
 
+	public boolean canFinalizeExpiryAt(Instant asOf) {
+		return asOf != null && endedAt == null && expiresAt != null && !expiresAt.isAfter(asOf);
+	}
+
+	public LiquidityHold finalizeExpiry(Instant asOf, Instant finalizedAt) {
+		if (!canFinalizeExpiryAt(asOf) || finalizedAt == null) {
+			throw invalid();
+		}
+		// 自动过期只物化逻辑到期事实，结束时点固定为 expiresAt，不能把调度延迟写入生命周期。
+		return new LiquidityHold(
+			id, accountId, rootHoldId, previousRevisionId, revisionNo, type, amount, currency, effectiveAt, expiresAt,
+			null, source, note, expiresAt, LiquidityHoldEndReason.EXPIRED, createdBy, createdAt, finalizedAt, version + 1);
+	}
+
 	public String etag() {
 		return "\"" + version + "\"";
 	}

@@ -5,6 +5,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -469,6 +470,28 @@ class LiquidityHoldServiceTests {
 					current.createdBy(), current.createdAt(), now, current.version() + 1);
 				stored.put(holdId, released);
 				return Optional.of(released);
+			}
+
+			@Override
+			public List<LiquidityHold> findExpiredUnended(Instant asOf, int maximumRecords) {
+				return stored.values().stream()
+					.filter(hold -> hold.canFinalizeExpiryAt(asOf))
+					.sorted(Comparator.comparing(LiquidityHold::expiresAt).thenComparing(LiquidityHold::id))
+					.limit(maximumRecords)
+					.toList();
+			}
+
+			@Override
+			public Optional<LiquidityHold> expireIfVersion(
+				UUID accountId, UUID holdId, int expectedVersion, Instant asOf, Instant finalizedAt) {
+				LiquidityHold current = stored.get(holdId);
+				if (current == null || !accountId.equals(current.accountId()) || current.version() != expectedVersion
+					|| !current.canFinalizeExpiryAt(asOf)) {
+					return Optional.empty();
+				}
+				LiquidityHold finalized = current.finalizeExpiry(asOf, finalizedAt);
+				stored.put(holdId, finalized);
+				return Optional.of(finalized);
 			}
 		};
 		LiquidityHoldCursorCodec cursors = new LiquidityHoldCursorCodec() {

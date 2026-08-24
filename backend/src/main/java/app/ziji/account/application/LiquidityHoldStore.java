@@ -21,4 +21,9 @@ public interface LiquidityHoldStore {
 	Optional<LiquidityHold> supersedeIfVersion(UUID accountId, UUID holdId, int expectedVersion, Instant now);
 
 	Optional<LiquidityHold> releaseIfVersion(UUID accountId, UUID holdId, int expectedVersion, Instant now);
+
+	List<LiquidityHold> findExpiredUnended(Instant asOf, int maximumRecords);
+
+	Optional<LiquidityHold> expireIfVersion(
+		UUID accountId, UUID holdId, int expectedVersion, Instant asOf, Instant finalizedAt);
 }
