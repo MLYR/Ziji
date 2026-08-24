@@ -3,7 +3,6 @@ package app.ziji.account.infrastructure;
 import java.time.Clock;
 
 import app.ziji.account.application.LiquidityHoldExpiryFinalizer;
-import app.ziji.account.application.LiquidityHoldExpiryFinalizerProperties;
 import app.ziji.account.application.AccountStore;
 import app.ziji.account.application.LiquidityHoldStore;
 import app.ziji.audit.application.AuditLogWritePort;

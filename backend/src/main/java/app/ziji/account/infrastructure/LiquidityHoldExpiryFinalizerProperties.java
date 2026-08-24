@@ -1,4 +1,4 @@
-package app.ziji.account.application;
+package app.ziji.account.infrastructure;
 
 import java.time.Duration;
 

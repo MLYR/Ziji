@@ -5,7 +5,6 @@ import java.time.Instant;
 import java.util.UUID;
 
 import app.ziji.account.application.LiquidityHoldExpiryFinalizer;
-import app.ziji.account.application.LiquidityHoldExpiryFinalizerProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;

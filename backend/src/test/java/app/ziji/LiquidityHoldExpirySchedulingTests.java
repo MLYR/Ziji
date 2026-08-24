@@ -24,9 +24,9 @@ import javax.sql.DataSource;
 
 import app.ziji.account.application.AccountStore;
 import app.ziji.account.application.LiquidityHoldExpiryFinalizer;
-import app.ziji.account.application.LiquidityHoldExpiryFinalizerProperties;
 import app.ziji.account.application.LiquidityHoldStore;
 import app.ziji.account.infrastructure.LiquidityHoldExpiryScheduler;
+import app.ziji.account.infrastructure.LiquidityHoldExpiryFinalizerProperties;
 import app.ziji.account.infrastructure.PostgresLiquidityHoldExpiryRunStore;
 import app.ziji.audit.application.AuditLogWritePort;
 import app.ziji.shared.application.TransactionRunner;
