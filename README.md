@@ -128,7 +128,7 @@ pnpm api:generate
 pnpm api:types:check
 ```
 
-CI 的 `pull_request` 使用真实的 `github.event.pull_request.base.sha` 执行 breaking comparison；`workflow_dispatch` 没有 PR base，该比较为 not applicable 并保持 skipped。skipped 不等于 passed，也不能作为 PR required CI 证据；手动运行仍会执行 `api:check`、`api:generate` 和 `api:types:check`。
+CI 的 `pull_request` 使用真实的 `github.event.pull_request.base.sha` 执行 breaking comparison；`workflow_dispatch` 没有 PR base，该比较为 not applicable 并保持 skipped。skipped 不等于 passed，也不能作为当前变更的 CI 证据；手动运行仍会执行 `api:check`、`api:generate` 和 `api:types:check`。
 
 生成文件位于 `packages/api-types/generated/ziji-v1.d.ts`，只能由 `openapi-typescript` 更新，不得手工编辑。
 
@@ -148,7 +148,7 @@ jOOQ 生成物位于 `backend/target/generated-sources/jooq`，属于可重建�
 
 ## 5. 验证与提交流程
 
-本地只执行与改动相关的验证，PR CI 在统一环境执行一次完整核心门禁；合并 main 后不再自动重复同一套 CI。L3 高风险任务才增加定向深度验证和独立审查。
+本地只执行与改动相关的验证；完整 CI 在统一环境执行，具体触发和合并后的重复策略由 workflow 配置与当前发布策略决定。L3 高风险任务才增加定向深度验证和独立审查。
 
 ### 5.1 提交前最小验证
 
@@ -166,9 +166,9 @@ git diff --cached --check
 git diff --cached --stat
 ```
 
-### 5.2 提交后完整门禁
+### 5.2 提交后完整验证
 
-建立 PR 后等待 GitHub Actions required checks 全部成功再合并；合并后不重复执行同一套 CI。PR 中修改 `.github/workflows/**` 时，默认分支版本的 `Workflow security` 门禁只把 PR 文件作为数据交给固定版本 zizmor 分析，不 checkout 或执行 PR 代码。该 check 只有被活动 Ruleset 列入 `required_status_checks` 后才是合并阻断证据，workflow 文件存在本身不代表已经 required。L3 高风险改动按任务风险补充独立审查和专项证据，不机械重跑已成功且适用的门禁。
+在 PR 场景，使用 GitHub Actions 检查当前提交；合并后是否重复执行同一套 CI 由 workflow 配置与当前发布策略决定。PR 中修改 `.github/workflows/**` 时，默认分支版本的 `Workflow security` 门禁只把 PR 文件作为数据交给固定版本 zizmor 分析，不 checkout 或执行 PR 代码。该 check 是否作为合并阻断证据取决于当前仓库保护设置；workflow 文件存在本身不代表已经 required。L3 高风险改动按任务风险补充独立审查和专项证据，不机械重跑已成功且适用的门禁。
 
 ### 5.3 各工程验证命令
 
