@@ -1,10 +1,10 @@
-# 该流程只验证原生壳可启动及主题交互；财务流程将在对应业务任务中扩展。
+# 该流程验证登录页核心交互，不提交真实认证请求。
 appId: app.ziji.mobile
 ---
 - launchApp:
     clearState: true
-- assertVisible: "财务事实清晰，进度随时可见。"
+- assertVisible: "邮箱地址"
+- assertVisible: "主题：系统"
 - tapOn:
-    id: "theme-dark"
-- assertVisible:
-    id: "theme-options"
+    id: "theme-toggle"
+- assertVisible: "主题：浅色"

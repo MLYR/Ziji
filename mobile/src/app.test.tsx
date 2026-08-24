@@ -1,3 +1,4 @@
+// 测试文件放在 Expo Router 路由目录外，避免 Jest 测试被原生路由上下文打包。
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import { ApiClientError } from '@/api/api-client';
@@ -33,7 +34,7 @@ jest.mock('@/auth/auth-session', () => ({
 }));
 
 // 认证单例必须在替身初始化后再加载，避免静态 import 早于 Jest mock 数据创建。
-const AuthenticationScreen = require('./index').default as typeof import('./index').default;
+const AuthenticationScreen = require('./app/index').default as typeof import('./app/index').default;
 
 function rateLimitedError(): ApiClientError {
   return new ApiClientError(
@@ -130,7 +131,7 @@ describe('AuthenticationScreen', () => {
 
   it('主题按钮可访问，并依次呈现系统、浅色和深色状态', async () => {
     const view = await render(<AuthenticationScreen />);
-    const themeButton = view.getByLabelText('切换深浅主题');
+    const themeButton = view.getByTestId('theme-toggle');
 
     expect(view.getByText('主题：系统')).toBeTruthy();
     await fireEvent.press(themeButton);

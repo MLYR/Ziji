@@ -115,10 +115,13 @@ export default function AuthenticationScreen() {
       <ScrollView className="flex-1" contentContainerClassName="min-h-full justify-between px-7 py-6" keyboardShouldPersistTaps="handled">
         <View>
           <Pressable
-            accessibilityLabel="切换深浅主题"
+            // iOS 会将可访问按钮内的 Text 合并到父节点，标签直接暴露当前主题状态。
+            accessibilityHint="点击切换深浅主题"
+            accessibilityLabel={`主题：${themePreference === 'system' ? '系统' : themePreference === 'light' ? '浅色' : '深色'}`}
             accessibilityRole="button"
             className="min-h-11 self-end justify-center px-2 active:opacity-70"
             onPress={() => setThemePreference(themePreference === 'system' ? 'light' : themePreference === 'light' ? 'dark' : 'system')}
+            testID="theme-toggle"
           >
             <Text className="text-sm font-semibold text-muted-light dark:text-muted-dark">主题：{themePreference === 'system' ? '系统' : themePreference === 'light' ? '浅色' : '深色'}</Text>
           </Pressable>
