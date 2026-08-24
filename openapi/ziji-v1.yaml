@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: 资迹 Ziji API
   version: 0.1.0
-  description: V1 正式 API 契约，对应 PRD V0.1、RTM V0.1 和《API 契约》V0.1；96 个 HTTP operationId 为正式实施基线。
+  description: V1 正式 API 契约，对应 PRD V0.1、RTM V0.1 和《API 契约》V0.1；所有 HTTP 操作必须声明稳定且唯一的 operationId，当前数量由 scripts/check-openapi.mjs 基于实际 /api/v1 HTTP 操作自动验证。
   license:
     name: Proprietary
     identifier: LicenseRef-Proprietary
