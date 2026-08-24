@@ -6,7 +6,7 @@
 
 - 产品与技术基线：`doc/`
 - OpenAPI 3.1 契约：`openapi/ziji-v1.yaml`
-- Flyway V001～V013：`backend/src/main/resources/db/migration/`
+- Flyway 迁移机器基线：`backend/src/main/resources/db/migration/`（当前版本以目录中的迁移文件和任务台账机器基线为准）
 - UI 原型入口：`prototypes/open-design/ziji-v1/index.html`
 - 当前任务与依赖：`doc/开发进度与任务跟踪.md`
 
@@ -139,7 +139,7 @@ CI 的 `pull_request` 使用真实的 `github.event.pull_request.base.sha` 执�
 JAVA_HOME=$(/usr/libexec/java_home -v 25) \
   ./backend/mvnw -f backend/pom.xml -Pdb-codegen flyway:info
 
-# 执行 V001～V013 并从真实 PostgreSQL schema 生成 jOOQ 类型
+# 执行当前全部 Flyway 迁移并从真实 PostgreSQL schema 生成 jOOQ 类型
 JAVA_HOME=$(/usr/libexec/java_home -v 25) \
   ./backend/mvnw -f backend/pom.xml -Pdb-codegen generate-sources
 ```
