@@ -488,7 +488,7 @@ AND (expires_at IS NULL OR expires_at > asOf)
 
 状态映射固定为：`PENDING` 表示 `effectiveAt > asOf` 且尚未终止；`ACTIVE` 表示已生效且满足上述有效条件；`RELEASED`、`SUPERSEDED` 分别由 `endReason` 映射；`EXPIRED` 表示已写入 `endReason=EXPIRED`，或尚未最终化但 `expiresAt <= asOf`。到达 `expiresAt` 即逻辑过期，查询和任何写入前置校验都必须先按时点判断。过期最终化写入 `endedAt=expiresAt`、`endReason=EXPIRED` 并递增版本；最终化尚未运行时，不能释放或修订该记录。
 
-自动过期使用现有 PostgreSQL advisory-lock 调度机制执行任务 `LIQUIDITY_HOLD_EXPIRY_FINALIZER`；任务按可重试批次扫描到期且未结束版本，幂等地物化过期事实并写入审计。手工释放/修订与最终化在同一事务按当前版本串行化：先成功关闭当前版本的一方获胜；另一方使用旧 ETag 返回 `VERSION_CONFLICT`，重新读取后发现已过期则返回 `BUSINESS_RULE_VIOLATION`。本任务不新增调度器、迁移或任务实现；若 BE-ACC-006 需要扩展现有调度架构，必须另登记任务后实施。
+自动过期由 `BE-ACC-008` 按冻结的 PostgreSQL advisory-lock 调度模式执行任务 `LIQUIDITY_HOLD_EXPIRY_FINALIZER`，并复用 V006 已有的 `scheduled_job_runs` 记录运行状态；任务按可重试批次扫描到期且未结束版本，幂等地物化过期事实并写入审计。手工释放/修订与最终化在同一事务按当前版本串行化：先成功关闭当前版本的一方获胜；另一方使用旧 ETag 返回 `VERSION_CONFLICT`，重新读取后发现已过期则返回 `BUSINESS_RULE_VIOLATION`。该实现不新增公开 HTTP operation，也不得假定不存在的 `scheduled_job_locks` 表。
 
 权限和不可枚举语义固定为：OWNER、EDITOR、VIEWER 的 ACTIVE membership 均可查询；OWNER、EDITOR 可创建、修订和释放；VIEWER 写入返回 `403 PERMISSION_DENIED`。LEFT、REMOVED、已结束 membership 周期和无关用户不能访问，账户不存在、账户不可见或 hold 不属于该账户统一返回 `404 RESOURCE_NOT_FOUND`，不得以 `accounts.created_by` 替代 membership 授权。
 
