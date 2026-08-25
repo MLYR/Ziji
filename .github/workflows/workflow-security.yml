@@ -37,6 +37,7 @@ jobs:
 
           scan_root="$GITHUB_WORKSPACE"
           mkdir -p "$scan_root/.github/workflows"
+          workflow_root="$scan_root/.github/workflows"
           scan_inputs=''
           page=1
 
@@ -112,23 +113,24 @@ jobs:
           done
 
           # CI 安全 job 既要审计 YAML，也要与 trusted base 保持语义一致；删除该文件或改写为 no-op 都必须失败。
+          # 后续 Ruby 契约步骤从 SCAN_ROOT 读取这些 trusted 输入，不能写到工作区根目录。
           curl --fail --silent --show-error --location \
             --proto '=https' --proto-redir '=https' --retry 3 \
             "https://raw.githubusercontent.com/$REPOSITORY/$BASE_SHA/.github/workflows/ci.yml" \
-            --output "$scan_root/ci-base.yml"
+            --output "$workflow_root/ci-base.yml"
           curl --fail --silent --show-error --location \
             --proto '=https' --proto-redir '=https' --retry 3 \
             "https://raw.githubusercontent.com/$HEAD_REPOSITORY/$HEAD_SHA/.github/workflows/ci.yml" \
-            --output "$scan_root/ci.yml"
+            --output "$workflow_root/ci.yml"
           # 该保护 workflow 本身运行在 pull_request_target 的 trusted base 上；仍需拒绝 PR 删除、重命名或改写它，避免合并后停用安全门禁。
           curl --fail --silent --show-error --location \
             --proto '=https' --proto-redir '=https' --retry 3 \
             "https://raw.githubusercontent.com/$REPOSITORY/$BASE_SHA/.github/workflows/workflow-security.yml" \
-            --output "$scan_root/workflow-security-base.yml"
+            --output "$workflow_root/workflow-security-base.yml"
           curl --fail --silent --show-error --location \
             --proto '=https' --proto-redir '=https' --retry 3 \
             "https://raw.githubusercontent.com/$HEAD_REPOSITORY/$HEAD_SHA/.github/workflows/workflow-security.yml" \
-            --output "$scan_root/workflow-security-head.yml"
+            --output "$workflow_root/workflow-security-head.yml"
 
           # 文件列表 API 没有 workflow 变更时显式成功结束；required job 本身始终运行。
           if [ -z "$scan_inputs" ]; then
