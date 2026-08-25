@@ -116,7 +116,7 @@ jobs:
           set -euo pipefail
           git cat-file -e "${BASE_SHA}^{commit}"
           # 许可证检查会启动 Maven Wrapper，安装阶段会读取 pnpm/Maven 配置；这些执行输入也必须来自受信基线。
-          for path in .npmrc .pnpmfile.cjs pnpmfile.cjs .trivyignore .trivyignore.yaml scripts/security-scan.sh scripts/check-licenses.mjs security/license-policy.json backend/pom.xml backend/mvnw backend/.mvn backend/.mvn/maven.config backend/.mvn/jvm.config backend/.mvn/extensions.xml backend/.mvn/wrapper/maven-wrapper.properties; do
+          for path in .npmrc .pnpmfile.cjs pnpmfile.cjs trivy.yaml trivy-secret.yaml .trivyignore .trivyignore.yaml scripts/security-scan.sh scripts/check-licenses.mjs security/license-policy.json backend/pom.xml backend/mvnw backend/.mvn backend/.mvn/maven.config backend/.mvn/jvm.config backend/.mvn/extensions.xml backend/.mvn/wrapper/maven-wrapper.properties; do
             if ! git diff --quiet "$BASE_SHA" -- "$path"; then
               printf 'security scanner source changed relative to trusted base: %s\n' "$path" >&2
               exit 1

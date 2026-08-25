@@ -207,6 +207,8 @@ jobs:
               .npmrc
               .pnpmfile.cjs
               pnpmfile.cjs
+              trivy.yaml
+              trivy-secret.yaml
               .trivyignore
               .trivyignore.yaml
               scripts/security-scan.sh
