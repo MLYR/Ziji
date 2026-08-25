@@ -188,10 +188,17 @@ jobs:
 
             guard_run = steps[guard_index].fetch('run')
             required_paths = %w[
+              .npmrc
+              .pnpmfile.cjs
+              pnpmfile.cjs
               scripts/security-scan.sh
               scripts/check-licenses.mjs
               security/license-policy.json
               backend/mvnw
+              backend/.mvn
+              backend/.mvn/maven.config
+              backend/.mvn/jvm.config
+              backend/.mvn/extensions.xml
               backend/.mvn/wrapper/maven-wrapper.properties
             ]
             required_paths.each do |path|
@@ -199,7 +206,7 @@ jobs:
             end
             abort "#{label} trusted source guard 未执行 git diff --quiet" unless guard_run.include?('git diff --quiet')
 
-            install_index = steps.index { |step| step.is_a?(Hash) && step['run'] == 'pnpm install --frozen-lockfile --ignore-scripts' }
+            install_index = steps.index { |step| step.is_a?(Hash) && step['run'] == 'pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile' }
             scan_index = steps.index { |step| step.is_a?(Hash) && step['run'] == 'bash scripts/security-scan.sh all' }
             abort "#{label} 缺少 --ignore-scripts 安装" unless install_index
             abort "#{label} 缺少直接安全扫描命令" unless scan_index

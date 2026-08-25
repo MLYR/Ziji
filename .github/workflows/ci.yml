@@ -115,8 +115,8 @@ jobs:
         run: |
           set -euo pipefail
           git cat-file -e "${BASE_SHA}^{commit}"
-          # 许可证检查会启动 Maven Wrapper；启动脚本和下载配置也必须来自受信基线。
-          for path in scripts/security-scan.sh scripts/check-licenses.mjs security/license-policy.json backend/mvnw backend/.mvn/wrapper/maven-wrapper.properties; do
+          # 许可证检查会启动 Maven Wrapper，安装阶段会读取 pnpm/Maven 配置；这些执行输入也必须来自受信基线。
+          for path in .npmrc .pnpmfile.cjs pnpmfile.cjs scripts/security-scan.sh scripts/check-licenses.mjs security/license-policy.json backend/mvnw backend/.mvn backend/.mvn/maven.config backend/.mvn/jvm.config backend/.mvn/extensions.xml backend/.mvn/wrapper/maven-wrapper.properties; do
             if ! git diff --quiet "$BASE_SHA" -- "$path"; then
               printf 'security scanner source changed relative to trusted base: %s\n' "$path" >&2
               exit 1
@@ -150,6 +150,7 @@ jobs:
           tar -xzf "$archive" -C "$install_dir" trivy
           echo "$install_dir" >> "$GITHUB_PATH"
           "$install_dir/trivy" --version
-      - run: pnpm install --frozen-lockfile --ignore-scripts
+      # 同时禁用 pnpmfile hook，避免 PR 工作区在安装阶段执行不受信 Node 代码。
+      - run: pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile
       # all 模式会汇总退出，但内部不短路：漏洞失败后仍执行许可证和密钥扫描。
       - run: bash scripts/security-scan.sh all
