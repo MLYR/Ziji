@@ -207,10 +207,12 @@ jobs:
             abort "#{label} 仍调用可改写的 pnpm security:scan" if steps.any? { |step| step.is_a?(Hash) && step['run'].to_s.include?('pnpm security:scan') }
           end
 
-          # Security job 继承 workflow 顶层 env/defaults；这些上下文也必须与 trusted base 一致，避免通过 TRIVY_BIN 或 working-directory 改写实际执行链。
-          %w[env defaults].each do |key|
+          # Security job 继承 workflow 顶层执行上下文；这些字段也必须与 trusted base 一致，避免改写扫描器、触发器、权限或并发行为。
+          %w[env defaults permissions concurrency].each do |key|
             abort "PR head 改写了 workflow 顶层 #{key}" unless head[key] == base[key]
           end
+          # Psych 按 YAML 1.1 将未加引号的 on 解析为布尔键，显式比较该键以保护 pull_request 触发器。
+          abort 'PR head 改写了 workflow 顶层 on' unless head[true] == base[true]
 
           base_security = security_job(base, 'trusted base')
           head_security = security_job(head, 'PR head')
