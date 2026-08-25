@@ -107,6 +107,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          fetch-depth: 0
+      # 安全扫描执行链必须来自受信基线；PR 只提供待扫描数据，不能改写扫描器后自通过。
+      - name: Verify trusted security scanner sources
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          git cat-file -e "${BASE_SHA}^{commit}"
+          for path in scripts/security-scan.sh scripts/check-licenses.mjs security/license-policy.json; do
+            if ! git diff --quiet "$BASE_SHA" -- "$path"; then
+              printf 'security scanner source changed relative to trusted base: %s\n' "$path" >&2
+              exit 1
+            fi
+          done
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 10.4.1
@@ -135,6 +149,6 @@ jobs:
           tar -xzf "$archive" -C "$install_dir" trivy
           echo "$install_dir" >> "$GITHUB_PATH"
           "$install_dir/trivy" --version
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       # all 模式会汇总退出，但内部不短路：漏洞失败后仍执行许可证和密钥扫描。
-      - run: pnpm security:scan
+      - run: bash scripts/security-scan.sh all
