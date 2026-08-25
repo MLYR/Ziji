@@ -111,6 +111,16 @@ jobs:
             page=$((page + 1))
           done
 
+          # CI 安全 job 既要审计 YAML，也要与 trusted base 保持语义一致；删除该文件或改写为 no-op 都必须失败。
+          curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' --retry 3 \
+            "https://raw.githubusercontent.com/$REPOSITORY/$BASE_SHA/.github/workflows/ci.yml" \
+            --output "$scan_root/ci-base.yml"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' --retry 3 \
+            "https://raw.githubusercontent.com/$HEAD_REPOSITORY/$HEAD_SHA/.github/workflows/ci.yml" \
+            --output "$scan_root/ci.yml"
+
           # 文件列表 API 没有 workflow 变更时显式成功结束；required job 本身始终运行。
           if [ -z "$scan_inputs" ]; then
             printf '%s\n' 'no workflow changes / not applicable'
@@ -147,6 +157,62 @@ jobs:
           paths.each do |path|
             YAML.parse_file(path)
           end
+          RUBY
+
+      - name: Verify CI security gate contract
+        # 该步骤只解析 PR workflow 数据，不执行其中的 shell；安全 job 变化必须由 trusted base 明确放行。
+        env:
+          CI_BASE_WORKFLOW: ${{ github.workspace }}/.github/workflows/ci-base.yml
+          CI_HEAD_WORKFLOW: ${{ github.workspace }}/.github/workflows/ci.yml
+        run: |
+          set -euo pipefail
+
+          ruby - "$CI_BASE_WORKFLOW" "$CI_HEAD_WORKFLOW" <<'RUBY'
+          require 'yaml'
+
+          base_path, head_path = ARGV
+          base = YAML.safe_load(File.read(base_path), aliases: true)
+          head = YAML.safe_load(File.read(head_path), aliases: true)
+
+          def security_job(workflow, label)
+            jobs = workflow.fetch('jobs') { abort "#{label} 缺少 jobs" }
+            job = jobs.fetch('security') { abort "#{label} 缺少 security job" }
+            abort "#{label} security job name 不匹配" unless job['name'] == 'Security supply-chain gate'
+            job
+          end
+
+          def validate_security_contract(job, label)
+            steps = job.fetch('steps') { abort "#{label} security job 缺少 steps" }
+            guard_index = steps.index { |step| step.is_a?(Hash) && step['name'] == 'Verify trusted security scanner sources' }
+            abort "#{label} 缺少 trusted source guard" unless guard_index
+
+            guard_run = steps[guard_index].fetch('run')
+            required_paths = %w[
+              scripts/security-scan.sh
+              scripts/check-licenses.mjs
+              security/license-policy.json
+              backend/mvnw
+              backend/.mvn/wrapper/maven-wrapper.properties
+            ]
+            required_paths.each do |path|
+              abort "#{label} trusted source guard 未保护 #{path}" unless guard_run.include?(path)
+            end
+            abort "#{label} trusted source guard 未执行 git diff --quiet" unless guard_run.include?('git diff --quiet')
+
+            install_index = steps.index { |step| step.is_a?(Hash) && step['run'] == 'pnpm install --frozen-lockfile --ignore-scripts' }
+            scan_index = steps.index { |step| step.is_a?(Hash) && step['run'] == 'bash scripts/security-scan.sh all' }
+            abort "#{label} 缺少 --ignore-scripts 安装" unless install_index
+            abort "#{label} 缺少直接安全扫描命令" unless scan_index
+            abort "#{label} 安全扫描命令早于 trusted source guard" unless guard_index < install_index && guard_index < scan_index
+            abort "#{label} 仍调用可改写的 pnpm security:scan" if steps.any? { |step| step.is_a?(Hash) && step['run'].to_s.include?('pnpm security:scan') }
+          end
+
+          base_security = security_job(base, 'trusted base')
+          head_security = security_job(head, 'PR head')
+          validate_security_contract(base_security, 'trusted base')
+          validate_security_contract(head_security, 'PR head')
+          abort 'PR head 改写了 trusted base 的 Security supply-chain gate' unless head_security == base_security
+          puts 'CI Security supply-chain gate contract matches trusted base.'
           RUBY
 
       - name: Audit workflow data with pinned zizmor
