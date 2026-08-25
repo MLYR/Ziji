@@ -15,88 +15,158 @@ permissions:
   contents: read
 
 jobs:
-  contract:
-    name: OpenAPI contract
+  changes:
+    name: Detect change risk
     runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.detect.outputs.backend }}
+      backend_deep: ${{ steps.detect.outputs.backend_deep }}
+      web: ${{ steps.detect.outputs.web }}
+      mobile: ${{ steps.detect.outputs.mobile }}
+      api: ${{ steps.detect.outputs.api }}
+      migration: ${{ steps.detect.outputs.migration }}
     steps:
-      # 使用 Node 24 runtime 的稳定 Action 主版本，避免 Runner 强制兼容运行。
-      # 破坏性变更检查需要读取 PR base commit，保留完整 Git 历史。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Detect affected areas
+        id: detect
+        env:
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/detect-change-risk.mjs
+
+  contract:
+    name: OpenAPI contract
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      # 使用 Node 24 runtime 的稳定 Action 主版本，避免 Runner 强制兼容运行。
+      # 破坏性变更检查需要读取 PR base commit，保留完整 Git 历史。
+      - name: OpenAPI not applicable
+        if: needs.changes.outputs.api != 'true'
+        run: |
+          printf '%s\n' 'not applicable: no OpenAPI or API contract changes'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.api == 'true'
+        with:
+          persist-credentials: false
+          fetch-depth: 0
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        if: needs.changes.outputs.api == 'true'
         with:
           version: 10.4.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        if: needs.changes.outputs.api == 'true'
         with:
           node-version: 22.22.3
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: needs.changes.outputs.api == 'true'
       # workflow_dispatch 没有真实 PR base；breaking comparison 对手动运行是 N/A，跳过不构成通过证据。
       - name: Check OpenAPI breaking changes against PR base
-        if: github.event_name == 'pull_request'
+        if: needs.changes.outputs.api == 'true' && github.event_name == 'pull_request'
         env:
           OPENAPI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: pnpm api:breaking -- --base-ref "$OPENAPI_BASE_SHA"
       # 生成后要求工作树无差异，防止契约与提交的共享类型漂移。
       - run: pnpm run api:check
+        if: needs.changes.outputs.api == 'true'
       - run: pnpm run api:generate
+        if: needs.changes.outputs.api == 'true'
       - run: pnpm run api:types:check
+        if: needs.changes.outputs.api == 'true'
 
   backend:
-    name: Backend tests
+    name: Backend checks
+    needs: changes
     runs-on: ubuntu-latest
     steps:
+      - name: Backend not applicable
+        if: needs.changes.outputs.backend != 'true'
+        run: |
+          printf '%s\n' 'not applicable: no backend changes'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.backend == 'true'
         with:
           persist-credentials: false
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        if: needs.changes.outputs.backend == 'true'
         with:
           distribution: temurin
           java-version: '25'
           cache: maven
-      # Maven Wrapper 是后端唯一受支持的构建入口。
-      - run: ./mvnw --batch-mode --no-transfer-progress test
+      # Maven Wrapper 是后端唯一受支持的构建入口；R3 路径执行完整测试，其余后端改动先做编译验证。
+      - name: Compile backend
+        if: needs.changes.outputs.backend == 'true' && needs.changes.outputs.backend_deep != 'true'
+        run: ./mvnw --batch-mode --no-transfer-progress -DskipTests compile
+        working-directory: backend
+      - name: Run backend deep tests
+        if: needs.changes.outputs.backend == 'true' && needs.changes.outputs.backend_deep == 'true'
+        run: ./mvnw --batch-mode --no-transfer-progress test
         working-directory: backend
 
   web:
     name: Web checks
+    needs: changes
     runs-on: ubuntu-latest
     steps:
+      - name: Web not applicable
+        if: needs.changes.outputs.web != 'true'
+        run: |
+          printf '%s\n' 'not applicable: no web changes'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.web == 'true'
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        if: needs.changes.outputs.web == 'true'
         with:
           version: 10.4.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        if: needs.changes.outputs.web == 'true'
         with:
           node-version: 22.22.3
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: needs.changes.outputs.web == 'true'
       # Web 的 check/test 脚本由工程自身声明，CI 不复制工具参数。
       - run: pnpm --filter web check
+        if: needs.changes.outputs.web == 'true'
       - run: pnpm --filter web test
+        if: needs.changes.outputs.web == 'true'
 
   mobile:
     name: Mobile checks
+    needs: changes
     runs-on: ubuntu-latest
     steps:
+      - name: Mobile not applicable
+        if: needs.changes.outputs.mobile != 'true'
+        run: |
+          printf '%s\n' 'not applicable: no mobile changes'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.mobile == 'true'
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        if: needs.changes.outputs.mobile == 'true'
         with:
           version: 10.4.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        if: needs.changes.outputs.mobile == 'true'
         with:
           node-version: 22.22.3
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: needs.changes.outputs.mobile == 'true'
       # Maestro 需原生模拟器，基础 CI 先执行类型、配置和单元检查。
       - run: pnpm --filter mobile check
+        if: needs.changes.outputs.mobile == 'true'
       - run: pnpm --filter mobile test
+        if: needs.changes.outputs.mobile == 'true'
 
   security:
     name: Security supply-chain gate
@@ -152,5 +222,10 @@ jobs:
           "$install_dir/trivy" --version
       # 同时禁用 pnpmfile hook，避免 PR 工作区在安装阶段执行不受信 Node 代码。
       - run: pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile
-      # all 模式会汇总退出，但内部不短路：漏洞失败后仍执行许可证和密钥扫描。
-      - run: bash scripts/security-scan.sh all
+      # 普通 PR 只执行密钥快检；依赖、许可证和跨语言漏洞扫描仅在供应链相关变更时执行。
+      - name: Run security fast scan
+        if: needs.changes.outputs.security_deep != 'true'
+        run: bash scripts/security-scan.sh secrets
+      - name: Run security deep scan
+        if: needs.changes.outputs.security_deep == 'true'
+        run: bash scripts/security-scan.sh all

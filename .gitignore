@@ -50,3 +50,5 @@ temp/
 *.tmp
 *.swp
 *.swo
+/.workbuddy/
+/outputs/
