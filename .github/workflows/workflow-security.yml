@@ -120,6 +120,15 @@ jobs:
             --proto '=https' --proto-redir '=https' --retry 3 \
             "https://raw.githubusercontent.com/$HEAD_REPOSITORY/$HEAD_SHA/.github/workflows/ci.yml" \
             --output "$scan_root/ci.yml"
+          # 该保护 workflow 本身运行在 pull_request_target 的 trusted base 上；仍需拒绝 PR 删除、重命名或改写它，避免合并后停用安全门禁。
+          curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' --retry 3 \
+            "https://raw.githubusercontent.com/$REPOSITORY/$BASE_SHA/.github/workflows/workflow-security.yml" \
+            --output "$scan_root/workflow-security-base.yml"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' --retry 3 \
+            "https://raw.githubusercontent.com/$HEAD_REPOSITORY/$HEAD_SHA/.github/workflows/workflow-security.yml" \
+            --output "$scan_root/workflow-security-head.yml"
 
           # 文件列表 API 没有 workflow 变更时显式成功结束；required job 本身始终运行。
           if [ -z "$scan_inputs" ]; then
@@ -164,15 +173,22 @@ jobs:
         env:
           CI_BASE_WORKFLOW: ${{ github.workspace }}/.github/workflows/ci-base.yml
           CI_HEAD_WORKFLOW: ${{ github.workspace }}/.github/workflows/ci.yml
+          WORKFLOW_SECURITY_BASE: ${{ github.workspace }}/.github/workflows/workflow-security-base.yml
+          WORKFLOW_SECURITY_HEAD: ${{ github.workspace }}/.github/workflows/workflow-security-head.yml
         run: |
           set -euo pipefail
 
-          ruby - "$CI_BASE_WORKFLOW" "$CI_HEAD_WORKFLOW" <<'RUBY'
+          ruby - "$CI_BASE_WORKFLOW" "$CI_HEAD_WORKFLOW" "$WORKFLOW_SECURITY_BASE" "$WORKFLOW_SECURITY_HEAD" <<'RUBY'
           require 'yaml'
 
-          base_path, head_path = ARGV
+          base_path, head_path, security_base_path, security_head_path = ARGV
           base = YAML.safe_load(File.read(base_path), aliases: true)
           head = YAML.safe_load(File.read(head_path), aliases: true)
+          security_base = YAML.safe_load(File.read(security_base_path), aliases: true)
+          security_head = YAML.safe_load(File.read(security_head_path), aliases: true)
+
+          abort 'PR head 改写了 trusted Workflow security gate' unless security_head == security_base
+          puts 'Workflow security gate matches trusted base.'
 
           def security_job(workflow, label)
             jobs = workflow.fetch('jobs') { abort "#{label} 缺少 jobs" }
@@ -191,9 +207,12 @@ jobs:
               .npmrc
               .pnpmfile.cjs
               pnpmfile.cjs
+              .trivyignore
+              .trivyignore.yaml
               scripts/security-scan.sh
               scripts/check-licenses.mjs
               security/license-policy.json
+              backend/pom.xml
               backend/mvnw
               backend/.mvn
               backend/.mvn/maven.config
