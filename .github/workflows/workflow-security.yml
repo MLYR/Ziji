@@ -37,7 +37,9 @@ jobs:
 
           scan_root="$GITHUB_WORKSPACE"
           mkdir -p "$scan_root/.github/workflows"
-          workflow_root="$scan_root/.github/workflows"
+          # 将受信 contract 输入放在 runner 临时目录，与未受信 PR workflow 扫描目录物理隔离，避免同名文件覆盖。
+          trusted_root="$RUNNER_TEMP/ziji-workflow-security-trusted"
+          mkdir -p "$trusted_root"
           scan_inputs=''
           page=1
 
@@ -113,24 +115,23 @@ jobs:
           done
 
           # CI 安全 job 既要审计 YAML，也要与 trusted base 保持语义一致；删除该文件或改写为 no-op 都必须失败。
-          # 后续 Ruby 契约步骤从 SCAN_ROOT 读取这些 trusted 输入，不能写到工作区根目录。
           curl --fail --silent --show-error --location \
             --proto '=https' --proto-redir '=https' --retry 3 \
             "https://raw.githubusercontent.com/$REPOSITORY/$BASE_SHA/.github/workflows/ci.yml" \
-            --output "$workflow_root/ci-base.yml"
+            --output "$trusted_root/ci-base.yml"
           curl --fail --silent --show-error --location \
             --proto '=https' --proto-redir '=https' --retry 3 \
             "https://raw.githubusercontent.com/$HEAD_REPOSITORY/$HEAD_SHA/.github/workflows/ci.yml" \
-            --output "$workflow_root/ci.yml"
+            --output "$trusted_root/ci.yml"
           # 该保护 workflow 本身运行在 pull_request_target 的 trusted base 上；仍需拒绝 PR 删除、重命名或改写它，避免合并后停用安全门禁。
           curl --fail --silent --show-error --location \
             --proto '=https' --proto-redir '=https' --retry 3 \
             "https://raw.githubusercontent.com/$REPOSITORY/$BASE_SHA/.github/workflows/workflow-security.yml" \
-            --output "$workflow_root/workflow-security-base.yml"
+            --output "$trusted_root/workflow-security-base.yml"
           curl --fail --silent --show-error --location \
             --proto '=https' --proto-redir '=https' --retry 3 \
             "https://raw.githubusercontent.com/$HEAD_REPOSITORY/$HEAD_SHA/.github/workflows/workflow-security.yml" \
-            --output "$workflow_root/workflow-security-head.yml"
+            --output "$trusted_root/workflow-security-head.yml"
 
           # 文件列表 API 没有 workflow 变更时显式成功结束；required job 本身始终运行。
           if [ -z "$scan_inputs" ]; then
@@ -173,10 +174,10 @@ jobs:
       - name: Verify CI security gate contract
         # 该步骤只解析 PR workflow 数据，不执行其中的 shell；安全 job 变化必须由 trusted base 明确放行。
         env:
-          CI_BASE_WORKFLOW: ${{ github.workspace }}/.github/workflows/ci-base.yml
-          CI_HEAD_WORKFLOW: ${{ github.workspace }}/.github/workflows/ci.yml
-          WORKFLOW_SECURITY_BASE: ${{ github.workspace }}/.github/workflows/workflow-security-base.yml
-          WORKFLOW_SECURITY_HEAD: ${{ github.workspace }}/.github/workflows/workflow-security-head.yml
+          CI_BASE_WORKFLOW: ${{ runner.temp }}/ziji-workflow-security-trusted/ci-base.yml
+          CI_HEAD_WORKFLOW: ${{ runner.temp }}/ziji-workflow-security-trusted/ci.yml
+          WORKFLOW_SECURITY_BASE: ${{ runner.temp }}/ziji-workflow-security-trusted/workflow-security-base.yml
+          WORKFLOW_SECURITY_HEAD: ${{ runner.temp }}/ziji-workflow-security-trusted/workflow-security-head.yml
         run: |
           set -euo pipefail
 
