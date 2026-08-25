@@ -115,7 +115,8 @@ jobs:
         run: |
           set -euo pipefail
           git cat-file -e "${BASE_SHA}^{commit}"
-          for path in scripts/security-scan.sh scripts/check-licenses.mjs security/license-policy.json; do
+          # 许可证检查会启动 Maven Wrapper；启动脚本和下载配置也必须来自受信基线。
+          for path in scripts/security-scan.sh scripts/check-licenses.mjs security/license-policy.json backend/mvnw backend/.mvn/wrapper/maven-wrapper.properties; do
             if ! git diff --quiet "$BASE_SHA" -- "$path"; then
               printf 'security scanner source changed relative to trusted base: %s\n' "$path" >&2
               exit 1
