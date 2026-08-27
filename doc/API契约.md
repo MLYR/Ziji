@@ -356,7 +356,7 @@ V1 用户状态 `User.status` 固定为 `ACTIVE`、`LOCKED`、`CLOSING`、`CLOSE
 | GET | `/accounts/{accountId}` | 查询账户详情和当前余额 | ACC-002、004 |
 | PATCH | `/accounts/{accountId}` | OWNER 修改账户资料 | ACC-002、SHR-002 |
 | POST | `/accounts/{accountId}/archive` | 归档账户 | ACC-006、007 |
-| GET | `/accounts/{accountId}/balance` | 查询指定时点余额 | ACC-004 |
+| GET | `/accounts/{accountId}/balance` | 查询指定时点余额 | ACC-004、009 |
 | GET | `/accounts/{accountId}/balance-history` | 查询历史余额 | DASH-006、007 |
 | GET | `/accounts/{accountId}/liability-details` | 查询独立负债详情或稳定空详情 | LIA-001、005 |
 | PUT | `/accounts/{accountId}/liability-details` | 首次创建或完整替换负债详情 | LIA-001、005 |
@@ -433,6 +433,10 @@ PUT/PATCH 复用 §2.4 的统一幂等作用域与规范化请求 Hash：实际 
 
 三条 operation 的错误体均为 Problem Details。GET 显式声明 `400/401/403/404/200`；PUT/PATCH 显式声明 `400/401/403/404/409/422` 以及成功响应。详情 version conflict 的 `resourceLocation` 固定为 `/api/v1/accounts/{accountId}/liability-details`，不得嵌入当前详情对象或泄漏不可见账户事实。
 
+余额读取是只读 operation：不使用 `Idempotency-Key`、`ETag/If-Match`，也不写 `audit_log`、outbox、Transaction、LedgerEntry、LiquidityHold 或投影事实。认证先于业务读取；认证成功后，当前 ACTIVE membership 的 OWNER、EDITOR、VIEWER 均可读。合法 UUID 对不可见账户、已结束/已移除 membership 或无关用户统一返回 `404 RESOURCE_NOT_FOUND`，不存在角色不足的 403 分支。
+
+`asOf` 可选。缺失时服务端在一次 PostgreSQL 只读一致性读取中只捕获一次 Clock；显式值必须是带 `Z` 或明确 UTC offset 的 ISO 8601 date-time，无 offset、非法日期和溢出均返回 `400 VALIDATION_ERROR`。响应总是返回同一个规范化 UTC instant，用作 Ledger 截止、LiquidityHold 有效性与状态判断的唯一时点。账面余额只汇总账户 `PRIMARY` 科目的已入账分录，交易按其固化 `timezone` 筛选 `businessDate <= LocalDate(asOf at timezone)`，保留原交易、冲正交易和替代事实；无分录为精确零，PRIMARY 缺失、币种不一致、事实损坏、持久化失败或无法得到同一事实快照均返回 `500 INTERNAL_ERROR`。
+
 余额响应：
 
 ```json
@@ -450,7 +454,7 @@ PUT/PATCH 复用 §2.4 的统一幂等作用域与规范化请求 Hash：实际 
     },
     "liquidityStatus": "NORMAL",
     "asOf": "2026-08-12T08:30:00Z",
-    "asOfSequence": 1250
+    "asOfSequence": 0
   },
   "meta": { "requestId": "req_01" }
 }
@@ -462,7 +466,11 @@ PUT/PATCH 复用 §2.4 的统一幂等作用域与规范化请求 Hash：实际 
 availableBalance = ledgerBalance - unavailableAmount
 ```
 
-没有有效流动性占用时 `unavailableAmount=0`。若占用金额超过账面余额，返回负数 availableBalance 和 `liquidityStatus=HOLDS_EXCEED_BALANCE`，不得静默截断为 0。
+同一 `asOf` 下，满足 `effectiveAt <= asOf AND (endedAt IS NULL OR endedAt > asOf) AND (expiresAt IS NULL OR expiresAt > asOf)` 的每个 LiquidityHold 版本，按自身 type 分别汇总为 frozen、inTransit、reserved。`unavailableAmount = frozen + inTransit + reserved`，再严格计算 `availableBalance = ledgerBalance - unavailableAmount`；未来生效、已释放、已替代、已过期和未最终化但已到 expiresAt 的记录均不计入。没有有效占用时 `unavailableAmount=0`。若占用超过账面余额，返回原始负数和 `liquidityStatus=NEGATIVE_AVAILABLE`，不得静默截断为 0；否则为 `NORMAL`。`STALE` 是投影新鲜度而非流动性数学状态，本响应不返回 stale 数值。
+
+`asOfSequence` 为必填整数且当前固定返回 `0`。该明确哨兵表示结果来自完整事实读取或重建，但系统尚无全局余额事实 sequence；它不代表第 0 条业务变更，用户定向 `change_log` sequence 也不得充当该值。`account_balance_snapshots` 与 `account_liquidity_snapshots` 都是可删除重建的缓存；后者不能独自证明任意 instant `asOf` 的精确等价，因此不得单独作为本端点来源。
+
+余额端点的错误集合固定为 `400 VALIDATION_ERROR`、`401 AUTHENTICATION_REQUIRED`、`404 RESOURCE_NOT_FOUND` 和 `500 INTERNAL_ERROR`，以及成功 `200`。错误优先级为认证、请求校验、账户可见性、同一事实快照读取；认证后的业务读取不得泄露不可见账户。并发入账、修订、释放、自动过期或成员撤权的结果必须整体位于共同 PostgreSQL 快照之前或之后，不能返回新账面余额搭配旧占用。
 
 修订或释放当前未结束且尚未逻辑过期的 LiquidityHold 必须携带 `If-Match`。修订在同一事务关闭旧记录并创建修正版；释放同时写入 `releasedAt`、`endedAt` 和 `endReason=RELEASED`。新增、修订和释放都不产生 LedgerEntry，并保留操作者、时间、来源及版本关系。
 

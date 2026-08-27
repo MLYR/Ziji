@@ -1,8 +1,9 @@
 import type { paths } from '@ziji/api-types'
 import { AlertCircleIcon, BarChart3Icon, DatabaseIcon, HomeIcon, MoonIcon, ReceiptTextIcon, SunIcon, WalletCardsIcon } from 'lucide-react'
 import { useEffect } from 'react'
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 
+import { AuthPage } from '@/auth/AuthPage'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -12,6 +13,7 @@ import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupConte
 import { Skeleton } from '@/components/ui/skeleton'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { MotionGroup } from '@/motion/motion-group'
+import { useWebAuth } from '@/auth/auth-session'
 import { useUiStore } from '@/stores/ui-store'
 
 type DashboardResponse = paths['/dashboard']['get']['responses'][200]
@@ -109,8 +111,32 @@ function PlaceholderPage({ title }: { title: string }) {
   return <main id="main-content" className="p-8"><h1 className="text-2xl font-semibold">{title}</h1><p className="mt-2 text-muted-foreground">页面将在对应业务任务开始时实现。</p></main>
 }
 
-function App() {
+function ProtectedShell() {
+  const { accessToken, user } = useWebAuth()
   const { theme, toggleTheme } = useUiStore()
+
+  // 只有短期 Access Token 与服务端用户资料同时存在时才挂载业务壳，避免仅凭登录成功响应放行。
+  if (!accessToken || !user) return <Navigate to="/login" replace />
+
+  return (
+    <SidebarProvider>
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground">跳到主要内容</a>
+      <AppSidebar />
+      <SidebarInset>
+        <header className="flex min-h-17 items-center justify-between border-b px-4 lg:px-6">
+          <SidebarTrigger aria-label="切换侧栏" />
+          <Button variant="outline" size="icon" onClick={toggleTheme} aria-label={theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'}>
+            {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+          </Button>
+        </header>
+        <Outlet />
+      </SidebarInset>
+    </SidebarProvider>
+  )
+}
+
+function App() {
+  const { theme } = useUiStore()
 
   useEffect(() => {
     document.documentElement.classList.toggle('light', theme === 'light')
@@ -118,25 +144,19 @@ function App() {
 
   return (
     <TooltipProvider>
-      <SidebarProvider>
-        <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground">跳到主要内容</a>
-        <AppSidebar />
-        <SidebarInset>
-          <header className="flex min-h-17 items-center justify-between border-b px-4 lg:px-6">
-            <SidebarTrigger aria-label="切换侧栏" />
-            <Button variant="outline" size="icon" onClick={toggleTheme} aria-label={theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'}>
-              {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
-            </Button>
-          </header>
-          <Routes>
-            <Route path="/dashboard" element={<DashboardPage />} />
-            <Route path="/accounts" element={<PlaceholderPage title="账户" />} />
-            <Route path="/transactions" element={<PlaceholderPage title="流水" />} />
-            <Route path="/investments" element={<PlaceholderPage title="投资" />} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
-          </Routes>
-        </SidebarInset>
-      </SidebarProvider>
+      {/* 公开认证页与受保护业务壳分离，避免未登录时渲染任何业务导航或占位数据。 */}
+      <Routes>
+        <Route path="/login" element={<AuthPage mode="login" />} />
+        <Route path="/register" element={<AuthPage mode="register" />} />
+        <Route path="/forgot-password" element={<AuthPage mode="reset" />} />
+        <Route element={<ProtectedShell />}>
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/accounts" element={<PlaceholderPage title="账户" />} />
+          <Route path="/transactions" element={<PlaceholderPage title="流水" />} />
+          <Route path="/investments" element={<PlaceholderPage title="投资" />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      </Routes>
     </TooltipProvider>
   )
 }

@@ -11,7 +11,7 @@
   "scripts": {
     "api:lint": "redocly lint openapi/ziji-v1.yaml",
     "api:check": "pnpm api:lint && node scripts/check-openapi.mjs && pnpm api:contract:test",
-    "api:contract:test": "node scripts/check-transaction-contract.mjs && node scripts/check-account-creation-contract.mjs && node scripts/check-liability-contract.mjs && node scripts/check-transaction-write-contract.mjs && node scripts/check-account-archive-contract.mjs",
+    "api:contract:test": "node scripts/check-transaction-contract.mjs && node scripts/check-account-creation-contract.mjs && node scripts/check-liability-contract.mjs && node scripts/check-transaction-write-contract.mjs && node scripts/check-account-archive-contract.mjs && node scripts/check-account-balance-contract.mjs",
     "api:breaking": "node scripts/check-openapi-breaking.mjs",
     "api:generate": "pnpm --filter @ziji/api-types run generate",
     "api:types:check": "pnpm --filter @ziji/api-types run check",

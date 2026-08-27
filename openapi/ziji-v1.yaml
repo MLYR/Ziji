@@ -405,12 +405,27 @@ paths:
       tags: [Accounts]
       operationId: getAccountBalance
       summary: 查询指定时点账面和可用余额
+      description: >-
+        读取一个共同精确 asOf 的账面余额、有效 LiquidityHold 和可用余额。仅当前 ACTIVE
+        membership 的 OWNER、EDITOR、VIEWER 可读；缺失 asOf 时在同一 PostgreSQL 只读一致性快照内只捕获一次服务端 Clock，显式值必须为带 Z 或 UTC offset 的 ISO 8601 instant。Ledger 与 Hold 直接读取事实，或仅使用已证明与目标 instant 完全等价的缓存；当前没有全局余额事实 sequence，asOfSequence 固定返回明确哨兵 0。
       x-requirement-ids: [ACC-004, ACC-009]
-      parameters: [{ $ref: '#/components/parameters/AsOf' }]
+      x-permission-matrix: { read: [OWNER, EDITOR, VIEWER], write: [] }
+      x-error-precedence: [AUTHENTICATION, REQUEST_VALIDATION, ACCOUNT_VISIBILITY, FACT_SNAPSHOT]
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, RESOURCE_NOT_FOUND, INTERNAL_ERROR]
+      x-account-balance-read:
+        asOf: SINGLE_CAPTURED_CLOCK_OR_EXPLICIT_UTC_INSTANT
+        ledgerFactSource: POSTED_PRIMARY_LEDGER_ENTRIES_BY_TRANSACTION_BUSINESS_DATE
+        liquidityFactSource: SAME_POSTGRESQL_SNAPSHOT_EFFECTIVE_LIQUIDITY_HOLDS
+        cache: FACT_READ_OR_PROVEN_EXACT_EQUIVALENCE_ONLY
+        asOfSequence: ZERO_SENTINEL_WITHOUT_GLOBAL_BALANCE_FACT_SEQUENCE
+        negativeAvailable: RETURN_UNCLAMPED
+      parameters: [{ $ref: '#/components/parameters/AccountBalanceAsOf' }]
       responses:
         '200': { $ref: '#/components/responses/AccountBalanceOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /accounts/{accountId}/balance-history:
     parameters: [{ $ref: '#/components/parameters/AccountId' }]
     get:
@@ -1631,6 +1646,14 @@ components:
       in: query
       required: false
       schema: { type: string, format: date-time }
+    AccountBalanceAsOf:
+      name: asOf
+      in: query
+      required: false
+      description: >-
+        账户余额的精确评估 instant。必须为带 Z 或明确 UTC offset 的 ISO 8601 date-time；无 offset、非法日期或溢出返回 400 VALIDATION_ERROR。服务端将其规范化为 UTC，并以同一 instant 评估 Ledger、LiquidityHold 和流动性状态。
+      x-runtime-format: ISO_8601_DATE_TIME_WITH_UTC_OFFSET_OR_Z
+      schema: { type: string, format: date-time }
     CalendarMonth:
       name: month
       in: query
@@ -2595,20 +2618,43 @@ components:
       properties:
         accountId: { type: string, format: uuid }
         currency: { $ref: '#/components/schemas/Currency' }
-        ledgerBalance: { $ref: '#/components/schemas/Money' }
-        unavailableAmount: { $ref: '#/components/schemas/NonNegativeMoney' }
+        ledgerBalance:
+          $ref: '#/components/schemas/Money'
+          description: 目标账户 PRIMARY 已入账分录在共同 asOf 的账面余额；使用账户币种精度的普通十进制字符串。
+        unavailableAmount:
+          $ref: '#/components/schemas/NonNegativeMoney'
+          description: 同一 asOf 有效的 frozen、inTransit、reserved 三项之和；使用账户币种精度的普通十进制字符串。
         unavailableBreakdown:
           type: object
           additionalProperties: false
           required: [frozen, inTransit, reserved]
+          description: 有效 LiquidityHold 版本按自身类型聚合的不可用金额明细；三项相加必须等于 unavailableAmount。
           properties:
-            frozen: { $ref: '#/components/schemas/NonNegativeMoney' }
-            inTransit: { $ref: '#/components/schemas/NonNegativeMoney' }
-            reserved: { $ref: '#/components/schemas/NonNegativeMoney' }
-        availableBalance: { $ref: '#/components/schemas/Money' }
-        liquidityStatus: { type: string, enum: [NORMAL, NEGATIVE_AVAILABLE, STALE] }
-        asOf: { type: string, format: date-time }
-        asOfSequence: { type: integer, minimum: 0 }
+            frozen:
+              $ref: '#/components/schemas/NonNegativeMoney'
+              description: 共同 asOf 有效的 FROZEN 版本之和。
+            inTransit:
+              $ref: '#/components/schemas/NonNegativeMoney'
+              description: 共同 asOf 有效的 IN_TRANSIT 版本之和。
+            reserved:
+              $ref: '#/components/schemas/NonNegativeMoney'
+              description: 共同 asOf 有效的 RESERVED 版本之和。
+        availableBalance:
+          $ref: '#/components/schemas/Money'
+          description: 严格等于 ledgerBalance - unavailableAmount；可为负数且不得截断为零，使用账户币种精度的普通十进制字符串。
+        liquidityStatus:
+          type: string
+          enum: [NORMAL, NEGATIVE_AVAILABLE]
+          description: NORMAL 表示 availableBalance 大于或等于零；NEGATIVE_AVAILABLE 表示 availableBalance 小于零。该字段不承载投影新鲜度。
+        asOf:
+          type: string
+          format: date-time
+          description: 本次账面余额、有效占用和 liquidityStatus 共同使用的唯一评估时点，规范化为 UTC instant。
+        asOfSequence:
+          type: integer
+          const: 0
+          minimum: 0
+          description: 当前固定为 0 的明确哨兵，表示结果来自完整事实读取或重建但尚无全局余额事实 sequence；不表示第 0 条业务变更。
     BalancePoint:
       type: object
       additionalProperties: false
@@ -3723,7 +3769,9 @@ components:
     AccountListOk: { description: 账户列表, content: { application/json: { schema: { $ref: '#/components/schemas/AccountListEnvelope' } } } }
     LiabilityDetailCreated: { description: 首次持久化负债详情已创建；详情 version 从 1 开始且不推进 Account.version, headers: { ETag: { schema: { type: string, pattern: '^"[1-9][0-9]*"$' } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LiabilityDetailEnvelope' } } } }
     LiabilityDetailOk: { description: 独立负债详情；无持久行时返回 version 0 和 ETag "0"，持久化详情返回正整数版本强 ETag, headers: { ETag: { schema: { type: string, pattern: '^"(0|[1-9][0-9]*)"$' } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LiabilityDetailEnvelope' } } } }
-    AccountBalanceOk: { description: 账户账面及可用余额, content: { application/json: { schema: { $ref: '#/components/schemas/AccountBalanceEnvelope' } } } }
+    AccountBalanceOk:
+      description: 共同精确 asOf 的账户账面、有效流动性占用和可用余额；无法获得一致事实快照时返回 InternalError。
+      content: { application/json: { schema: { $ref: '#/components/schemas/AccountBalanceEnvelope' } } }
     BalanceHistoryOk: { description: 账户历史余额, content: { application/json: { schema: { $ref: '#/components/schemas/BalanceHistoryEnvelope' } } } }
     LiquidityHoldCreated: { description: 首版或修订版 LiquidityHold 已创建；响应包含完整审计字段和新的强 ETag, headers: { ETag: { schema: { type: string, pattern: '^"[1-9][0-9]*"$' } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LiquidityHoldEnvelope' } } } }
     LiquidityHoldOk: { description: LiquidityHold 已释放；响应包含完整审计字段和新的强 ETag, headers: { ETag: { schema: { type: string, pattern: '^"[1-9][0-9]*"$' } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LiquidityHoldEnvelope' } } } }

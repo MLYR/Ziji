@@ -1,19 +1,24 @@
 import type { components } from '@ziji/api-types'
 
+import { getWebAccessToken } from '@/auth/auth-session'
+
 export type ApiProblem = components['schemas']['Problem']
 
 export class ApiClientError extends Error {
   readonly problem: ApiProblem
+  readonly retryAfterSeconds: number | null
 
-  constructor(problem: ApiProblem) {
+  constructor(problem: ApiProblem, retryAfterSeconds: number | null = null) {
     super(problem.detail ?? problem.title)
     this.name = 'ApiClientError'
     this.problem = problem
+    this.retryAfterSeconds = retryAfterSeconds
   }
 }
 
-interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
+export interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
   body?: unknown
+  auth?: boolean
 }
 
 function readCookie(name: string): string | undefined {
@@ -32,22 +37,26 @@ function isApiProblem(value: unknown): value is ApiProblem {
 }
 
 export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
-  const headers = new Headers(options.headers)
-  const method = (options.method ?? 'GET').toUpperCase()
+  const { auth = true, ...requestOptions } = options
+  const headers = new Headers(requestOptions.headers)
+  const method = (requestOptions.method ?? 'GET').toUpperCase()
 
-  if (options.body !== undefined) headers.set('Content-Type', 'application/json')
+  if (requestOptions.body !== undefined) headers.set('Content-Type', 'application/json')
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
-    const csrfToken = readCookie('XSRF-TOKEN')
-    if (csrfToken) headers.set('X-XSRF-TOKEN', decodeURIComponent(csrfToken))
+    // 后端固定使用 ziji_csrf Cookie 与 X-CSRF-Token Header，避免登录后写请求被错误拒绝。
+    const csrfToken = readCookie('ziji_csrf')
+    if (csrfToken) headers.set('X-CSRF-Token', decodeURIComponent(csrfToken))
   }
+  const accessToken = auth ? getWebAccessToken() : null
+  if (accessToken && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${accessToken}`)
 
   // Web 会话只通过同源 Cookie 传输，避免将刷新凭据暴露给 JavaScript。
   const response = await fetch(path, {
-    ...options,
+    ...requestOptions,
     method,
     headers,
     credentials: 'include',
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    body: requestOptions.body === undefined ? undefined : JSON.stringify(requestOptions.body),
   })
 
   if (!response.ok) {
@@ -61,7 +70,9 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
           code: 'HTTP_ERROR',
           requestId: response.headers.get('X-Request-ID') ?? 'unknown',
         }
-    throw new ApiClientError(problem)
+    const retryAfterHeader = response.headers.get('Retry-After')
+    const retryAfterSeconds = retryAfterHeader === null ? null : Number.parseInt(retryAfterHeader, 10) || null
+    throw new ApiClientError(problem, retryAfterSeconds)
   }
 
   if (response.status === 204) return undefined as T

@@ -328,7 +328,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** 查询指定时点账面和可用余额 */
+        /**
+         * 查询指定时点账面和可用余额
+         * @description 读取一个共同精确 asOf 的账面余额、有效 LiquidityHold 和可用余额。仅当前 ACTIVE membership 的 OWNER、EDITOR、VIEWER 可读；缺失 asOf 时在同一 PostgreSQL 只读一致性快照内只捕获一次服务端 Clock，显式值必须为带 Z 或 UTC offset 的 ISO 8601 instant。Ledger 与 Hold 直接读取事实，或仅使用已证明与目标 instant 完全等价的缓存；当前没有全局余额事实 sequence，asOfSequence 固定返回明确哨兵 0。
+         */
         get: operations["getAccountBalance"];
         put?: never;
         post?: never;
@@ -2323,19 +2326,36 @@ export interface components {
             /** Format: uuid */
             accountId: string;
             currency: components["schemas"]["Currency"];
+            /** @description 目标账户 PRIMARY 已入账分录在共同 asOf 的账面余额；使用账户币种精度的普通十进制字符串。 */
             ledgerBalance: components["schemas"]["Money"];
+            /** @description 同一 asOf 有效的 frozen、inTransit、reserved 三项之和；使用账户币种精度的普通十进制字符串。 */
             unavailableAmount: components["schemas"]["NonNegativeMoney"];
+            /** @description 有效 LiquidityHold 版本按自身类型聚合的不可用金额明细；三项相加必须等于 unavailableAmount。 */
             unavailableBreakdown: {
+                /** @description 共同 asOf 有效的 FROZEN 版本之和。 */
                 frozen: components["schemas"]["NonNegativeMoney"];
+                /** @description 共同 asOf 有效的 IN_TRANSIT 版本之和。 */
                 inTransit: components["schemas"]["NonNegativeMoney"];
+                /** @description 共同 asOf 有效的 RESERVED 版本之和。 */
                 reserved: components["schemas"]["NonNegativeMoney"];
             };
+            /** @description 严格等于 ledgerBalance - unavailableAmount；可为负数且不得截断为零，使用账户币种精度的普通十进制字符串。 */
             availableBalance: components["schemas"]["Money"];
-            /** @enum {string} */
-            liquidityStatus: "NORMAL" | "NEGATIVE_AVAILABLE" | "STALE";
-            /** Format: date-time */
+            /**
+             * @description NORMAL 表示 availableBalance 大于或等于零；NEGATIVE_AVAILABLE 表示 availableBalance 小于零。该字段不承载投影新鲜度。
+             * @enum {string}
+             */
+            liquidityStatus: "NORMAL" | "NEGATIVE_AVAILABLE";
+            /**
+             * Format: date-time
+             * @description 本次账面余额、有效占用和 liquidityStatus 共同使用的唯一评估时点，规范化为 UTC instant。
+             */
             asOf: string;
-            asOfSequence: number;
+            /**
+             * @description 当前固定为 0 的明确哨兵，表示结果来自完整事实读取或重建但尚无全局余额事实 sequence；不表示第 0 条业务变更。
+             * @constant
+             */
+            asOfSequence: 0;
         };
         BalancePoint: {
             /** Format: date */
@@ -3516,7 +3536,7 @@ export interface components {
                 "application/json": components["schemas"]["LiabilityDetailEnvelope"];
             };
         };
-        /** @description 账户账面及可用余额 */
+        /** @description 共同精确 asOf 的账户账面、有效流动性占用和可用余额；无法获得一致事实快照时返回 InternalError。 */
         AccountBalanceOk: {
             headers: {
                 [name: string]: unknown;
@@ -4068,6 +4088,8 @@ export interface components {
         DateFrom: string;
         DateTo: string;
         AsOf: string;
+        /** @description 账户余额的精确评估 instant。必须为带 Z 或明确 UTC offset 的 ISO 8601 date-time；无 offset、非法日期或溢出返回 400 VALIDATION_ERROR。服务端将其规范化为 UTC，并以同一 instant 评估 Ledger、LiquidityHold 和流动性状态。 */
+        AccountBalanceAsOf: string;
         /** @description 用户时区下的自然月。 */
         CalendarMonth: string;
         InvestmentReturnScopeType: "PORTFOLIO" | "INSTRUMENT";
@@ -4606,7 +4628,8 @@ export interface operations {
     getAccountBalance: {
         parameters: {
             query?: {
-                asOf?: components["parameters"]["AsOf"];
+                /** @description 账户余额的精确评估 instant。必须为带 Z 或明确 UTC offset 的 ISO 8601 date-time；无 offset、非法日期或溢出返回 400 VALIDATION_ERROR。服务端将其规范化为 UTC，并以同一 instant 评估 Ledger、LiquidityHold 和流动性状态。 */
+                asOf?: components["parameters"]["AccountBalanceAsOf"];
             };
             header?: never;
             path: {
@@ -4617,8 +4640,10 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["AccountBalanceOk"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
         };
     };
     listAccountBalanceHistory: {
