@@ -61,13 +61,13 @@ class AccountBalancePostgresIntegrationTests extends PostgresIntegrationTestSupp
 	private org.springframework.transaction.support.TransactionTemplate transactionTemplate;
 
 	@Test
-	void readsPostedLedgerAndOnlyEffectiveHoldsAtOneAsOf() {
+	void readsBackdatedPostedLedgerAndOnlyEffectiveHoldsAtOneAsOf() {
 		UserFixture owner = insertUser("balance-facts-owner");
 		AccountFixture account = seedAccount(owner, "CNY", true);
 		seedPostedTransaction(account, "ADJUSTMENT", "POSTED", LocalDate.of(2026, 8, 15),
 			"Asia/Shanghai", Instant.parse("2026-08-15T12:00:00Z"), new BigDecimal("100.00"), true,
 			null, null, null, 1);
-		// 业务日满足条件但 posted_at 晚于 asOf 的事实，不能穿透历史时点。
+		// 已入账事实的业务日已在 asOf 当地日期内；posted_at 晚于 asOf 不能排除该 LedgerEntry。
 		seedPostedTransaction(account, "ADJUSTMENT", "POSTED", LocalDate.of(2026, 8, 15),
 			"Asia/Shanghai", Instant.parse("2026-08-16T01:00:00Z"), new BigDecimal("70.00"), true,
 			null, null, null, 1);
@@ -87,12 +87,12 @@ class AccountBalancePostgresIntegrationTests extends PostgresIntegrationTestSupp
 
 		AccountBalanceResult result = balanceUseCase.getBalance(owner.userId(), account.accountId(), AS_OF);
 
-		assertEquals(new BigDecimal("100.00"), result.ledgerBalance());
+		assertEquals(new BigDecimal("170.00"), result.ledgerBalance());
 		assertEquals(new BigDecimal("50.00"), result.unavailableAmount());
 		assertEquals(new BigDecimal("30.00"), result.unavailableBreakdown().frozen());
 		assertEquals(new BigDecimal("20.00"), result.unavailableBreakdown().inTransit());
 		assertEquals(new BigDecimal("0.00"), result.unavailableBreakdown().reserved());
-		assertEquals(new BigDecimal("50.00"), result.availableBalance());
+		assertEquals(new BigDecimal("120.00"), result.availableBalance());
 		assertEquals(AccountBalanceResult.LiquidityStatus.NORMAL, result.liquidityStatus());
 	}
 
@@ -121,7 +121,7 @@ class AccountBalancePostgresIntegrationTests extends PostgresIntegrationTestSupp
 	}
 
 	@Test
-	void appliesEachTransactionTimezoneAndExcludesFactsPostedAfterAsOf() {
+	void appliesEachTransactionTimezoneAndUsesBusinessDateForAsOfCutoff() {
 		UserFixture owner = insertUser("balance-timezone-owner");
 		AccountFixture account = seedAccount(owner, "CNY", true);
 		seedPostedTransaction(account, "ADJUSTMENT", "POSTED", LocalDate.of(2026, 8, 15),
@@ -136,14 +136,46 @@ class AccountBalancePostgresIntegrationTests extends PostgresIntegrationTestSupp
 		seedPostedTransaction(account, "ADJUSTMENT", "POSTED", LocalDate.of(2026, 8, 15),
 			"Asia/Shanghai", Instant.parse("2026-08-15T17:00:00Z"), new BigDecimal("70.00"), true,
 			null, null, null, 1);
+		// 负 offset 交易在 AS_OF 时仍处于 8 月 15 日当地日期，8 月 16 日业务事实必须排除。
+		seedPostedTransaction(account, "ADJUSTMENT", "POSTED", LocalDate.of(2026, 8, 16),
+			"America/Los_Angeles", Instant.parse("2026-08-15T23:00:00Z"), new BigDecimal("55.00"), true,
+			null, null, null, 1);
 
 		AccountBalanceResult beforeShanghaiMidnight = balanceUseCase.getBalance(
 			owner.userId(), account.accountId(), Instant.parse("2026-08-15T15:59:59Z"));
 		AccountBalanceResult afterShanghaiMidnight = balanceUseCase.getBalance(
 			owner.userId(), account.accountId(), Instant.parse("2026-08-15T16:00:00Z"));
+		AccountBalanceResult atAsOf = balanceUseCase.getBalance(owner.userId(), account.accountId(), AS_OF);
 
-		assertEquals(new BigDecimal("100.00"), beforeShanghaiMidnight.ledgerBalance());
-		assertEquals(new BigDecimal("125.00"), afterShanghaiMidnight.ledgerBalance());
+		assertEquals(new BigDecimal("170.00"), beforeShanghaiMidnight.ledgerBalance());
+		assertEquals(new BigDecimal("195.00"), afterShanghaiMidnight.ledgerBalance());
+		assertEquals(new BigDecimal("235.00"), atAsOf.ledgerBalance());
+	}
+
+	@Test
+	void excludesPostedBeforeAsOfWhenBusinessDateIsAfterTransactionLocalAsOfDate() {
+		UserFixture owner = insertUser("balance-future-business-date-owner");
+		AccountFixture account = seedAccount(owner, "CNY", true);
+		// posted_at 已早于 asOf，但固化业务日仍在 UTC 当地日期之后，不能进入余额。
+		seedPostedTransaction(account, "ADJUSTMENT", "POSTED", LocalDate.of(2026, 8, 17),
+			"UTC", Instant.parse("2026-08-15T23:59:59Z"), new BigDecimal("25.00"), true,
+			null, null, null, 1);
+
+		AccountBalanceResult result = balanceUseCase.getBalance(owner.userId(), account.accountId(), AS_OF);
+
+		assertEquals(new BigDecimal("0.00"), result.ledgerBalance());
+	}
+
+	@Test
+	void excludesUnpostedLedgerFactsEvenWhenBusinessDateIsBeforeAsOf() {
+		UserFixture owner = insertUser("balance-unposted-fact-owner");
+		AccountFixture account = seedAccount(owner, "CNY", true);
+		// DRAFT 交易即使预先写入 LedgerEntry，也未形成可计入余额的已入账事实。
+		seedUnpostedTransaction(account, LocalDate.of(2026, 8, 15), "UTC", new BigDecimal("35.00"));
+
+		AccountBalanceResult result = balanceUseCase.getBalance(owner.userId(), account.accountId(), AS_OF);
+
+		assertEquals(new BigDecimal("0.00"), result.ledgerBalance());
 	}
 
 	@Test
@@ -364,7 +396,8 @@ class AccountBalancePostgresIntegrationTests extends PostgresIntegrationTestSupp
 		int versionNo) {
 		UUID transactionId = UUID.randomUUID();
 		UUID rootId = rootTransactionId == null ? transactionId : rootTransactionId;
-		Instant createdAt = postedAt.minusSeconds(1);
+		Instant businessAt = postedAt == null ? ACCOUNT_CREATED_AT : postedAt;
+		Instant createdAt = postedAt == null ? ACCOUNT_CREATED_AT : postedAt.minusSeconds(1);
 		transactionTemplate.executeWithoutResult(status -> {
 			jdbc.update("""
 				INSERT INTO transactions
@@ -372,7 +405,7 @@ class AccountBalancePostgresIntegrationTests extends PostgresIntegrationTestSupp
 					 root_transaction_id, previous_version_id, reversal_of_id, version_no,
 					 created_by, updated_by, created_at, updated_at, entity_version)
 				VALUES (?, ?, 'DRAFT', CAST(? AS timestamptz), ?, ?, 'ADJUSTMENT', ?, ?, ?, ?, ?, ?, ?, ?, 1)
-				""", transactionId, type, ts(postedAt), java.sql.Date.valueOf(businessDate), timezone,
+				""", transactionId, type, ts(businessAt), java.sql.Date.valueOf(businessDate), timezone,
 				rootId, previousVersionId, reversalOfId, versionNo, account.ownerId(), account.ownerId(),
 				ts(createdAt), ts(createdAt));
 			jdbc.update("""
@@ -383,13 +416,25 @@ class AccountBalancePostgresIntegrationTests extends PostgresIntegrationTestSupp
 				account.currency(), java.sql.Date.valueOf(businessDate), ts(createdAt), UUID.randomUUID(), transactionId,
 				account.systemLedgerId(), debitPrimary ? "C" : "D", amount, account.currency(),
 				java.sql.Date.valueOf(businessDate), ts(createdAt));
-			jdbc.update("""
-				UPDATE transactions
-				SET status = ?, posted_at = CAST(? AS timestamptz), updated_at = CAST(? AS timestamptz)
-				WHERE id = ?
-				""", finalStatus, ts(postedAt), ts(postedAt), transactionId);
+			if (postedAt != null) {
+				jdbc.update("""
+					UPDATE transactions
+					SET status = ?, posted_at = CAST(? AS timestamptz), updated_at = CAST(? AS timestamptz)
+					WHERE id = ?
+					""", finalStatus, ts(postedAt), ts(postedAt), transactionId);
+			}
 		});
 		return new TransactionFixture(transactionId);
+	}
+
+	private void seedUnpostedTransaction(
+		AccountFixture account,
+		LocalDate businessDate,
+		String timezone,
+		BigDecimal amount) {
+		// 复用与已入账事实相同的平衡分录夹具，只省略最终 posting，验证 posted_at 非空门槛仍保留。
+		seedPostedTransaction(account, "ADJUSTMENT", "DRAFT", businessDate, timezone, null, amount, true,
+			null, null, null, 1);
 	}
 
 	private void seedHold(

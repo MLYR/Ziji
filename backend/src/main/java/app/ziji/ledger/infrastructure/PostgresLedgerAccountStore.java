@@ -23,12 +23,13 @@ public class PostgresLedgerAccountStore implements LedgerAccountStore {
 
 	private final JdbcTemplate jdbc;
 
+	// 指定时点按已入账事实的业务日及交易固化时区截止，posted_at 仅用于确认事实已入账。
 	private static final String BALANCE_AT_SQL = """
 		WITH evaluation AS (SELECT CAST(? AS timestamptz) AS as_of)
 		SELECT la.currency, la.account_nature,
 			COALESCE(SUM(
 				CASE
-					WHEN t.posted_at IS NULL OR t.posted_at > evaluation.as_of THEN 0
+					WHEN t.posted_at IS NULL THEN 0
 					WHEN t.business_date > CAST(evaluation.as_of AT TIME ZONE t.timezone AS date) THEN 0
 					WHEN e.direction = 'D' AND la.account_nature <> 'LIABILITY' THEN e.amount
 					WHEN e.direction = 'C' AND la.account_nature = 'LIABILITY' THEN e.amount
@@ -37,9 +38,13 @@ public class PostgresLedgerAccountStore implements LedgerAccountStore {
 					ELSE 0
 				END), 0) AS balance,
 			COUNT(*) FILTER (
-				WHERE t.posted_at IS NOT NULL AND t.posted_at <= evaluation.as_of AND e.currency <> la.currency) AS currency_mismatch_count,
+				WHERE t.posted_at IS NOT NULL
+					AND t.business_date <= CAST(evaluation.as_of AT TIME ZONE t.timezone AS date)
+					AND e.currency <> la.currency) AS currency_mismatch_count,
 			COUNT(*) FILTER (
-				WHERE t.posted_at IS NOT NULL AND t.posted_at <= evaluation.as_of AND (
+				WHERE t.posted_at IS NOT NULL
+					AND t.business_date <= CAST(evaluation.as_of AT TIME ZONE t.timezone AS date)
+					AND (
 					(la.currency = 'JPY' AND e.amount <> trunc(e.amount))
 					OR (la.currency <> 'JPY' AND e.amount <> round(e.amount, 2)))) AS precision_error_count
 		FROM ledger_accounts la
