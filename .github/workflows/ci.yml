@@ -25,6 +25,7 @@ jobs:
       mobile: ${{ steps.detect.outputs.mobile }}
       api: ${{ steps.detect.outputs.api }}
       migration: ${{ steps.detect.outputs.migration }}
+      security_deep: ${{ steps.detect.outputs.security_deep }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -37,6 +38,33 @@ jobs:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node scripts/detect-change-risk.mjs
+      # 所有风险输出都必须是严格布尔字符串，避免单个消费者把异常值解释成“不适用”。
+      - name: Validate change-risk outputs
+        env:
+          BACKEND: ${{ steps.detect.outputs.backend }}
+          BACKEND_DEEP: ${{ steps.detect.outputs.backend_deep }}
+          WEB: ${{ steps.detect.outputs.web }}
+          MOBILE: ${{ steps.detect.outputs.mobile }}
+          API: ${{ steps.detect.outputs.api }}
+          MIGRATION: ${{ steps.detect.outputs.migration }}
+          SECURITY_DEEP: ${{ steps.detect.outputs.security_deep }}
+        run: |
+          set -euo pipefail
+          validate_output() {
+            local name="$1"
+            local value="$2"
+            case "$value" in
+              true|false) ;;
+              *) printf 'invalid %s change-risk output: %s\n' "$name" "$value" >&2; exit 1 ;;
+            esac
+          }
+          validate_output backend "$BACKEND"
+          validate_output backend_deep "$BACKEND_DEEP"
+          validate_output web "$WEB"
+          validate_output mobile "$MOBILE"
+          validate_output api "$API"
+          validate_output migration "$MIGRATION"
+          validate_output security_deep "$SECURITY_DEEP"
 
   contract:
     name: OpenAPI contract
@@ -82,10 +110,32 @@ jobs:
   backend:
     name: Backend checks
     needs: changes
+    # 上游 detector 失败时仍执行本 job 的输出校验，避免 needs 默认 skipped 被当作门禁通过。
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
+      # backend 与 backend_deep 都必须是 detector 明确写出的布尔值，缺失值直接阻断。
+      - name: Validate backend change-risk outputs
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          BACKEND: ${{ needs.changes.outputs.backend }}
+          BACKEND_DEEP: ${{ needs.changes.outputs.backend_deep }}
+        run: |
+          set -euo pipefail
+          if [ "$CHANGES_RESULT" != 'success' ]; then
+            printf 'changes job did not succeed: %s\n' "$CHANGES_RESULT" >&2
+            exit 1
+          fi
+          case "$BACKEND" in
+            true|false) ;;
+            *) printf 'invalid backend change-risk output: %s\n' "$BACKEND" >&2; exit 1 ;;
+          esac
+          case "$BACKEND_DEEP" in
+            true|false) ;;
+            *) printf 'invalid backend_deep change-risk output: %s\n' "$BACKEND_DEEP" >&2; exit 1 ;;
+          esac
       - name: Backend not applicable
-        if: needs.changes.outputs.backend != 'true'
+        if: needs.changes.outputs.backend == 'false'
         run: |
           printf '%s\n' 'not applicable: no backend changes'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -100,7 +150,7 @@ jobs:
           cache: maven
       # Maven Wrapper 是后端唯一受支持的构建入口；R3 路径执行完整测试，其余后端改动先做编译验证。
       - name: Compile backend
-        if: needs.changes.outputs.backend == 'true' && needs.changes.outputs.backend_deep != 'true'
+        if: needs.changes.outputs.backend == 'true' && needs.changes.outputs.backend_deep == 'false'
         run: ./mvnw --batch-mode --no-transfer-progress -DskipTests compile
         working-directory: backend
       - name: Run backend deep tests
@@ -170,6 +220,9 @@ jobs:
 
   security:
     name: Security supply-chain gate
+    needs: changes
+    # 上游 detector 失败时仍执行本 job 的输出校验，避免 needs 默认 skipped 被当作门禁通过。
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -186,12 +239,27 @@ jobs:
           set -euo pipefail
           git cat-file -e "${BASE_SHA}^{commit}"
           # 许可证检查会启动 Maven Wrapper，安装阶段会读取 pnpm/Maven 配置；这些执行输入也必须来自受信基线。
-          for path in .npmrc .pnpmfile.cjs pnpmfile.cjs trivy.yaml trivy-secret.yaml .trivyignore .trivyignore.yaml scripts/security-scan.sh scripts/check-licenses.mjs security/license-policy.json backend/pom.xml backend/mvnw backend/.mvn backend/.mvn/maven.config backend/.mvn/jvm.config backend/.mvn/extensions.xml backend/.mvn/wrapper/maven-wrapper.properties; do
+          for path in .npmrc .pnpmfile.cjs pnpmfile.cjs trivy.yaml trivy-secret.yaml .trivyignore .trivyignore.yaml scripts/detect-change-risk.mjs scripts/security-scan.sh scripts/check-licenses.mjs security/license-policy.json backend/pom.xml backend/mvnw backend/mvnw.cmd backend/.mvn backend/.mvn/maven.config backend/.mvn/jvm.config backend/.mvn/extensions.xml backend/.mvn/wrapper/maven-wrapper.properties; do
             if ! git diff --quiet "$BASE_SHA" -- "$path"; then
               printf 'security scanner source changed relative to trusted base: %s\n' "$path" >&2
               exit 1
             fi
           done
+      # 缺失或非法决策值不能落入任一扫描分支，必须在安装和扫描前失败。
+      - name: Validate security change-risk output
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          SECURITY_DEEP: ${{ needs.changes.outputs.security_deep }}
+        run: |
+          set -euo pipefail
+          if [ "$CHANGES_RESULT" != 'success' ]; then
+            printf 'changes job did not succeed: %s\n' "$CHANGES_RESULT" >&2
+            exit 1
+          fi
+          case "$SECURITY_DEEP" in
+            true|false) ;;
+            *) printf 'invalid security_deep change-risk output: %s\n' "$SECURITY_DEEP" >&2; exit 1 ;;
+          esac
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 10.4.1
@@ -224,7 +292,7 @@ jobs:
       - run: pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile
       # 普通 PR 只执行密钥快检；依赖、许可证和跨语言漏洞扫描仅在供应链相关变更时执行。
       - name: Run security fast scan
-        if: needs.changes.outputs.security_deep != 'true'
+        if: needs.changes.outputs.security_deep == 'false'
         run: bash scripts/security-scan.sh secrets
       - name: Run security deep scan
         if: needs.changes.outputs.security_deep == 'true'
