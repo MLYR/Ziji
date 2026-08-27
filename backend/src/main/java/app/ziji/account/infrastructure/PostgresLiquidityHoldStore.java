@@ -77,30 +77,28 @@ public class PostgresLiquidityHoldStore implements LiquidityHoldStore, Liquidity
 		SELECT COUNT(DISTINCT h.currency) AS currency_count, MIN(h.currency) AS currency,
 			COALESCE(SUM(h.amount) FILTER (
 				WHERE h.hold_type = 'FROZEN'
-				  AND h.created_at <= evaluation.as_of
 				  AND h.effective_at <= evaluation.as_of
 				  AND (h.ended_at IS NULL OR h.ended_at > evaluation.as_of)
 				  AND (h.expires_at IS NULL OR h.expires_at > evaluation.as_of)), 0) AS frozen,
 			COALESCE(SUM(h.amount) FILTER (
 				WHERE h.hold_type = 'IN_TRANSIT'
-				  AND h.created_at <= evaluation.as_of
 				  AND h.effective_at <= evaluation.as_of
 				  AND (h.ended_at IS NULL OR h.ended_at > evaluation.as_of)
 				  AND (h.expires_at IS NULL OR h.expires_at > evaluation.as_of)), 0) AS in_transit,
 			COALESCE(SUM(h.amount) FILTER (
 				WHERE h.hold_type = 'RESERVED'
-				  AND h.created_at <= evaluation.as_of
 				  AND h.effective_at <= evaluation.as_of
 				  AND (h.ended_at IS NULL OR h.ended_at > evaluation.as_of)
 				  AND (h.expires_at IS NULL OR h.expires_at > evaluation.as_of)), 0) AS reserved,
 			COUNT(*) FILTER (
-				WHERE h.created_at <= evaluation.as_of
+				WHERE h.effective_at <= evaluation.as_of
+				  AND (h.ended_at IS NULL OR h.ended_at > evaluation.as_of)
+				  AND (h.expires_at IS NULL OR h.expires_at > evaluation.as_of)
 				  AND ((h.currency = 'JPY' AND h.amount <> trunc(h.amount))
 					OR (h.currency <> 'JPY' AND h.amount <> round(h.amount, 2)))) AS precision_error_count
 		FROM liquidity_holds h
 		CROSS JOIN evaluation
 		WHERE h.account_id = ?
-		  AND h.created_at <= evaluation.as_of
 		""";
 
 	private static final String EXPIRE_SQL = """
@@ -208,13 +206,14 @@ public class PostgresLiquidityHoldStore implements LiquidityHoldStore, Liquidity
 	}
 
 	@Override
-	public Optional<LiquidityHold> supersedeIfVersion(UUID accountId, UUID holdId, int expectedVersion, Instant now) {
-		return conditional(SUPERSEDE_SQL, accountId, holdId, expectedVersion, now, false);
+	public Optional<LiquidityHold> supersedeIfVersion(
+		UUID accountId, UUID holdId, int expectedVersion, Instant endedAt, Instant updatedAt) {
+		return conditional(SUPERSEDE_SQL, accountId, holdId, expectedVersion, endedAt, updatedAt, false);
 	}
 
 	@Override
 	public Optional<LiquidityHold> releaseIfVersion(UUID accountId, UUID holdId, int expectedVersion, Instant now) {
-		return conditional(RELEASE_SQL, accountId, holdId, expectedVersion, now, true);
+		return conditional(RELEASE_SQL, accountId, holdId, expectedVersion, now, now, true);
 	}
 
 	@Override
@@ -253,15 +252,16 @@ public class PostgresLiquidityHoldStore implements LiquidityHoldStore, Liquidity
 		UUID accountId,
 		UUID holdId,
 		int expectedVersion,
-		Instant now,
+		Instant endedAt,
+		Instant updatedAt,
 		boolean release) {
-		if (accountId == null || holdId == null || expectedVersion < 1 || now == null) {
+		if (accountId == null || holdId == null || expectedVersion < 1 || endedAt == null || updatedAt == null) {
 			throw new LiquidityHoldException.Persistence(new IllegalArgumentException("流动性占用条件更新参数无效。"));
 		}
 		try {
 			Record record = release
-				? dsl.resultQuery(sql, utc(now), utc(now), utc(now), accountId, holdId, expectedVersion).fetchOne()
-				: dsl.resultQuery(sql, utc(now), utc(now), accountId, holdId, expectedVersion).fetchOne();
+				? dsl.resultQuery(sql, utc(endedAt), utc(endedAt), utc(updatedAt), accountId, holdId, expectedVersion).fetchOne()
+				: dsl.resultQuery(sql, utc(endedAt), utc(updatedAt), accountId, holdId, expectedVersion).fetchOne();
 			return record == null ? Optional.empty() : Optional.of(toDomain(record));
 		} catch (org.jooq.exception.DataAccessException exception) {
 			throw new LiquidityHoldException.Persistence(exception);

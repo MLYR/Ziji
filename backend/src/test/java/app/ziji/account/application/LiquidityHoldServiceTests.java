@@ -441,7 +441,8 @@ class LiquidityHoldServiceTests {
 			}
 
 			@Override
-			public Optional<LiquidityHold> supersedeIfVersion(UUID accountId, UUID holdId, int expectedVersion, Instant now) {
+			public Optional<LiquidityHold> supersedeIfVersion(
+				UUID accountId, UUID holdId, int expectedVersion, Instant endedAt, Instant updatedAt) {
 				LiquidityHold current = stored.get(holdId);
 				if (current == null || !accountId.equals(current.accountId()) || current.version() != expectedVersion
 					|| current.endedAt() != null) {
@@ -450,8 +451,8 @@ class LiquidityHoldServiceTests {
 				LiquidityHold closed = LiquidityHold.restore(
 					current.id(), current.accountId(), current.rootHoldId(), current.previousRevisionId(), current.revisionNo(),
 					current.type(), current.amount(), current.currency(), current.effectiveAt(), current.expiresAt(), null,
-					current.source(), current.note(), now, app.ziji.account.domain.LiquidityHoldEndReason.SUPERSEDED,
-					current.createdBy(), current.createdAt(), now, current.version() + 1);
+					current.source(), current.note(), endedAt, app.ziji.account.domain.LiquidityHoldEndReason.SUPERSEDED,
+					current.createdBy(), current.createdAt(), updatedAt, current.version() + 1);
 				stored.put(holdId, closed);
 				return Optional.of(closed);
 			}

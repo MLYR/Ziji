@@ -18,7 +18,8 @@ public interface LiquidityHoldStore {
 
 	void insert(LiquidityHold hold);
 
-	Optional<LiquidityHold> supersedeIfVersion(UUID accountId, UUID holdId, int expectedVersion, Instant now);
+	Optional<LiquidityHold> supersedeIfVersion(
+		UUID accountId, UUID holdId, int expectedVersion, Instant endedAt, Instant updatedAt);
 
 	Optional<LiquidityHold> releaseIfVersion(UUID accountId, UUID holdId, int expectedVersion, Instant now);
 

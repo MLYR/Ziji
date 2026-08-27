@@ -97,7 +97,7 @@ class AccountBalancePostgresIntegrationTests extends PostgresIntegrationTestSupp
 	}
 
 	@Test
-	void doesNotBackdateFutureCreatedHoldOrDoubleCountFutureRevision() {
+	void countsBackdatedRevisionFromEffectiveAtWithoutDoubleCountingPreviousVersion() {
 		UserFixture owner = insertUser("balance-hold-history-owner");
 		AccountFixture account = seedAccount(owner, "CNY", true);
 		seedPostedTransaction(account, "ADJUSTMENT", "POSTED", LocalDate.of(2026, 8, 15),
@@ -105,19 +105,20 @@ class AccountBalancePostgresIntegrationTests extends PostgresIntegrationTestSupp
 			null, null, null, 1);
 		UUID rootHoldId = UUID.randomUUID();
 		Instant revisionCreatedAt = AS_OF.plusSeconds(1);
+		Instant revisionEffectiveAt = Instant.parse("2026-08-15T01:00:00Z");
 		seedHoldVersion(account, "FROZEN", new BigDecimal("10.00"),
-			Instant.parse("2026-08-15T01:00:00Z"), null, null, "SUPERSEDED", revisionCreatedAt,
+			revisionEffectiveAt, null, null, "SUPERSEDED", revisionEffectiveAt,
 			rootHoldId, rootHoldId, null, 1, Instant.parse("2026-08-15T00:00:00Z"));
-		// 修订版本的 effective_at 早于 asOf，但 created_at 晚于 asOf，不能把未来事实回溯进历史。
+		// 修订事实的有效边界由 effective_at 决定；created_at 晚于 asOf 不应覆盖这一业务时态。
 		seedHoldVersion(account, "FROZEN", new BigDecimal("20.00"),
-			Instant.parse("2026-08-15T01:00:00Z"), null, null, null, null,
+			revisionEffectiveAt, null, null, null, null,
 			UUID.randomUUID(), rootHoldId, rootHoldId, 2, revisionCreatedAt);
 
 		AccountBalanceResult result = balanceUseCase.getBalance(owner.userId(), account.accountId(), AS_OF);
 
-		assertEquals(new BigDecimal("10.00"), result.unavailableAmount());
-		assertEquals(new BigDecimal("10.00"), result.unavailableBreakdown().frozen());
-		assertEquals(new BigDecimal("90.00"), result.availableBalance());
+		assertEquals(new BigDecimal("20.00"), result.unavailableAmount());
+		assertEquals(new BigDecimal("20.00"), result.unavailableBreakdown().frozen());
+		assertEquals(new BigDecimal("80.00"), result.availableBalance());
 	}
 
 	@Test
