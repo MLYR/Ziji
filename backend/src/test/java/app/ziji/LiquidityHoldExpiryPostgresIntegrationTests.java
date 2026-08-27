@@ -357,6 +357,43 @@ class LiquidityHoldExpiryPostgresIntegrationTests extends PostgresIntegrationTes
 	}
 
 	@Test
+	void rejectsOutOfOrderFutureRevisionBeforeCreatingAnOverlappingHistoricalInterval() {
+		UserFixture user = user("out-of-order-revision");
+		UUID accountId = account(user.userId(), "乱序修订账户", false);
+		Instant operationAt = AS_OF;
+		Instant firstFutureEffectiveAt = AS_OF.plusSeconds(120);
+		Instant earlierFutureEffectiveAt = AS_OF.plusSeconds(60);
+		UUID holdId = seedHold(accountId, user.userId(), AS_OF.minusSeconds(10), null, null, null, 1);
+		LiquidityHoldService manual = manualService(auditLogs, Clock.fixed(operationAt, ZoneOffset.UTC));
+
+		LiquidityHold firstRevision = manual.revise(
+			user.userId(), accountId, holdId, 1,
+			new LiquidityHoldCommand(
+				LiquidityHoldType.RESERVED, new BigDecimal("20.00"), AccountCurrency.CNY,
+				firstFutureEffectiveAt, null, "第一条未来修订"),
+			"out-of-order-first-revision");
+
+		// 同一修订链的生效时点必须单调不减，否则旧版本区间与较早的新版本会重叠并被余额双计。
+		assertThrows(LiquidityHoldException.BusinessRule.class, () -> manual.revise(
+			user.userId(), accountId, firstRevision.id(), 1,
+			new LiquidityHoldCommand(
+				LiquidityHoldType.FROZEN, new BigDecimal("30.00"), AccountCurrency.CNY,
+				earlierFutureEffectiveAt, null, "乱序未来修订"),
+			"out-of-order-second-revision"));
+
+		assertEquals(2, count("SELECT count(*) FROM liquidity_holds WHERE root_hold_id = ?", holdId));
+		assertEquals(firstFutureEffectiveAt, jdbc.queryForObject(
+			"SELECT effective_at FROM liquidity_holds WHERE id = ?", Timestamp.class, firstRevision.id()).toInstant());
+		assertNull(jdbc.queryForObject(
+			"SELECT ended_at FROM liquidity_holds WHERE id = ?", Timestamp.class, firstRevision.id()));
+
+		AccountBalanceResult duringFutureGap = balanceUseCase.getBalance(
+			user.userId(), accountId, AS_OF.plusSeconds(90));
+		assertEquals(new BigDecimal("10.00"), duringFutureGap.unavailableAmount());
+		assertEquals(new BigDecimal("10.00"), duringFutureGap.unavailableBreakdown().frozen());
+	}
+
+	@Test
 	void finalizerFirstWinsAndManualReleaseOrRevisionSeesVersionConflict() throws Exception {
 		assertFinalizerFirstManualOperation(false);
 		cleanFactsCreatedByThisClass();

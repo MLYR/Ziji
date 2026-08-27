@@ -187,6 +187,10 @@ public class LiquidityHoldService implements LiquidityHoldUseCase {
 			if (command.currency() != account.currency()) {
 				throw new LiquidityHoldException.BusinessRule();
 			}
+			if (command.effectiveAt().isBefore(current.effectiveAt())) {
+				// 修订链的业务生效时点必须单调不减，避免历史版本区间重叠并在余额中双计。
+				throw new LiquidityHoldException.BusinessRule();
+			}
 			// 旧版本在新版本的业务生效点结束；updatedAt 仍记录本次修订真实提交时刻，避免历史时态重叠。
 			LiquidityHold closed = holds.supersedeIfVersion(accountId, holdId, expectedVersion, command.effectiveAt(), now)
 				.orElseThrow(() -> concurrentConflict(accountId, holdId));
