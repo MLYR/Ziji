@@ -193,14 +193,83 @@ jobs:
           abort 'PR head 改写了 trusted Workflow security gate' unless security_head == security_base
           puts 'Workflow security gate matches trusted base.'
 
+          def changes_job(workflow, label)
+            jobs = workflow.fetch('jobs') { abort "#{label} 缺少 jobs" }
+            job = jobs.fetch('changes') { abort "#{label} 缺少 changes job" }
+            abort "#{label} changes job name 不匹配" unless job['name'] == 'Detect change risk'
+            abort "#{label} changes job runner 不匹配" unless job['runs-on'] == 'ubuntu-latest'
+
+            required_outputs = {
+              'backend' => '${{ steps.detect.outputs.backend }}',
+              'backend_deep' => '${{ steps.detect.outputs.backend_deep }}',
+              'web' => '${{ steps.detect.outputs.web }}',
+              'mobile' => '${{ steps.detect.outputs.mobile }}',
+              'api' => '${{ steps.detect.outputs.api }}',
+              'migration' => '${{ steps.detect.outputs.migration }}',
+              'security_deep' => '${{ steps.detect.outputs.security_deep }}'
+            }
+            outputs = job.fetch('outputs') { abort "#{label} changes job 缺少 outputs" }
+            required_outputs.each do |name, expression|
+              abort "#{label} changes job 未导出 #{name}" unless outputs[name] == expression
+            end
+
+            steps = job.fetch('steps') { abort "#{label} changes job 缺少 steps" }
+            detect_step = steps.find { |step| step.is_a?(Hash) && step['id'] == 'detect' }
+            abort "#{label} changes job 缺少 detect step" unless detect_step
+            abort "#{label} detect step name 不匹配" unless detect_step['name'] == 'Detect affected areas'
+            abort "#{label} changes job 未直接调用受信 detector" unless detect_step['run'] == 'node scripts/detect-change-risk.mjs'
+
+            required_env = {
+              'GITHUB_BASE_SHA' => '${{ github.event.pull_request.base.sha }}',
+              'GITHUB_EVENT_NAME' => '${{ github.event_name }}',
+              'GITHUB_SHA' => '${{ github.event.pull_request.head.sha || github.sha }}'
+            }
+            env = detect_step.fetch('env') { abort "#{label} detect step 缺少 env" }
+            required_env.each do |name, expression|
+              abort "#{label} detect step 未保护 #{name}" unless env[name] == expression
+            end
+            job
+          end
+
+          def backend_job(workflow, label)
+            jobs = workflow.fetch('jobs') { abort "#{label} 缺少 jobs" }
+            job = jobs.fetch('backend') { abort "#{label} 缺少 backend job" }
+            abort "#{label} backend job name 不匹配" unless job['name'] == 'Backend checks'
+            abort "#{label} backend job 必须依赖 changes" unless job['needs'] == 'changes'
+            abort "#{label} backend job 必须在 changes 失败后执行输出校验" unless job['if'] == '${{ always() }}'
+
+            steps = job.fetch('steps') { abort "#{label} backend job 缺少 steps" }
+            validation_step = steps.find { |step| step.is_a?(Hash) && step['name'] == 'Validate backend change-risk outputs' }
+            not_applicable_step = steps.find { |step| step.is_a?(Hash) && step['name'] == 'Backend not applicable' }
+            compile_step = steps.find { |step| step.is_a?(Hash) && step['name'] == 'Compile backend' }
+            deep_step = steps.find { |step| step.is_a?(Hash) && step['name'] == 'Run backend deep tests' }
+            abort "#{label} 缺少 backend change-risk fail-closed 校验" unless validation_step
+            validation_env = validation_step.fetch('env') { abort "#{label} backend change-risk 校验缺少 changes 结果输入" }
+            validation_run = validation_step.fetch('run')
+            abort "#{label} backend change-risk 校验未读取 needs.changes.result" unless validation_env['CHANGES_RESULT'] == '${{ needs.changes.result }}'
+            abort "#{label} backend change-risk 校验未限制为 true/false" unless validation_run.include?('true|false')
+            abort "#{label} backend change-risk 校验未阻断 changes 失败" unless validation_run.include?("!= 'success'")
+            abort "#{label} 缺少 backend not applicable step" unless not_applicable_step
+            abort "#{label} 缺少 backend compile step" unless compile_step
+            abort "#{label} 缺少 backend deep step" unless deep_step
+            abort "#{label} backend not applicable 条件不是精确 false" unless not_applicable_step['if'] == "needs.changes.outputs.backend == 'false'"
+            abort "#{label} backend compile 条件不是精确 false" unless compile_step['if'] == "needs.changes.outputs.backend == 'true' && needs.changes.outputs.backend_deep == 'false'"
+            abort "#{label} backend deep 条件不是精确 true" unless deep_step['if'] == "needs.changes.outputs.backend == 'true' && needs.changes.outputs.backend_deep == 'true'"
+            abort "#{label} backend compile 入口不匹配" unless compile_step['run'] == './mvnw --batch-mode --no-transfer-progress -DskipTests compile'
+            abort "#{label} backend deep 入口不匹配" unless deep_step['run'] == './mvnw --batch-mode --no-transfer-progress test'
+            job
+          end
+
           def security_job(workflow, label)
             jobs = workflow.fetch('jobs') { abort "#{label} 缺少 jobs" }
             job = jobs.fetch('security') { abort "#{label} 缺少 security job" }
             abort "#{label} security job name 不匹配" unless job['name'] == 'Security supply-chain gate'
+            abort "#{label} security job 必须在 changes 失败后执行输出校验" unless job['if'] == '${{ always() }}'
             job
           end
 
           def validate_security_contract(job, label)
+            abort "#{label} security job 必须依赖 changes" unless job['needs'] == 'changes'
             steps = job.fetch('steps') { abort "#{label} security job 缺少 steps" }
             guard_index = steps.index { |step| step.is_a?(Hash) && step['name'] == 'Verify trusted security scanner sources' }
             abort "#{label} 缺少 trusted source guard" unless guard_index
@@ -214,11 +283,13 @@ jobs:
               trivy-secret.yaml
               .trivyignore
               .trivyignore.yaml
+              scripts/detect-change-risk.mjs
               scripts/security-scan.sh
               scripts/check-licenses.mjs
               security/license-policy.json
               backend/pom.xml
               backend/mvnw
+              backend/mvnw.cmd
               backend/.mvn
               backend/.mvn/maven.config
               backend/.mvn/jvm.config
@@ -230,11 +301,28 @@ jobs:
             end
             abort "#{label} trusted source guard 未执行 git diff --quiet" unless guard_run.include?('git diff --quiet')
 
+            validation_index = steps.index { |step| step.is_a?(Hash) && step['name'] == 'Validate security change-risk output' }
+            abort "#{label} 缺少 security change-risk fail-closed 校验" unless validation_index
+            validation_step = steps[validation_index]
+            validation_env = validation_step.fetch('env') { abort "#{label} security change-risk 校验缺少 changes 结果输入" }
+            validation_run = validation_step.fetch('run')
+            abort "#{label} security change-risk 校验未读取 needs.changes.result" unless validation_env['CHANGES_RESULT'] == '${{ needs.changes.result }}'
+            abort "#{label} security change-risk 校验未限制为 true/false" unless validation_run.include?('true|false')
+            abort "#{label} security change-risk 校验未阻断 changes 失败" unless validation_run.include?("!= 'success'")
+
             install_index = steps.index { |step| step.is_a?(Hash) && step['run'] == 'pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile' }
-            scan_index = steps.index { |step| step.is_a?(Hash) && step['run'] == 'bash scripts/security-scan.sh all' }
+            fast_index = steps.index { |step| step.is_a?(Hash) && step['name'] == 'Run security fast scan' }
+            deep_index = steps.index { |step| step.is_a?(Hash) && step['name'] == 'Run security deep scan' }
             abort "#{label} 缺少 --ignore-scripts 安装" unless install_index
-            abort "#{label} 缺少直接安全扫描命令" unless scan_index
-            abort "#{label} 安全扫描命令早于 trusted source guard" unless guard_index < install_index && guard_index < scan_index
+            abort "#{label} 缺少 security fast scan" unless fast_index
+            abort "#{label} 缺少 security deep scan" unless deep_index
+            fast_step = steps[fast_index]
+            deep_step = steps[deep_index]
+            abort "#{label} fast scan 条件不是精确 false" unless fast_step['if'] == "needs.changes.outputs.security_deep == 'false'"
+            abort "#{label} deep scan 条件不是精确 true" unless deep_step['if'] == "needs.changes.outputs.security_deep == 'true'"
+            abort "#{label} fast scan 入口不匹配" unless fast_step['run'] == 'bash scripts/security-scan.sh secrets'
+            abort "#{label} deep scan 入口不匹配" unless deep_step['run'] == 'bash scripts/security-scan.sh all'
+            abort "#{label} 安全扫描命令早于 trusted source guard 或决策校验" unless guard_index < validation_index && validation_index < install_index && install_index < fast_index && install_index < deep_index
             abort "#{label} 仍调用可改写的 pnpm security:scan" if steps.any? { |step| step.is_a?(Hash) && step['run'].to_s.include?('pnpm security:scan') }
           end
 
@@ -244,6 +332,14 @@ jobs:
           end
           # Psych 按 YAML 1.1 将未加引号的 on 解析为布尔键，显式比较该键以保护 pull_request 触发器。
           abort 'PR head 改写了 workflow 顶层 on' unless head[true] == base[true]
+
+          base_changes = changes_job(base, 'trusted base')
+          head_changes = changes_job(head, 'PR head')
+          abort 'PR head 改写了 trusted base 的 Detect change risk job' unless head_changes == base_changes
+
+          base_backend = backend_job(base, 'trusted base')
+          head_backend = backend_job(head, 'PR head')
+          abort 'PR head 改写了 trusted base 的 Backend checks job' unless head_backend == base_backend
 
           base_security = security_job(base, 'trusted base')
           head_security = security_job(head, 'PR head')
