@@ -61,7 +61,7 @@ class SecurityConfiguration {
 			.requestMatchers(HttpMethod.GET, "/api/v1/users/me", "/api/v1/users/me/sessions").authenticated()
 			.requestMatchers(HttpMethod.GET,
 				"/api/v1/accounts", "/api/v1/accounts/*", "/api/v1/accounts/*/liability-details",
-				"/api/v1/accounts/*/liquidity-holds",
+				"/api/v1/accounts/*/balance", "/api/v1/accounts/*/liquidity-holds",
 				"/api/v1/sync/changes", "/api/v1/transactions", "/api/v1/transactions/*").authenticated()
 			.requestMatchers(HttpMethod.PATCH, "/api/v1/users/me").authenticated()
 			.requestMatchers(HttpMethod.PATCH,
@@ -129,6 +129,7 @@ class SecurityConfiguration {
 				|| "/api/v1/transactions".equals(path)
 				|| path.matches("/api/v1/transactions/[^/]+")
 				|| path.matches("/api/v1/accounts/[^/]+")
+				|| path.matches("/api/v1/accounts/[^/]+/balance")
 				|| path.matches("/api/v1/accounts/[^/]+/liability-details")
 				|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds");
 		}

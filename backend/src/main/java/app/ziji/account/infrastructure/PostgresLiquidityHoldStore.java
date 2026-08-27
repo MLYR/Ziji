@@ -9,6 +9,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import app.ziji.account.application.LiquidityHoldException;
+import app.ziji.account.application.LiquidityHoldBalanceReadPort;
 import app.ziji.account.application.LiquidityHoldKeysetPosition;
 import app.ziji.account.application.LiquidityHoldStore;
 import app.ziji.account.domain.AccountCurrency;
@@ -22,7 +23,7 @@ import org.springframework.stereotype.Repository;
 
 /** PostgreSQL LiquidityHold 适配器：完整历史 keyset 与当前版本条件更新均由数据库执行。 */
 @Repository
-public class PostgresLiquidityHoldStore implements LiquidityHoldStore {
+public class PostgresLiquidityHoldStore implements LiquidityHoldStore, LiquidityHoldBalanceReadPort {
 
 	private static final String COLUMNS = """
 		id, account_id, hold_type, amount, currency, effective_at, expires_at, released_at, source, note,
@@ -70,6 +71,37 @@ public class PostgresLiquidityHoldStore implements LiquidityHoldStore {
 		ORDER BY expires_at ASC, id ASC
 		LIMIT ?
 		""".formatted(COLUMNS);
+
+	private static final String SUM_EFFECTIVE_SQL = """
+		WITH evaluation AS (SELECT CAST(? AS timestamptz) AS as_of)
+		SELECT COUNT(DISTINCT h.currency) AS currency_count, MIN(h.currency) AS currency,
+			COALESCE(SUM(h.amount) FILTER (
+				WHERE h.hold_type = 'FROZEN'
+				  AND h.created_at <= evaluation.as_of
+				  AND h.effective_at <= evaluation.as_of
+				  AND (h.ended_at IS NULL OR h.ended_at > evaluation.as_of)
+				  AND (h.expires_at IS NULL OR h.expires_at > evaluation.as_of)), 0) AS frozen,
+			COALESCE(SUM(h.amount) FILTER (
+				WHERE h.hold_type = 'IN_TRANSIT'
+				  AND h.created_at <= evaluation.as_of
+				  AND h.effective_at <= evaluation.as_of
+				  AND (h.ended_at IS NULL OR h.ended_at > evaluation.as_of)
+				  AND (h.expires_at IS NULL OR h.expires_at > evaluation.as_of)), 0) AS in_transit,
+			COALESCE(SUM(h.amount) FILTER (
+				WHERE h.hold_type = 'RESERVED'
+				  AND h.created_at <= evaluation.as_of
+				  AND h.effective_at <= evaluation.as_of
+				  AND (h.ended_at IS NULL OR h.ended_at > evaluation.as_of)
+				  AND (h.expires_at IS NULL OR h.expires_at > evaluation.as_of)), 0) AS reserved,
+			COUNT(*) FILTER (
+				WHERE h.created_at <= evaluation.as_of
+				  AND ((h.currency = 'JPY' AND h.amount <> trunc(h.amount))
+					OR (h.currency <> 'JPY' AND h.amount <> round(h.amount, 2)))) AS precision_error_count
+		FROM liquidity_holds h
+		CROSS JOIN evaluation
+		WHERE h.account_id = ?
+		  AND h.created_at <= evaluation.as_of
+		""";
 
 	private static final String EXPIRE_SQL = """
 		UPDATE liquidity_holds
@@ -127,6 +159,32 @@ public class PostgresLiquidityHoldStore implements LiquidityHoldStore {
 	@Override
 	public Optional<LiquidityHold> lockByAccountAndId(UUID accountId, UUID holdId) {
 		return find(SELECT_LOCK_BY_ACCOUNT_AND_ID, accountId, holdId);
+	}
+
+	@Override
+	public LiquidityHoldBalanceReadPort.EffectiveHoldAmounts sumEffectiveAt(UUID accountId, Instant asOf) {
+		if (accountId == null || asOf == null) {
+			throw new LiquidityHoldException.Persistence(new IllegalArgumentException("余额流动性占用查询参数无效。"));
+		}
+		try {
+			Record record = dsl.resultQuery(SUM_EFFECTIVE_SQL, utc(asOf), accountId).fetchOne();
+			if (record == null) {
+				throw new LiquidityHoldException.Persistence(new IllegalStateException("余额流动性占用聚合读取失败。"));
+			}
+			Long currencyCount = record.get("currency_count", Long.class);
+			return new LiquidityHoldBalanceReadPort.EffectiveHoldAmounts(
+				currencyCount == null ? -1 : Math.toIntExact(currencyCount),
+				record.get("currency", String.class),
+				record.get("frozen", java.math.BigDecimal.class),
+				record.get("in_transit", java.math.BigDecimal.class),
+				record.get("reserved", java.math.BigDecimal.class),
+				record.get("precision_error_count", Long.class) == null
+					? -1 : Math.toIntExact(record.get("precision_error_count", Long.class)));
+		} catch (LiquidityHoldException.Persistence exception) {
+			throw exception;
+		} catch (RuntimeException exception) {
+			throw new LiquidityHoldException.Persistence(exception);
+		}
 	}
 
 	@Override

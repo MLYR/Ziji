@@ -1,6 +1,9 @@
 package app.ziji.ledger.infrastructure;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -19,6 +22,33 @@ import org.springframework.stereotype.Repository;
 public class PostgresLedgerAccountStore implements LedgerAccountStore {
 
 	private final JdbcTemplate jdbc;
+
+	private static final String BALANCE_AT_SQL = """
+		WITH evaluation AS (SELECT CAST(? AS timestamptz) AS as_of)
+		SELECT la.currency, la.account_nature,
+			COALESCE(SUM(
+				CASE
+					WHEN t.posted_at IS NULL OR t.posted_at > evaluation.as_of THEN 0
+					WHEN t.business_date > CAST(evaluation.as_of AT TIME ZONE t.timezone AS date) THEN 0
+					WHEN e.direction = 'D' AND la.account_nature <> 'LIABILITY' THEN e.amount
+					WHEN e.direction = 'C' AND la.account_nature = 'LIABILITY' THEN e.amount
+					WHEN e.direction = 'C' AND la.account_nature <> 'LIABILITY' THEN -e.amount
+					WHEN e.direction = 'D' AND la.account_nature = 'LIABILITY' THEN -e.amount
+					ELSE 0
+				END), 0) AS balance,
+			COUNT(*) FILTER (
+				WHERE t.posted_at IS NOT NULL AND t.posted_at <= evaluation.as_of AND e.currency <> la.currency) AS currency_mismatch_count,
+			COUNT(*) FILTER (
+				WHERE t.posted_at IS NOT NULL AND t.posted_at <= evaluation.as_of AND (
+					(la.currency = 'JPY' AND e.amount <> trunc(e.amount))
+					OR (la.currency <> 'JPY' AND e.amount <> round(e.amount, 2)))) AS precision_error_count
+		FROM ledger_accounts la
+		CROSS JOIN evaluation
+		LEFT JOIN ledger_entries e ON e.ledger_account_id = la.id
+		LEFT JOIN transactions t ON t.id = e.transaction_id
+		WHERE la.id = ?
+		GROUP BY la.currency, la.account_nature
+		""";
 
 	public PostgresLedgerAccountStore(JdbcTemplate jdbc) {
 		this.jdbc = jdbc;
@@ -191,6 +221,28 @@ public class PostgresLedgerAccountStore implements LedgerAccountStore {
 		}
 	}
 
+	@Override
+	public Money balanceAt(UUID ledgerAccountId, Instant asOf) {
+		if (ledgerAccountId == null || asOf == null) {
+			throw new LedgerPersistenceException(new IllegalArgumentException("指定时点余额查询参数无效。"));
+		}
+		try {
+			return jdbc.query(BALANCE_AT_SQL, result -> {
+				if (!result.next()) {
+					throw new LedgerPersistenceException(new IllegalStateException("账务科目不存在。"));
+				}
+				if (result.getLong("currency_mismatch_count") != 0
+					|| result.getLong("precision_error_count") != 0) {
+					throw new LedgerPersistenceException(new IllegalStateException("账务分录事实不一致。"));
+				}
+				CurrencyCode currency = CurrencyCode.fromCode(result.getString("currency"));
+				return new Money(result.getBigDecimal("balance"), currency);
+			}, utc(asOf), ledgerAccountId);
+		} catch (RuntimeException exception) {
+			throw persistence(exception);
+		}
+	}
+
 	private static LedgerAccountReference toReference(java.sql.ResultSet result)
 		throws java.sql.SQLException {
 		return new LedgerAccountReference(
@@ -209,5 +261,12 @@ public class PostgresLedgerAccountStore implements LedgerAccountStore {
 			return persistence;
 		}
 		return new LedgerPersistenceException(exception);
+	}
+
+	private static OffsetDateTime utc(Instant value) {
+		if (value == null) {
+			throw new LedgerPersistenceException(new IllegalArgumentException("账务时间不能为空。"));
+		}
+		return value.atOffset(ZoneOffset.UTC);
 	}
 }

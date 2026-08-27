@@ -1,5 +1,6 @@
 package app.ziji.ledger.application;
 
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -31,4 +32,9 @@ public interface LedgerAccountStore {
 	}
 
 	Money currentBalance(UUID ledgerAccountId);
+
+	/** 按交易固化 business_date 读取指定时点余额；只读实现不得锁行或写入余额投影。 */
+	default Money balanceAt(UUID ledgerAccountId, Instant asOf) {
+		throw new LedgerPersistenceException(new UnsupportedOperationException("指定时点余额读取未实现。"));
+	}
 }

@@ -5,6 +5,7 @@ import java.util.Map;
 
 import app.ziji.account.application.AccountNotVisibleException;
 import app.ziji.account.application.AccountArchiveException;
+import app.ziji.account.application.AccountBalanceException;
 import app.ziji.account.application.AccountPermissionDeniedException;
 import app.ziji.account.application.AccountPersistenceException;
 import app.ziji.account.application.AccountCreationException;
@@ -57,7 +58,7 @@ public final class AccountApiExceptionHandler {
 		return problem;
 	}
 
-	@ExceptionHandler(AccountPersistenceException.class)
+	@ExceptionHandler({AccountPersistenceException.class, AccountBalanceException.class})
 	ProblemDetail persistence(HttpServletRequest request, HttpServletResponse response) {
 		return base(HttpStatus.INTERNAL_SERVER_ERROR, "服务器处理请求失败", "INTERNAL_ERROR", request, response);
 	}

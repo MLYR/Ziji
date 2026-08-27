@@ -18,6 +18,8 @@ import app.ziji.account.application.AccountCreationCommand;
 import app.ziji.account.application.AccountCreationResult;
 import app.ziji.account.application.AccountCreationService;
 import app.ziji.account.application.AccountOpeningBalance;
+import app.ziji.account.application.AccountBalanceResult;
+import app.ziji.account.application.AccountBalanceUseCase;
 import app.ziji.account.application.AccountNotVisibleException;
 import app.ziji.account.application.AccountPage;
 import app.ziji.account.application.AccountQueryResult;
@@ -65,6 +67,7 @@ public class AccountController {
 	private static final Set<String> OPENING_FIELDS = Set.of("amount", "businessAt", "note");
 
 	private final AccountQueryUseCase useCase;
+	private final AccountBalanceUseCase balanceUseCase;
 	private final AccountCreationService creationService;
 	private final CurrentUserIdResolver currentUserIdResolver;
 	private final UnifiedIdempotencyService idempotency;
@@ -74,17 +77,28 @@ public class AccountController {
 	public AccountController(
 		AccountQueryUseCase useCase,
 		CurrentUserIdResolver currentUserIdResolver) {
-		this(useCase, null, currentUserIdResolver, null, null);
+		this(useCase, null, null, currentUserIdResolver, null, null);
 	}
 
-	@Autowired
 	public AccountController(
 		AccountQueryUseCase useCase,
 		AccountCreationService creationService,
 		CurrentUserIdResolver currentUserIdResolver,
 		UnifiedIdempotencyService idempotency,
 		CurrentUserTimezonePort timezones) {
+		this(useCase, null, creationService, currentUserIdResolver, idempotency, timezones);
+	}
+
+	@Autowired
+	public AccountController(
+		AccountQueryUseCase useCase,
+		AccountBalanceUseCase balanceUseCase,
+		AccountCreationService creationService,
+		CurrentUserIdResolver currentUserIdResolver,
+		UnifiedIdempotencyService idempotency,
+		CurrentUserTimezonePort timezones) {
 		this.useCase = useCase;
+		this.balanceUseCase = balanceUseCase;
 		this.creationService = creationService;
 		this.currentUserIdResolver = currentUserIdResolver;
 		this.idempotency = idempotency;
@@ -134,6 +148,19 @@ public class AccountController {
 		return ResponseEntity.ok()
 			.eTag(account.etag())
 			.body(new AccountEnvelope(view(account), new ResponseMeta(requestId(response))));
+	}
+
+	@GetMapping(path = "/{accountId}/balance", name = "getAccountBalance")
+	public ResponseEntity<AccountBalanceEnvelope> getAccountBalance(
+		@PathVariable String accountId,
+		@RequestParam(name = "asOf", required = false) String asOf,
+		Principal principal,
+		HttpServletResponse response) {
+		// 身份解析先于请求参数和业务事实读取，保持认证错误不会被余额参数覆盖。
+		UUID userId = currentUserIdResolver.resolve(principal);
+		Instant requestedAsOf = asOf == null ? null : parseBalanceAsOf(asOf);
+		AccountBalanceResult balance = balanceUseCase.getBalance(userId, parseAccountId(accountId), requestedAsOf);
+		return ResponseEntity.ok(new AccountBalanceEnvelope(balanceView(balance), new ResponseMeta(requestId(response))));
 	}
 
 	@PatchMapping(
@@ -289,6 +316,15 @@ public class AccountController {
 		try {
 			return OffsetDateTime.parse(value).toInstant();
 		} catch (DateTimeParseException exception) {
+			throw invalid();
+		}
+	}
+
+	private Instant parseBalanceAsOf(String value) {
+		try {
+			// OffsetDateTime 严格要求显式 offset 或 Z；Instant.toString() 负责输出规范化 UTC。
+			return OffsetDateTime.parse(value).toInstant();
+		} catch (RuntimeException exception) {
 			throw invalid();
 		}
 	}
@@ -455,6 +491,29 @@ public class AccountController {
 			account.version());
 	}
 
+	private AccountBalanceView balanceView(AccountBalanceResult balance) {
+		AccountCurrency currency = balance.currency();
+		AccountBalanceResult.UnavailableBreakdown breakdown = balance.unavailableBreakdown();
+		return new AccountBalanceView(
+			balance.accountId(),
+			currency.name(),
+			money(balance.ledgerBalance(), currency),
+			money(balance.unavailableAmount(), currency),
+			new UnavailableBreakdownView(
+				money(breakdown.frozen(), currency),
+				money(breakdown.inTransit(), currency),
+				money(breakdown.reserved(), currency)),
+			money(balance.availableBalance(), currency),
+			balance.liquidityStatus().name(),
+			balance.asOf().toString(),
+			balance.asOfSequence());
+	}
+
+	private String money(BigDecimal value, AccountCurrency currency) {
+		int scale = currency == AccountCurrency.JPY ? 0 : 2;
+		return value.setScale(scale, java.math.RoundingMode.UNNECESSARY).toPlainString();
+	}
+
 	private String ratio(BigDecimal value) {
 		return value.setScale(6).toPlainString();
 	}
@@ -477,6 +536,9 @@ public class AccountController {
 	public record AccountEnvelope(AccountView data, ResponseMeta meta) {
 	}
 
+	public record AccountBalanceEnvelope(AccountBalanceView data, ResponseMeta meta) {
+	}
+
 	public record AccountCreatedEnvelope(AccountCreatedData data, ResponseMeta meta) {
 	}
 
@@ -494,6 +556,24 @@ public class AccountController {
 		String currentUserRole,
 		String inclusionRatio,
 		int version) {
+	}
+
+	public record AccountBalanceView(
+		UUID accountId,
+		String currency,
+		String ledgerBalance,
+		String unavailableAmount,
+		UnavailableBreakdownView unavailableBreakdown,
+		String availableBalance,
+		String liquidityStatus,
+		String asOf,
+		int asOfSequence) {
+	}
+
+	public record UnavailableBreakdownView(
+		String frozen,
+		String inTransit,
+		String reserved) {
 	}
 
 	public record PageMeta(String requestId, String nextCursor, boolean hasMore) {

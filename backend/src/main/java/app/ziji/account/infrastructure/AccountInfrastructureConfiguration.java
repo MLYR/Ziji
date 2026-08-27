@@ -8,6 +8,9 @@ import java.util.UUID;
 import app.ziji.account.application.AccountCursorCodec;
 import app.ziji.account.application.AccountArchiveService;
 import app.ziji.account.application.AccountArchiveStore;
+import app.ziji.account.application.AccountBalanceFactReadPort;
+import app.ziji.account.application.AccountBalanceService;
+import app.ziji.account.application.AccountBalanceSnapshotTransaction;
 import app.ziji.account.application.AccountBalanceReadPort;
 import app.ziji.account.application.AccountLedgerInitializationPort;
 import app.ziji.account.application.AccountCreationService;
@@ -16,6 +19,7 @@ import app.ziji.account.application.AccountQueryService;
 import app.ziji.account.application.AccountStore;
 import app.ziji.account.application.AccountUpdatePort;
 import app.ziji.account.application.LiquidityHoldCursorCodec;
+import app.ziji.account.application.LiquidityHoldBalanceReadPort;
 import app.ziji.account.application.LiquidityHoldService;
 import app.ziji.account.application.LiquidityHoldStore;
 import app.ziji.accountmember.application.AccountMemberInitPort;
@@ -51,6 +55,18 @@ class AccountInfrastructureConfiguration {
 		Clock clock) {
 		// 查询/更新应用服务保持纯 Java，依赖只注入公开端口。
 		return new AccountQueryService(accounts, updates, memberships, cursors, transactions, clock);
+	}
+
+	@Bean
+	AccountBalanceService accountBalanceService(
+		AccountQueryReadPort accounts,
+		AccountMembershipReadPort memberships,
+		AccountBalanceFactReadPort ledgerBalances,
+		LiquidityHoldBalanceReadPort holdBalances,
+		AccountBalanceSnapshotTransaction snapshots,
+		Clock clock) {
+		// 账户、Ledger 和 LiquidityHold 的事实读取统一由独立快照事务包住，不触碰任何投影写入。
+		return new AccountBalanceService(accounts, memberships, ledgerBalances, holdBalances, snapshots, clock);
 	}
 
 	@Bean
