@@ -696,6 +696,19 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 		mvc.perform(get("/api/v1/transactions").header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
 				.param("dateFrom", "2026-08-17").param("dateTo", "2026-08-16"))
 			.andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+		// T-LED-001：公共 POST /transactions 不接受 OPENING，期初只能由 POST /accounts 同事务创建。
+		String opening = """
+			{"type":"OPENING","businessAt":"2026-08-17T01:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"10.00","currency":"CNY"}
+			""".formatted(account.id());
+		mvc.perform(post("/api/v1/transactions").header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+				.header("Idempotency-Key", "public-opening-rejected-key")
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(opening))
+			.andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+		assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM idempotency_records WHERE idempotency_key = ?",
+			Integer.class, "public-opening-rejected-key"));
+		assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM transactions WHERE created_by = ?",
+			Integer.class, owner.id()));
 		mvc.perform(get("/api/v1/transactions").header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
 				.param("limit", "201")).andExpect(status().isBadRequest());
 		mvc.perform(get("/api/v1/transactions").header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
