@@ -193,6 +193,11 @@ jobs:
           abort 'PR head 改写了 trusted Workflow security gate' unless security_head == security_base
           puts 'Workflow security gate matches trusted base.'
 
+          # 字面表达式用于受信 contract 比较，拆开避免 Actions 在解析 workflow 时抢先求值。
+          def github_expression(body)
+            '$' + "{{ #{body} }}"
+          end
+
           def changes_job(workflow, label)
             jobs = workflow.fetch('jobs') { abort "#{label} 缺少 jobs" }
             job = jobs.fetch('changes') { abort "#{label} 缺少 changes job" }
@@ -200,13 +205,13 @@ jobs:
             abort "#{label} changes job runner 不匹配" unless job['runs-on'] == 'ubuntu-latest'
 
             required_outputs = {
-              'backend' => '${{ steps.detect.outputs.backend }}',
-              'backend_deep' => '${{ steps.detect.outputs.backend_deep }}',
-              'web' => '${{ steps.detect.outputs.web }}',
-              'mobile' => '${{ steps.detect.outputs.mobile }}',
-              'api' => '${{ steps.detect.outputs.api }}',
-              'migration' => '${{ steps.detect.outputs.migration }}',
-              'security_deep' => '${{ steps.detect.outputs.security_deep }}'
+              'backend' => github_expression('steps.detect.outputs.backend'),
+              'backend_deep' => github_expression('steps.detect.outputs.backend_deep'),
+              'web' => github_expression('steps.detect.outputs.web'),
+              'mobile' => github_expression('steps.detect.outputs.mobile'),
+              'api' => github_expression('steps.detect.outputs.api'),
+              'migration' => github_expression('steps.detect.outputs.migration'),
+              'security_deep' => github_expression('steps.detect.outputs.security_deep')
             }
             outputs = job.fetch('outputs') { abort "#{label} changes job 缺少 outputs" }
             required_outputs.each do |name, expression|
@@ -220,9 +225,9 @@ jobs:
             abort "#{label} changes job 未直接调用受信 detector" unless detect_step['run'] == 'node scripts/detect-change-risk.mjs'
 
             required_env = {
-              'GITHUB_BASE_SHA' => '${{ github.event.pull_request.base.sha }}',
-              'GITHUB_EVENT_NAME' => '${{ github.event_name }}',
-              'GITHUB_SHA' => '${{ github.event.pull_request.head.sha || github.sha }}'
+              'GITHUB_BASE_SHA' => github_expression('github.event.pull_request.base.sha'),
+              'GITHUB_EVENT_NAME' => github_expression('github.event_name'),
+              'GITHUB_SHA' => github_expression('github.event.pull_request.head.sha || github.sha')
             }
             env = detect_step.fetch('env') { abort "#{label} detect step 缺少 env" }
             required_env.each do |name, expression|
@@ -236,7 +241,7 @@ jobs:
             job = jobs.fetch('backend') { abort "#{label} 缺少 backend job" }
             abort "#{label} backend job name 不匹配" unless job['name'] == 'Backend checks'
             abort "#{label} backend job 必须依赖 changes" unless job['needs'] == 'changes'
-            abort "#{label} backend job 必须在 changes 失败后执行输出校验" unless job['if'] == '${{ always() }}'
+            abort "#{label} backend job 必须在 changes 失败后执行输出校验" unless job['if'] == github_expression('always()')
 
             steps = job.fetch('steps') { abort "#{label} backend job 缺少 steps" }
             validation_step = steps.find { |step| step.is_a?(Hash) && step['name'] == 'Validate backend change-risk outputs' }
@@ -246,7 +251,7 @@ jobs:
             abort "#{label} 缺少 backend change-risk fail-closed 校验" unless validation_step
             validation_env = validation_step.fetch('env') { abort "#{label} backend change-risk 校验缺少 changes 结果输入" }
             validation_run = validation_step.fetch('run')
-            abort "#{label} backend change-risk 校验未读取 needs.changes.result" unless validation_env['CHANGES_RESULT'] == '${{ needs.changes.result }}'
+            abort "#{label} backend change-risk 校验未读取 needs.changes.result" unless validation_env['CHANGES_RESULT'] == github_expression('needs.changes.result')
             abort "#{label} backend change-risk 校验未限制为 true/false" unless validation_run.include?('true|false')
             abort "#{label} backend change-risk 校验未阻断 changes 失败" unless validation_run.include?("!= 'success'")
             abort "#{label} 缺少 backend not applicable step" unless not_applicable_step
@@ -264,7 +269,7 @@ jobs:
             jobs = workflow.fetch('jobs') { abort "#{label} 缺少 jobs" }
             job = jobs.fetch('security') { abort "#{label} 缺少 security job" }
             abort "#{label} security job name 不匹配" unless job['name'] == 'Security supply-chain gate'
-            abort "#{label} security job 必须在 changes 失败后执行输出校验" unless job['if'] == '${{ always() }}'
+            abort "#{label} security job 必须在 changes 失败后执行输出校验" unless job['if'] == github_expression('always()')
             job
           end
 
@@ -306,7 +311,7 @@ jobs:
             validation_step = steps[validation_index]
             validation_env = validation_step.fetch('env') { abort "#{label} security change-risk 校验缺少 changes 结果输入" }
             validation_run = validation_step.fetch('run')
-            abort "#{label} security change-risk 校验未读取 needs.changes.result" unless validation_env['CHANGES_RESULT'] == '${{ needs.changes.result }}'
+            abort "#{label} security change-risk 校验未读取 needs.changes.result" unless validation_env['CHANGES_RESULT'] == github_expression('needs.changes.result')
             abort "#{label} security change-risk 校验未限制为 true/false" unless validation_run.include?('true|false')
             abort "#{label} security change-risk 校验未阻断 changes 失败" unless validation_run.include?("!= 'success'")
 
