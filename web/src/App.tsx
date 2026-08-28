@@ -9,6 +9,8 @@ import { AccountsPage } from '@/accounts/AccountsPage'
 import { CreateAccountPage } from '@/accounts/CreateAccountPage'
 import { DashboardPage } from '@/dashboard/DashboardPage'
 import { RecordTransactionPage } from '@/ledger/RecordTransactionPage'
+import { TransactionDetailPage } from '@/ledger/TransactionDetailPage'
+import { TransactionsPage } from '@/ledger/TransactionsPage'
 import { CurrentSessionSignOutButton, DeviceSessionsSheet } from '@/auth/DeviceSessionsSheet'
 import { retryWebSessionInitialization, useWebAuth } from '@/auth/auth-session'
 import { useWebSessionInitialization } from '@/auth/use-web-session-initialization'
@@ -137,8 +139,9 @@ function App() {
           <Route path="/accounts" element={<AccountsPage />} />
           <Route path="/accounts/new" element={<CreateAccountPage />} />
           <Route path="/accounts/:accountId" element={<AccountDetailPage />} />
-          <Route path="/transactions" element={<PlaceholderPage title="流水" />} />
+          <Route path="/transactions" element={<TransactionsPage />} />
           <Route path="/transactions/new" element={<RecordTransactionPage />} />
+          <Route path="/transactions/:transactionId" element={<TransactionDetailPage />} />
           <Route path="/investments" element={<PlaceholderPage title="投资" />} />
         </Route>
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

@@ -28,6 +28,8 @@ export async function listAccounts(): Promise<AccountPage> {
 }
 
 export type PostTransactionBody = components['schemas']['PostTransactionRequest']
+export type Transaction = components['schemas']['Transaction']
+export type TransactionType = Transaction['type']
 
 export interface BalanceAdjustmentBody {
   actualBalance: string
@@ -63,4 +65,83 @@ export async function createBalanceAdjustment(
     },
   )
   return createdEnvelope(response)
+}
+
+export interface TransactionPage {
+  transactions: Transaction[]
+  nextCursor: string | null
+  hasMore: boolean
+}
+
+export interface TransactionFilters {
+  accountId?: string
+  categoryId?: string
+  type?: TransactionType
+  dateFrom?: string
+  dateTo?: string
+  limit?: number
+  cursor?: string
+}
+
+export async function listTransactions(filters: TransactionFilters): Promise<TransactionPage> {
+  const query = new URLSearchParams()
+  if (filters.accountId) query.set('accountId', filters.accountId)
+  if (filters.categoryId) query.set('categoryId', filters.categoryId)
+  if (filters.type) query.set('type', filters.type)
+  if (filters.dateFrom) query.set('dateFrom', filters.dateFrom)
+  if (filters.dateTo) query.set('dateTo', filters.dateTo)
+  query.set('limit', String(filters.limit ?? 50))
+  if (filters.cursor) query.set('cursor', filters.cursor)
+
+  const response = await apiRequest<{ data: Transaction[]; meta: { requestId: string; nextCursor: string | null; hasMore: boolean } }>(
+    `/api/v1/transactions?${query.toString()}`,
+  )
+  return {
+    transactions: response.data,
+    nextCursor: response.meta.nextCursor,
+    hasMore: response.meta.hasMore,
+  }
+}
+
+export async function fetchTransaction(transactionId: string): Promise<Transaction> {
+  const response = await apiRequest<{ data: Transaction }>(`/api/v1/transactions/${transactionId}`)
+  return response.data
+}
+
+/** 详情资源的强 ETag 固定由契约版本号派生。 */
+export function transactionEtag(version: number): string {
+  return `"${version}"`
+}
+
+export interface ReviseTransactionBody {
+  reason: string
+  replacement: PostTransactionBody
+}
+
+export async function reviseTransaction(
+  transactionId: string,
+  etag: string,
+  idempotencyKey: string,
+  body: ReviseTransactionBody,
+): Promise<Transaction> {
+  const response = await apiRequest<{ data: Transaction }>(`/api/v1/transactions/${transactionId}/revisions`, {
+    method: 'POST',
+    headers: { 'If-Match': etag, 'Idempotency-Key': idempotencyKey },
+    body,
+  })
+  return response.data
+}
+
+export async function reverseTransaction(
+  transactionId: string,
+  etag: string,
+  idempotencyKey: string,
+  body: { reason: string },
+): Promise<Transaction> {
+  const response = await apiRequest<{ data: Transaction }>(`/api/v1/transactions/${transactionId}/reversal`, {
+    method: 'POST',
+    headers: { 'If-Match': etag, 'Idempotency-Key': idempotencyKey },
+    body,
+  })
+  return response.data
 }
