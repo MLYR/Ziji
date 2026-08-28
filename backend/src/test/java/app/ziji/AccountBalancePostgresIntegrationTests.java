@@ -18,6 +18,8 @@ import app.ziji.account.application.AccountBalanceSnapshotTransaction;
 import app.ziji.account.application.AccountBalanceUseCase;
 import app.ziji.account.application.AccountNotVisibleException;
 import app.ziji.account.domain.AccountCurrency;
+import app.ziji.ledger.application.BalanceProjectionRebuildResult;
+import app.ziji.ledger.application.BalanceProjectionService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -60,6 +62,9 @@ class AccountBalancePostgresIntegrationTests extends PostgresIntegrationTestSupp
 	@Autowired
 	private org.springframework.transaction.support.TransactionTemplate transactionTemplate;
 
+	@Autowired
+	private BalanceProjectionService projections;
+
 	@Test
 	void readsBackdatedPostedLedgerAndOnlyEffectiveHoldsAtOneAsOf() {
 		UserFixture owner = insertUser("balance-facts-owner");
@@ -94,6 +99,131 @@ class AccountBalancePostgresIntegrationTests extends PostgresIntegrationTestSupp
 		assertEquals(new BigDecimal("0.00"), result.unavailableBreakdown().reserved());
 		assertEquals(new BigDecimal("120.00"), result.availableBalance());
 		assertEquals(AccountBalanceResult.LiquidityStatus.NORMAL, result.liquidityStatus());
+	}
+
+	@Test
+	void postgresReturnsNegativeAvailableBalanceWithoutClamping() {
+		UserFixture owner = insertUser("balance-negative-available-owner");
+		AccountFixture account = seedAccount(owner, "CNY", true);
+		seedPostedTransaction(account, "ADJUSTMENT", "POSTED", LocalDate.of(2026, 8, 15), "UTC",
+			Instant.parse("2026-08-15T01:00:00Z"), new BigDecimal("10.00"), true,
+			null, null, null, 1);
+		seedHold(account, "FROZEN", new BigDecimal("6.00"),
+			Instant.parse("2026-08-15T02:00:00Z"), null, null, null, null);
+		seedHold(account, "IN_TRANSIT", new BigDecimal("3.00"),
+			Instant.parse("2026-08-15T03:00:00Z"), null, null, null, null);
+		seedHold(account, "RESERVED", new BigDecimal("4.00"),
+			Instant.parse("2026-08-15T04:00:00Z"), null, null, null, null);
+
+		AccountBalanceResult result = balanceUseCase.getBalance(owner.userId(), account.accountId(), AS_OF);
+
+		assertEquals(account.accountId(), result.accountId());
+		assertEquals(AccountCurrency.CNY, result.currency());
+		assertMoney(new BigDecimal("10.00"), result.ledgerBalance());
+		assertMoney(new BigDecimal("6.00"), result.unavailableBreakdown().frozen());
+		assertMoney(new BigDecimal("3.00"), result.unavailableBreakdown().inTransit());
+		assertMoney(new BigDecimal("4.00"), result.unavailableBreakdown().reserved());
+		assertMoney(new BigDecimal("13.00"), result.unavailableAmount());
+		assertEquals(0, result.unavailableBreakdown().total().compareTo(result.unavailableAmount()));
+		assertMoney(new BigDecimal("-3.00"), result.availableBalance());
+		assertEquals(AccountBalanceResult.LiquidityStatus.NEGATIVE_AVAILABLE, result.liquidityStatus());
+		assertEquals(AS_OF, result.asOf());
+		assertEquals(0, result.asOfSequence());
+	}
+
+	@Test
+	void directBalanceIgnoresStaleOrMissingProjectionsAndMatchesLedgerRebuild() {
+		UserFixture owner = insertUser("balance-projection-consistency-owner");
+		AccountFixture account = seedAccount(owner, "CNY", true);
+		seedPostedTransaction(account, "ADJUSTMENT", "POSTED", LocalDate.of(2026, 8, 15), "UTC",
+			Instant.parse("2026-08-15T01:00:00Z"), new BigDecimal("100.00"), true,
+			null, null, null, 1);
+		seedHold(account, "FROZEN", new BigDecimal("6.00"),
+			Instant.parse("2026-08-15T02:00:00Z"), null, null, null, null);
+		seedHold(account, "IN_TRANSIT", new BigDecimal("3.00"),
+			Instant.parse("2026-08-15T03:00:00Z"), null, null, null, null);
+		seedHold(account, "RESERVED", new BigDecimal("4.00"),
+			Instant.parse("2026-08-15T04:00:00Z"), null, null, null, null);
+		long changeLogSequence = jdbc.queryForObject("""
+			INSERT INTO change_log (
+				entity_type, entity_id, entity_version, change_type,
+				recipient_user_id, account_id, changed_at, payload_version, payload)
+			VALUES ('TRANSACTION', ?, 1, 'UPSERT', ?, ?, CAST(? AS timestamptz), 1, CAST(? AS jsonb))
+			RETURNING sequence
+			""", Long.class, UUID.randomUUID(), owner.userId(), account.accountId(), ts(AS_OF), "{}");
+		assertTrue(changeLogSequence > 0);
+		assertTrue(jdbc.queryForObject("SELECT MAX(sequence) FROM change_log", Long.class) > 0);
+
+		AccountBalanceResult directBefore = balanceUseCase.getBalance(owner.userId(), account.accountId(), AS_OF);
+		assertEquals(account.accountId(), directBefore.accountId());
+		assertEquals(AccountCurrency.CNY, directBefore.currency());
+		assertMoney(new BigDecimal("100.00"), directBefore.ledgerBalance());
+		assertMoney(new BigDecimal("6.00"), directBefore.unavailableBreakdown().frozen());
+		assertMoney(new BigDecimal("3.00"), directBefore.unavailableBreakdown().inTransit());
+		assertMoney(new BigDecimal("4.00"), directBefore.unavailableBreakdown().reserved());
+		assertMoney(new BigDecimal("13.00"), directBefore.unavailableAmount());
+		assertMoney(new BigDecimal("87.00"), directBefore.availableBalance());
+		assertEquals(AccountBalanceResult.LiquidityStatus.NORMAL, directBefore.liquidityStatus());
+		assertEquals(AS_OF, directBefore.asOf());
+		assertEquals(0, directBefore.asOfSequence());
+
+		Map<String, Long> factCountsBefore = factCounts();
+		Map<String, List<Map<String, Object>>> factsBefore = factSnapshots(account);
+		// 投影是可删除的缓存；先清空旧缓存，再写入满足数据库约束但数值错误的值，验证精确余额仍以事实为准。
+		jdbc.update("DELETE FROM account_balance_snapshots");
+		jdbc.update("DELETE FROM account_liquidity_snapshots");
+		jdbc.update("""
+			INSERT INTO account_balance_snapshots
+				(ledger_account_id, business_date, balance, currency, as_of_change_sequence, calculated_at)
+			VALUES (?, ?, ?, 'CNY', 123, ?)
+			""", account.primaryLedgerId(), LocalDate.of(2026, 8, 15), new BigDecimal("999.00"), ts(AS_OF));
+		jdbc.update("""
+			INSERT INTO account_liquidity_snapshots
+				(account_id, business_date, ledger_balance, unavailable_amount, available_balance,
+				 currency, as_of_change_sequence, calculated_at)
+			VALUES (?, ?, ?, ?, ?, 'CNY', 456, ?)
+			""", account.accountId(), LocalDate.of(2026, 8, 15), new BigDecimal("999.00"),
+			new BigDecimal("1.00"), new BigDecimal("998.00"), ts(AS_OF));
+		assertBalanceEquals(directBefore,
+			balanceUseCase.getBalance(owner.userId(), account.accountId(), AS_OF));
+
+		BalanceProjectionRebuildResult staleRebuild = projections.rebuildAll();
+		assertTrue(staleRebuild.previousDifferenceCount() > 0);
+		assertEquals(0, staleRebuild.differenceCount());
+		assertBalanceEquals(directBefore,
+			balanceUseCase.getBalance(owner.userId(), account.accountId(), AS_OF));
+		assertEquals(factCountsBefore, factCounts());
+		assertEquals(factsBefore, factSnapshots(account));
+
+		// 删除投影不能删除 Transaction、LedgerEntry、LiquidityHold，也不能让直接读取退化为零或丢失占用。
+		jdbc.update("DELETE FROM account_balance_snapshots");
+		jdbc.update("DELETE FROM account_liquidity_snapshots");
+		assertBalanceEquals(directBefore,
+			balanceUseCase.getBalance(owner.userId(), account.accountId(), AS_OF));
+		assertEquals(factCountsBefore, factCounts());
+		assertEquals(factsBefore, factSnapshots(account));
+
+		BalanceProjectionRebuildResult rebuilt = projections.rebuildAll();
+
+		assertEquals(rebuilt.snapshotCount(), rebuilt.previousDifferenceCount());
+		assertTrue(rebuilt.snapshotCount() > 0);
+		assertTrue(rebuilt.previousDifferenceCount() > 0);
+		assertEquals(0, rebuilt.differenceCount());
+		Map<String, Object> primarySnapshot = jdbc.queryForMap("""
+			SELECT balance, currency, as_of_change_sequence
+			FROM account_balance_snapshots
+			WHERE ledger_account_id = ? AND business_date = ?
+			""", account.primaryLedgerId(), LocalDate.of(2026, 8, 15));
+		assertMoney(directBefore.ledgerBalance(), (BigDecimal) primarySnapshot.get("balance"));
+		assertEquals("CNY", String.valueOf(primarySnapshot.get("currency")).trim());
+		// 当前没有全局余额事实 sequence；projection 与余额 API 都只能使用 0，不能借用 change_log.sequence。
+		assertEquals(0L, ((Number) primarySnapshot.get("as_of_change_sequence")).longValue());
+		assertEquals(0, directBefore.asOfSequence());
+
+		assertBalanceEquals(directBefore,
+			balanceUseCase.getBalance(owner.userId(), account.accountId(), AS_OF));
+		assertEquals(factCountsBefore, factCounts());
+		assertEquals(factsBefore, factSnapshots(account));
 	}
 
 	@Test
@@ -296,6 +426,84 @@ class AccountBalancePostgresIntegrationTests extends PostgresIntegrationTestSupp
 			counts.put(table, jdbc.queryForObject("SELECT count(*) FROM " + table, Long.class));
 		}
 		return counts;
+	}
+
+	private Map<String, Long> factCounts() {
+		Map<String, Long> counts = new LinkedHashMap<>();
+		for (String table : List.of(
+			"accounts", "ledger_accounts", "transactions", "ledger_entries", "liquidity_holds",
+			"audit_logs", "outbox_events", "idempotency_records", "change_log")) {
+			counts.put(table, jdbc.queryForObject("SELECT count(*) FROM " + table, Long.class));
+		}
+		return counts;
+	}
+
+	private Map<String, List<Map<String, Object>>> factSnapshots(AccountFixture account) {
+		Map<String, List<Map<String, Object>>> facts = new LinkedHashMap<>();
+		// 对账验收不能只比较总行数；保存本 fixture 的关键列，才能证明重建没有改写账务事实。
+		facts.put("accounts", jdbc.queryForList("""
+			SELECT id, account_class, account_type, name, institution, currency, note, status,
+				archived_at, created_by, created_at, updated_at, version
+			FROM accounts
+			WHERE id = ?
+			""", account.accountId()));
+		facts.put("ledger_accounts", jdbc.queryForList("""
+			SELECT id, visible_account_id, owner_user_id, code, ledger_role, account_nature,
+				currency, status, created_at
+			FROM ledger_accounts
+			WHERE id IN (?, ?)
+			ORDER BY id
+			""", account.primaryLedgerId(), account.systemLedgerId()));
+		facts.put("transactions", jdbc.queryForList("""
+			SELECT t.id, t.transaction_type, t.status, t.business_date, t.timezone,
+				t.root_transaction_id, t.previous_version_id, t.reversal_of_id, t.version_no,
+				t.posted_at, t.created_by, t.updated_by, t.created_at, t.updated_at, t.entity_version
+			FROM transactions t
+			WHERE t.id IN (
+				SELECT e.transaction_id
+				FROM ledger_entries e
+				WHERE e.ledger_account_id = ?
+			)
+			ORDER BY t.id
+			""", account.primaryLedgerId()));
+		facts.put("ledger_entries", jdbc.queryForList("""
+			SELECT e.id, e.transaction_id, e.ledger_account_id, e.sequence_no, e.direction,
+				e.amount, e.currency, e.business_date, e.created_at
+			FROM ledger_entries e
+			WHERE e.transaction_id IN (
+				SELECT related.transaction_id
+				FROM ledger_entries related
+				WHERE related.ledger_account_id = ?
+			)
+			ORDER BY e.transaction_id, e.sequence_no
+			""", account.primaryLedgerId()));
+		facts.put("liquidity_holds", jdbc.queryForList("""
+			SELECT id, account_id, hold_type, amount, currency, effective_at, expires_at, released_at,
+				source, note, root_hold_id, previous_revision_id, revision_no, ended_at, end_reason,
+				created_by, created_at, updated_at, version
+			FROM liquidity_holds
+			WHERE account_id = ?
+			ORDER BY root_hold_id, revision_no
+			""", account.accountId()));
+		return facts;
+	}
+
+	private void assertBalanceEquals(AccountBalanceResult expected, AccountBalanceResult actual) {
+		assertEquals(expected.accountId(), actual.accountId());
+		assertEquals(expected.currency(), actual.currency());
+		assertMoney(expected.ledgerBalance(), actual.ledgerBalance());
+		assertMoney(expected.unavailableAmount(), actual.unavailableAmount());
+		assertMoney(expected.unavailableBreakdown().frozen(), actual.unavailableBreakdown().frozen());
+		assertMoney(expected.unavailableBreakdown().inTransit(), actual.unavailableBreakdown().inTransit());
+		assertMoney(expected.unavailableBreakdown().reserved(), actual.unavailableBreakdown().reserved());
+		assertMoney(expected.availableBalance(), actual.availableBalance());
+		assertEquals(expected.liquidityStatus(), actual.liquidityStatus());
+		assertEquals(expected.asOf(), actual.asOf());
+		assertEquals(expected.asOfSequence(), actual.asOfSequence());
+	}
+
+	private void assertMoney(BigDecimal expected, BigDecimal actual) {
+		assertEquals(0, expected.compareTo(actual));
 	}
 
 	private int countHolds(UUID accountId) {
