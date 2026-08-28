@@ -131,8 +131,10 @@ public final class SyncOutboxConsumer {
 		}
 		LedgerTransactionSyncReadPort.Snapshot reversal = requireSnapshot(reversalId);
 		LedgerTransactionSyncReadPort.Snapshot original = requireSnapshot(originalId);
+		// 冲正交易按领域规则以自身为 root（LedgerTransactionFactory.createReversal），
+		// payload 的 rootTransactionId 只约束原交易与替换交易的版本链，不得用于校验冲正自身。
 		if (!event.aggregateId().equals(reversalId) || !reversal.transactionId().equals(reversalId)
-			|| !reversal.rootTransactionId().equals(rootTransactionId) || reversal.entityVersion() != reversalEntityVersion
+			|| !reversal.rootTransactionId().equals(reversalId) || reversal.entityVersion() != reversalEntityVersion
 			|| !"POSTED".equals(reversal.status()) || !originalId.equals(reversal.reversalOfId())
 			|| !original.rootTransactionId().equals(rootTransactionId) || original.versionNo() != originalVersionNo
 			|| original.entityVersion() != originalEntityVersionAfter) {

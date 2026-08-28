@@ -172,6 +172,45 @@ class SyncOutboxConsumerTests {
 	}
 
 	@Test
+	void reversedEventsFailClosedWhenReversalSnapshotViolatesDomainRelations() {
+		UUID rootId = UUID.randomUUID();
+		UUID originalId = UUID.randomUUID();
+		UUID reversalId = UUID.randomUUID();
+		Map<String, Object> payload = new HashMap<>();
+		payload.put("schemaVersion", 1);
+		payload.put("transactionId", reversalId.toString());
+		payload.put("rootTransactionId", rootId.toString());
+		payload.put("entityVersion", 1);
+		payload.put("reversalOfTransactionId", originalId.toString());
+		payload.put("reversalOfVersionNo", 1);
+		payload.put("reversalOfEntityVersionBefore", 1);
+		payload.put("reversalOfEntityVersionAfter", 2);
+		payload.put("operationKind", "VOID");
+
+		// 冲正交易按领域规则必须以自身为 root；root 指向版本链时快照与领域不一致，必须 final 失败。
+		LedgerTransactionSyncReadPort wrongRoot = transactionId -> Optional.of(new LedgerTransactionSyncReadPort.Snapshot(
+			reversalId, rootId, null, originalId, 1, 1, "POSTED", List.of(ACCOUNT_ID)));
+		FakeOutbox wrongRootOutbox = new FakeOutbox(new SyncOutboxEvent(
+			UUID.randomUUID(), reversalId, "Transaction", "TransactionReversed", 1, payload, OCCURRED_AT, 0));
+		FakeChangeLog wrongRootChanges = new FakeChangeLog();
+		assertTrue(new SyncOutboxConsumer(wrongRootOutbox, wrongRootChanges, wrongRoot, new FakeRecipients(),
+			new DirectTransactionRunner(), Clock.fixed(NOW, ZoneOffset.UTC)).consumeNext());
+		assertTrue(wrongRootChanges.changes.isEmpty());
+		assertEquals(List.of("OUTBOX_TARGET_MISMATCH"), wrongRootOutbox.finalFailureCodes);
+
+		// 事件聚合不是冲正交易自身时同样 final 失败。
+		LedgerTransactionSyncReadPort correctRoot = transactionId -> Optional.of(new LedgerTransactionSyncReadPort.Snapshot(
+			reversalId, reversalId, null, originalId, 1, 1, "POSTED", List.of(ACCOUNT_ID)));
+		FakeOutbox wrongAggregateOutbox = new FakeOutbox(new SyncOutboxEvent(
+			UUID.randomUUID(), originalId, "Transaction", "TransactionReversed", 1, payload, OCCURRED_AT, 0));
+		FakeChangeLog wrongAggregateChanges = new FakeChangeLog();
+		assertTrue(new SyncOutboxConsumer(wrongAggregateOutbox, wrongAggregateChanges, correctRoot, new FakeRecipients(),
+			new DirectTransactionRunner(), Clock.fixed(NOW, ZoneOffset.UTC)).consumeNext());
+		assertTrue(wrongAggregateChanges.changes.isEmpty());
+		assertEquals(List.of("OUTBOX_TARGET_MISMATCH"), wrongAggregateOutbox.finalFailureCodes);
+	}
+
+	@Test
 	void multipleAccountsUseNullChangeLogAccountId() {
 		FakeOutbox outbox = new FakeOutbox(postedEvent());
 		FakeChangeLog changes = new FakeChangeLog();
@@ -200,7 +239,8 @@ class SyncOutboxConsumerTests {
 			originalId, new LedgerTransactionSyncReadPort.Snapshot(
 				originalId, rootId, null, null, 1, 2, "SUPERSEDED", List.of(ACCOUNT_ID)),
 			reversalId, new LedgerTransactionSyncReadPort.Snapshot(
-				reversalId, rootId, null, originalId, 1, 1, "POSTED", List.of(ACCOUNT_ID)),
+				// 冲正交易按领域规则以自身为 root，与 LedgerTransactionFactory.createReversal 一致。
+				reversalId, reversalId, null, originalId, 1, 1, "POSTED", List.of(ACCOUNT_ID)),
 			replacementId, new LedgerTransactionSyncReadPort.Snapshot(
 				replacementId, rootId, originalId, null, 2, 1, "POSTED", List.of(ACCOUNT_ID)));
 		return transactionId -> Optional.ofNullable(snapshots.get(transactionId));
