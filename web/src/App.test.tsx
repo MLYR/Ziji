@@ -7,6 +7,41 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { clearWebSession, getWebAuthSnapshot, resetWebSessionForTests, setWebSession, setWebUser } from '@/auth/auth-session'
 import App from './App'
 
+
+const dashboardData = {
+  data: {
+    baseCurrency: 'CNY',
+    asOf: '2026-08-28T00:00:00Z',
+    asOfSequence: 0,
+    valuationRevision: 1,
+    recalculatedAt: '2026-08-28T00:00:00Z',
+    projectionStatus: 'CURRENT',
+    summary: { totalAssets: '70000.00', availableFunds: '20000.00', investmentAssets: '50000.00', totalLiabilities: '2300.00', netAssets: '67700.00' },
+    changeAttribution: { income: '0.00', expense: '0.00', market: '0.00', fx: '0.00', adjustment: '0.00', inclusion: '0.00' },
+    distribution: [],
+    investmentOverview: { baseCurrency: 'CNY', brokerCash: '50000.00', positionMarketValue: '0.00', totalInvestmentAssets: '50000.00', unpricedInstrumentCount: 0 },
+    dataQualityWarnings: [],
+  },
+  meta: { requestId: 'req-dash' },
+}
+
+const emptySeries = (baseCurrency: string) => ({
+  data: { baseCurrency, valuationRevision: 1, points: [] },
+  meta: { requestId: 'req-series' },
+})
+
+// 总览页登录后拉取的核心指标、趋势、结构与近期流水契约。
+function mockBusinessEndpoints(fetchMock: ReturnType<typeof vi.spyOn>) {
+  fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path.includes('/api/v1/dashboard')) return jsonResponse(dashboardData)
+    if (path.includes('/api/v1/statistics/assets')) return jsonResponse(emptySeries('CNY'))
+    if (path.includes('/api/v1/statistics/accounts')) return jsonResponse(emptySeries('CNY'))
+    if (path.includes('/api/v1/transactions')) return jsonResponse({ data: [], meta: { requestId: 'req-tx', nextCursor: null, hasMore: false } })
+    throw new Error(`unexpected fetch ${path}`)
+  })
+}
+
 const session = {
   id: 'session-1',
   deviceName: 'Web 浏览器',
@@ -67,10 +102,11 @@ describe('应用壳', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse({ data: { session, accessToken: 'access-test', expiresIn: 1800 }, meta: {} }))
       .mockResolvedValueOnce(jsonResponse({ data: user, meta: {} }))
+    mockBusinessEndpoints(fetchMock)
     renderApp(['/dashboard'])
 
-    await waitFor(() => expect(screen.getByRole('heading', { name: '总览基础设施已就绪' })).toBeInTheDocument())
-    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/v1/auth/web/sessions/refresh', '/api/v1/users/me'])
+    await waitFor(() => expect(screen.getByRole('heading', { name: '总览' })).toBeInTheDocument())
+    expect(fetchMock.mock.calls.slice(0, 2).map(([path]) => path)).toEqual(['/api/v1/auth/web/sessions/refresh', '/api/v1/users/me'])
   })
 
   it('展示明确的未加载状态而不是伪造财务数据', () => {
@@ -83,9 +119,10 @@ describe('应用壳', () => {
     fillLoginForm()
     fireEvent.click(screen.getByRole('button', { name: '登录' }))
 
-    return waitFor(() => expect(screen.getByRole('heading', { name: '总览基础设施已就绪' })).toBeInTheDocument()).then(() => {
-      expect(screen.getByText('这不是零余额；在账户和账务模块实现前，页面保持明确的未加载状态。')).toBeInTheDocument()
-      expect(fetchMock).toHaveBeenCalledTimes(2)
+    mockBusinessEndpoints(fetchMock)
+    return waitFor(() => expect(screen.getByRole('heading', { name: '总览' })).toBeInTheDocument()).then(() => {
+      // 登录后总览展示服务端核心指标，而非占位或伪造数据。
+      expect(screen.getByTestId('metric-净资产').textContent).toContain('67700.00')
       expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/auth/web/sessions')
       expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/v1/users/me')
       expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get('Authorization')).toBe('Bearer access-test')
@@ -132,7 +169,8 @@ describe('应用壳', () => {
     await waitFor(() => expect(submitButton).toBeDisabled())
     expect(submitButton).toHaveTextContent('登录中…')
     resolveSession(jsonResponse({ data: { session, accessToken: 'access-test', expiresIn: 1800 }, meta: {} }, 201))
-    await waitFor(() => expect(screen.getByRole('heading', { name: '总览基础设施已就绪' })).toBeInTheDocument())
+    mockBusinessEndpoints(fetchMock)
+    await waitFor(() => expect(screen.getByRole('heading', { name: '总览' })).toBeInTheDocument())
   })
 
   it('设备会话支持加载更多，并明确标记当前设备', async () => {
@@ -142,7 +180,7 @@ describe('应用壳', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse({ data: [session], meta: { requestId: 'request-1', nextCursor: 'next-page', hasMore: true } }))
       .mockResolvedValueOnce(jsonResponse({ data: [nextSession], meta: { requestId: 'request-2', nextCursor: null, hasMore: false } }))
-    renderApp(['/dashboard'])
+    renderApp(['/transactions'])
 
     fireEvent.click(screen.getByRole('button', { name: '设备与会话' }))
     await waitFor(() => expect(screen.getByText('这是当前设备')).toBeInTheDocument())
@@ -158,7 +196,7 @@ describe('应用壳', () => {
     setWebSession({ session, accessToken: 'access-test', expiresIn: 1800 })
     setWebUser(user)
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status: 204 }))
-    const { client } = renderApp(['/dashboard'])
+    const { client } = renderApp(['/transactions'])
     client.setQueryData(['private-data', user.id], { userId: user.id })
 
     fireEvent.click(screen.getByRole('button', { name: '退出登录' }))
@@ -176,7 +214,7 @@ describe('应用壳', () => {
       .mockResolvedValueOnce(jsonResponse({ data: [session, other], meta: { requestId: 'request-1', nextCursor: null, hasMore: false } }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(jsonResponse({ data: [session], meta: { requestId: 'request-2', nextCursor: null, hasMore: false } }))
-    renderApp(['/dashboard'])
+    renderApp(['/transactions'])
 
     fireEvent.click(screen.getByRole('button', { name: '设备与会话' }))
     await waitFor(() => expect(screen.getByText('其他设备')).toBeInTheDocument())
@@ -197,7 +235,7 @@ describe('应用壳', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse({ data: [session], meta: { requestId: 'request-1', nextCursor: null, hasMore: false } }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
-    renderApp(['/dashboard'])
+    renderApp(['/transactions'])
 
     fireEvent.click(screen.getByRole('button', { name: '设备与会话' }))
     await waitFor(() => expect(screen.getByRole('button', { name: '退出全部设备' })).toBeInTheDocument())
