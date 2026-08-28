@@ -4,6 +4,9 @@ import { useEffect, useRef } from 'react'
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 
 import { AuthPage } from '@/auth/AuthPage'
+import { AccountDetailPage } from '@/accounts/AccountDetailPage'
+import { AccountsPage } from '@/accounts/AccountsPage'
+import { CreateAccountPage } from '@/accounts/CreateAccountPage'
 import { DashboardPage } from '@/dashboard/DashboardPage'
 import { RecordTransactionPage } from '@/ledger/RecordTransactionPage'
 import { CurrentSessionSignOutButton, DeviceSessionsSheet } from '@/auth/DeviceSessionsSheet'
@@ -131,7 +134,9 @@ function App() {
         <Route path="/forgot-password" element={<AuthPage mode="reset" />} />
         <Route element={<ProtectedShell />}>
           <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/accounts" element={<PlaceholderPage title="账户" />} />
+          <Route path="/accounts" element={<AccountsPage />} />
+          <Route path="/accounts/new" element={<CreateAccountPage />} />
+          <Route path="/accounts/:accountId" element={<AccountDetailPage />} />
           <Route path="/transactions" element={<PlaceholderPage title="流水" />} />
           <Route path="/transactions/new" element={<RecordTransactionPage />} />
           <Route path="/investments" element={<PlaceholderPage title="投资" />} />

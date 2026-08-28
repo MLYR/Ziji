@@ -1,9 +1,29 @@
-import { createMobileAuthApiClient, createMobileSyncApiClient, createMobileTransactionApiClient } from '@/api/api-client';
+import { createMobileAccountsApiClient, createMobileAuthApiClient, createMobileDashboardApiClient, createMobileSyncApiClient, createMobileTransactionApiClient } from '@/api/api-client';
 import { createDeviceIdentityProvider, MobileAuthenticationSession, type MobileAuthenticationScopeLease } from '@/auth/auth-session';
 import { closeLocalDatabase } from '@/storage/local-database';
 import { secureCredentialStore } from '@/storage/secure-credentials';
 
-const apiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:8080';
+const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:8080';
+
+// SSRF 加固：仅允许 http/https 且排除显式云元数据地址，防止构建期配置被注入任意协议或元数据端点。
+function resolveApiBaseUrl(raw: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error('EXPO_PUBLIC_API_BASE_URL 不是合法 URL。');
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new Error('EXPO_PUBLIC_API_BASE_URL 仅允许 http/https。');
+  }
+  const forbiddenHosts = ['169.254.169.254', 'metadata.google.internal'];
+  if (forbiddenHosts.includes(parsed.hostname)) {
+    throw new Error('EXPO_PUBLIC_API_BASE_URL 指向被禁止的元数据地址。');
+  }
+  return parsed.toString();
+}
+
+const apiBaseUrl = resolveApiBaseUrl(configuredBaseUrl);
 
 let authenticationSession: MobileAuthenticationSession | undefined;
 
@@ -28,6 +48,8 @@ const readAccessToken = async () => authenticationSession?.getAccessToken() ?? n
 
 export const mobileSyncApiClient = createMobileSyncApiClient({ baseUrl: apiBaseUrl, readAccessToken });
 export const mobileTransactionApiClient = createMobileTransactionApiClient({ baseUrl: apiBaseUrl, readAccessToken });
+export const mobileDashboardApiClient = createMobileDashboardApiClient({ baseUrl: apiBaseUrl, readAccessToken });
+export const mobileAccountsApiClient = createMobileAccountsApiClient({ baseUrl: apiBaseUrl, readAccessToken });
 export const mobileDeviceIdentity = createDeviceIdentityProvider(secureCredentialStore);
 
 export function createMobileSyncApiClientForLease(lease: MobileAuthenticationScopeLease) {

@@ -15,6 +15,14 @@ export type UserEnvelope = components['schemas']['UserEnvelope'];
 export type MobileSessionEnvelope = components['schemas']['MobileSessionEnvelope'];
 export type TransactionEnvelope = components['schemas']['TransactionEnvelope'];
 export type PostTransactionRequest = components['schemas']['PostTransactionRequest'];
+export type DashboardEnvelope = components['schemas']['DashboardEnvelope'];
+export type AccountEnvelope = components['schemas']['AccountEnvelope'];
+export type AccountListEnvelope = components['schemas']['AccountListEnvelope'];
+export type AccountBalanceEnvelope = components['schemas']['AccountBalanceEnvelope'];
+export type CreateAccountRequest = components['schemas']['CreateAccountRequest'];
+export type Account = components['schemas']['Account'];
+export type AccountBalance = components['schemas']['AccountBalance'];
+export type StatisticsSeriesEnvelope = components['schemas']['StatisticsSeriesEnvelope'];
 export type RegistrationChallengeEnvelope = operations['createRegistrationChallenge']['responses'][202]['content']['application/json'];
 
 export interface MobileSyncApiClient {
@@ -31,9 +39,26 @@ export interface MobileAuthApiClient {
   getCurrentUser(): Promise<UserEnvelope>;
 }
 
+export type TransactionListEnvelope = components['schemas']['TransactionListEnvelope'];
+
 export interface MobileTransactionApiClient {
   getTransaction(transactionId: string): Promise<TransactionEnvelope>;
   createTransaction(idempotencyKey: string, body: PostTransactionRequest): Promise<TransactionEnvelope>;
+  listTransactions(limit: number): Promise<TransactionListEnvelope>;
+}
+
+export interface MobileAccountsApiClient {
+  listAccounts(limit: number): Promise<AccountListEnvelope>;
+  getAccount(accountId: string): Promise<AccountEnvelope>;
+  getAccountBalance(accountId: string): Promise<AccountBalanceEnvelope>;
+  createAccount(idempotencyKey: string, body: CreateAccountRequest): Promise<components['schemas']['AccountCreatedEnvelope']>;
+  updateAccount(accountId: string, etag: string, body: { name?: string; institution?: string | null }): Promise<AccountEnvelope>;
+  archiveAccount(accountId: string, etag: string, idempotencyKey: string, body: { reason: string; confirmNonZeroBalance?: boolean }): Promise<AccountEnvelope>;
+}
+
+export interface MobileDashboardApiClient {
+  getDashboard(): Promise<DashboardEnvelope>;
+  getAssetStatistics(dateFrom: string, dateTo: string): Promise<StatisticsSeriesEnvelope>;
 }
 
 export class ApiClientError extends Error {
@@ -148,6 +173,57 @@ export function createMobileAuthApiClient(options: MobileApiClientOptions): Mobi
   };
 }
 
+export function createMobileAccountsApiClient(options: MobileApiClientOptions): MobileAccountsApiClient {
+  const request = createMobileApiClient(options);
+
+  return {
+    listAccounts(limit) {
+      return request<AccountListEnvelope>(`/api/v1/accounts?limit=${limit}`, { method: 'GET' });
+    },
+    getAccount(accountId) {
+      return request<AccountEnvelope>(`/api/v1/accounts/${encodeURIComponent(accountId)}`, { method: 'GET' });
+    },
+    getAccountBalance(accountId) {
+      return request<AccountBalanceEnvelope>(`/api/v1/accounts/${encodeURIComponent(accountId)}/balance`, { method: 'GET' });
+    },
+    createAccount(idempotencyKey, body) {
+      return request<components['schemas']['AccountCreatedEnvelope']>('/api/v1/accounts', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      });
+    },
+    updateAccount(accountId, etag, body) {
+      return request<AccountEnvelope>(`/api/v1/accounts/${encodeURIComponent(accountId)}`, {
+        method: 'PATCH',
+        headers: { 'If-Match': etag },
+        body: JSON.stringify(body),
+      });
+    },
+    archiveAccount(accountId, etag, idempotencyKey, body) {
+      return request<AccountEnvelope>(`/api/v1/accounts/${encodeURIComponent(accountId)}/archive`, {
+        method: 'POST',
+        headers: { 'If-Match': etag, 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      });
+    },
+  };
+}
+
+export function createMobileDashboardApiClient(options: MobileApiClientOptions): MobileDashboardApiClient {
+  const request = createMobileApiClient(options);
+
+  return {
+    getDashboard() {
+      return request<DashboardEnvelope>('/api/v1/dashboard', { method: 'GET' });
+    },
+    getAssetStatistics(dateFrom, dateTo) {
+      const query = new URLSearchParams({ dateFrom, dateTo, granularity: 'DAY' });
+      return request<StatisticsSeriesEnvelope>(`/api/v1/statistics/assets?${query.toString()}`, { method: 'GET' });
+    },
+  };
+}
+
 export function createMobileTransactionApiClient(options: MobileApiClientOptions): MobileTransactionApiClient {
   const request = createMobileApiClient(options);
 
@@ -161,6 +237,9 @@ export function createMobileTransactionApiClient(options: MobileApiClientOptions
         headers: { 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify(body),
       });
+    },
+    listTransactions(limit) {
+      return request<TransactionListEnvelope>(`/api/v1/transactions?limit=${limit}`, { method: 'GET' });
     },
   };
 }

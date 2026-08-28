@@ -9,6 +9,7 @@ import { createRegistrationIdempotencyKey, type MobileAuthenticationState } from
 import { localBiometricLock, type LocalBiometricCapability, type LocalBiometricOutcome } from '@/auth/local-biometric-lock';
 import { useThemeStore } from '@/state/theme-store';
 import { SyncStatusPanel } from '@/sync/sync-status-panel';
+import { HomeDashboardPanel } from '@/dashboard/home-dashboard-panel';
 
 type AuthMode = 'LOGIN' | 'REGISTER';
 type FieldName = 'email' | 'password' | 'verificationCode' | 'nickname';
@@ -379,15 +380,27 @@ export default function AuthenticationScreen() {
           <View className="my-10 rounded-xl bg-surface-light p-5 dark:bg-surface-dark" accessibilityLiveRegion="polite">
             <Text className="text-xl font-bold text-ink-light dark:text-ink-dark">已安全登录</Text>
             <Text className="mt-2 text-base text-muted-light dark:text-muted-dark">当前设备：{authentication.session?.deviceName}</Text>
-            <Pressable
-              accessibilityLabel="快速记账"
-              accessibilityRole="button"
-              className="mt-4 min-h-11 items-center justify-center rounded-lg bg-accent active:opacity-70"
-              onPress={() => router.push('/quick-record')}
-              testID="open-quick-record"
-            >
-              <Text className="font-bold text-canvas-dark">快速记账</Text>
-            </Pressable>
+            <View className="mt-4 flex-row gap-2">
+              <Pressable
+                accessibilityLabel="快速记账"
+                accessibilityRole="button"
+                className="min-h-11 flex-1 items-center justify-center rounded-lg bg-accent active:opacity-70"
+                onPress={() => router.push('/quick-record')}
+                testID="open-quick-record"
+              >
+                <Text className="font-bold text-canvas-dark">快速记账</Text>
+              </Pressable>
+              <Pressable
+                accessibilityLabel="查看账户"
+                accessibilityRole="button"
+                className="min-h-11 flex-1 items-center justify-center rounded-lg border border-accent active:opacity-70"
+                onPress={() => router.push('/accounts')}
+                testID="open-accounts"
+              >
+                <Text className="font-semibold text-ink-light dark:text-ink-dark">账户</Text>
+              </Pressable>
+            </View>
+            <HomeDashboardPanel onOpenQuickRecord={() => router.push('/quick-record')} />
             {authentication.userId ? <SyncStatusPanel userId={authentication.userId} /> : null}
             <View className="mt-5 border-t border-canvas-light pt-4 dark:border-canvas-dark">
               <Text className="text-base font-semibold text-ink-light dark:text-ink-dark">本机生物识别解锁</Text>
