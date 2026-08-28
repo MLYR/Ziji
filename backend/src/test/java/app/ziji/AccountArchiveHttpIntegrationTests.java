@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -201,6 +202,140 @@ class AccountArchiveHttpIntegrationTests extends PostgresIntegrationTestSupport 
 			.andExpect(status().isInternalServerError())
 			.andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
 		assertEquals(afterArchive, factCounts(created.accountId()));
+	}
+
+	@Test
+	void sameHttpCreatedAccountKeepsLifecycleVersionAndHistoryAcrossUpdateConflictAndArchive() throws Exception {
+		// 同一账户跨越创建、资料更新、冲突和归档，验证版本与事实历史连续。
+		UserFixture owner = insertUser("archive-lifecycle-owner");
+		CreatedAccount created = createAccountWithOpening(owner, "archive-lifecycle-create-0001");
+		assertNotNull(created.accountId());
+		assertNotNull(created.openingTransactionId());
+		UUID accountId = created.accountId();
+		String resource = "/api/v1/accounts/" + accountId;
+		String token = bearer(owner);
+
+		assertEquals(1, count("SELECT count(*) FROM account_members "
+			+ "WHERE account_id = ? AND user_id = ? AND role = 'OWNER' AND status = 'ACTIVE'",
+			accountId, owner.userId()));
+		assertEquals(1, count("""
+			SELECT count(*) FROM account_inclusion_settings s
+			JOIN account_members m ON m.id = s.membership_id
+			WHERE m.account_id = ? AND m.user_id = ? AND s.included = TRUE
+			  AND s.ratio = 1.000000 AND s.valid_to IS NULL
+			""", accountId, owner.userId()));
+		assertEquals(1, count("""
+			SELECT count(*) FROM ledger_accounts
+			WHERE visible_account_id = ? AND ledger_role = 'PRIMARY'
+			  AND account_nature = 'ASSET' AND currency = 'CNY' AND status = 'ACTIVE'
+			""", accountId));
+		assertEquals(1, count("""
+			SELECT count(*) FROM transactions
+			WHERE id = ? AND transaction_type = 'OPENING' AND status = 'POSTED'
+			""", created.openingTransactionId()));
+		assertEquals(2, count("SELECT count(*) FROM ledger_entries WHERE transaction_id = ?",
+			created.openingTransactionId()));
+
+		mvc.perform(get(resource)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+			.andExpect(status().isOk())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"1\""))
+			.andExpect(jsonPath("$.data.id").value(accountId.toString()))
+			.andExpect(jsonPath("$.data.name").value("非零归档账户"))
+			.andExpect(jsonPath("$.data.accountClass").value("ASSET"))
+			.andExpect(jsonPath("$.data.accountType").value("BANK"))
+			.andExpect(jsonPath("$.data.currency").value("CNY"))
+			.andExpect(jsonPath("$.data.status").value("ACTIVE"))
+			.andExpect(jsonPath("$.data.version").value(1));
+
+		String updatedName = "生命周期更新后的账户";
+		mvc.perform(patch(resource)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("If-Match", "\"1\"")
+				.contentType("application/merge-patch+json")
+				.content("{\"name\":\"" + updatedName + "\"}"))
+			.andExpect(status().isOk())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"2\""))
+			.andExpect(jsonPath("$.data.name").value(updatedName))
+			.andExpect(jsonPath("$.data.version").value(2));
+
+		mvc.perform(get(resource)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+			.andExpect(status().isOk())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"2\""))
+			.andExpect(jsonPath("$.data.name").value(updatedName))
+			.andExpect(jsonPath("$.data.version").value(2));
+
+		mvc.perform(patch(resource)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("If-Match", "\"1\"")
+				.contentType("application/merge-patch+json")
+				.content("{\"name\":\"过期版本不应写入\"}"))
+			.andExpect(status().isConflict())
+			.andExpect(header().doesNotExist(HttpHeaders.ETAG))
+			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(2))
+			.andExpect(jsonPath("$.versionConflict.currentEtag").value("\"2\""))
+			.andExpect(jsonPath("$.versionConflict.resourceLocation").value(resource))
+			.andExpect(jsonPath("$.data").doesNotExist());
+		assertEquals(updatedName, jdbc.queryForObject(
+			"SELECT name FROM accounts WHERE id = ?", String.class, accountId));
+		assertEquals(2, jdbc.queryForObject(
+			"SELECT version FROM accounts WHERE id = ?", Integer.class, accountId));
+
+		FactCounts beforeArchive = factCounts(accountId);
+		archiveWithToken(token, accountId, "archive-lifecycle-archive-0001", archiveBody(true), "\"2\"")
+			.andExpect(status().isOk())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"3\""))
+			.andExpect(jsonPath("$.data.status").value("ARCHIVED"))
+			.andExpect(jsonPath("$.data.version").value(3));
+
+		assertEquals("ARCHIVED", jdbc.queryForObject(
+			"SELECT status FROM accounts WHERE id = ?", String.class, accountId));
+		assertEquals(3, jdbc.queryForObject(
+			"SELECT version FROM accounts WHERE id = ?", Integer.class, accountId));
+		assertNotNull(jdbc.queryForObject(
+			"SELECT archived_at FROM accounts WHERE id = ?", java.sql.Timestamp.class, accountId));
+		FactCounts afterArchive = factCounts(accountId);
+		assertEquals(beforeArchive.transactions(), afterArchive.transactions());
+		assertEquals(beforeArchive.entries(), afterArchive.entries());
+		assertEquals(beforeArchive.outboxEvents(), afterArchive.outboxEvents());
+		assertEquals(beforeArchive.auditLogs() + 1, afterArchive.auditLogs());
+
+		mvc.perform(get(resource)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+			.andExpect(status().isOk())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"3\""))
+			.andExpect(jsonPath("$.data.id").value(accountId.toString()))
+			.andExpect(jsonPath("$.data.name").value(updatedName))
+			.andExpect(jsonPath("$.data.status").value("ARCHIVED"))
+			.andExpect(jsonPath("$.data.version").value(3));
+		mvc.perform(get("/api/v1/accounts")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.data.length()").value(0));
+		mvc.perform(get("/api/v1/transactions")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.param("accountId", accountId.toString()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.data.length()").value(1))
+			.andExpect(jsonPath("$.data[0].id").value(created.openingTransactionId().toString()));
+
+		assertEquals(1, count("""
+			SELECT count(*) FROM transactions
+			WHERE id = ? AND transaction_type = 'OPENING' AND status = 'POSTED'
+			""", created.openingTransactionId()));
+		assertEquals(2, count("SELECT count(*) FROM ledger_entries WHERE transaction_id = ?",
+			created.openingTransactionId()));
+		assertEquals(1, count("SELECT count(*) FROM account_members "
+			+ "WHERE account_id = ? AND user_id = ? AND role = 'OWNER' AND status = 'ACTIVE'",
+			accountId, owner.userId()));
+		assertEquals(1, count("""
+			SELECT count(*) FROM account_inclusion_settings s
+			JOIN account_members m ON m.id = s.membership_id
+			WHERE m.account_id = ? AND m.user_id = ? AND s.included = TRUE
+			  AND s.ratio = 1.000000 AND s.valid_to IS NULL
+			""", accountId, owner.userId()));
 	}
 
 	@Test
@@ -484,6 +619,14 @@ class AccountArchiveHttpIntegrationTests extends PostgresIntegrationTestSupport 
 					"""))
 			.andExpect(status().isCreated())
 			.andExpect(header().string(HttpHeaders.ETAG, "\"1\""))
+			.andExpect(jsonPath("$.data.account.id").isNotEmpty())
+			.andExpect(jsonPath("$.data.account.accountClass").value("ASSET"))
+			.andExpect(jsonPath("$.data.account.accountType").value("BANK"))
+			.andExpect(jsonPath("$.data.account.currency").value("CNY"))
+			.andExpect(jsonPath("$.data.account.status").value("ACTIVE"))
+			.andExpect(jsonPath("$.data.account.currentUserRole").value("OWNER"))
+			.andExpect(jsonPath("$.data.account.inclusionRatio").value("1.000000"))
+			.andExpect(jsonPath("$.data.account.version").value(1))
 			.andReturn();
 		JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
 		return new CreatedAccount(
