@@ -14,6 +14,7 @@ export type MobileRefreshRequest = components['schemas']['MobileRefreshRequest']
 export type UserEnvelope = components['schemas']['UserEnvelope'];
 export type MobileSessionEnvelope = components['schemas']['MobileSessionEnvelope'];
 export type TransactionEnvelope = components['schemas']['TransactionEnvelope'];
+export type Transaction = components['schemas']['Transaction'];
 export type PostTransactionRequest = components['schemas']['PostTransactionRequest'];
 export type DashboardEnvelope = components['schemas']['DashboardEnvelope'];
 export type AccountEnvelope = components['schemas']['AccountEnvelope'];
@@ -41,10 +42,31 @@ export interface MobileAuthApiClient {
 
 export type TransactionListEnvelope = components['schemas']['TransactionListEnvelope'];
 
+export interface TransactionListFilters {
+  accountId?: string;
+  type?: 'INCOME' | 'EXPENSE' | 'REFUND' | 'TRANSFER' | 'ADJUSTMENT' | 'OPENING' | 'REVERSAL' | 'REPAYMENT';
+  dateFrom?: string;
+  dateTo?: string;
+  categoryId?: string;
+  cursor?: string | null;
+}
+
 export interface MobileTransactionApiClient {
   getTransaction(transactionId: string): Promise<TransactionEnvelope>;
   createTransaction(idempotencyKey: string, body: PostTransactionRequest): Promise<TransactionEnvelope>;
-  listTransactions(limit: number): Promise<TransactionListEnvelope>;
+  listTransactions(limit: number, filters?: TransactionListFilters): Promise<TransactionListEnvelope>;
+  reviseTransaction(
+    transactionId: string,
+    etag: string,
+    idempotencyKey: string,
+    body: components['schemas']['ReviseTransactionRequest'],
+  ): Promise<TransactionEnvelope>;
+  reverseTransaction(
+    transactionId: string,
+    etag: string,
+    idempotencyKey: string,
+    body: components['schemas']['ReasonRequest'],
+  ): Promise<TransactionEnvelope>;
 }
 
 export interface MobileAccountsApiClient {
@@ -238,8 +260,29 @@ export function createMobileTransactionApiClient(options: MobileApiClientOptions
         body: JSON.stringify(body),
       });
     },
-    listTransactions(limit) {
-      return request<TransactionListEnvelope>(`/api/v1/transactions?limit=${limit}`, { method: 'GET' });
+    listTransactions(limit, filters = {}) {
+      const query = new URLSearchParams({ limit: String(limit) });
+      if (filters.accountId?.trim()) query.set('accountId', filters.accountId.trim());
+      if (filters.type) query.set('type', filters.type);
+      if (filters.dateFrom?.trim()) query.set('dateFrom', filters.dateFrom.trim());
+      if (filters.dateTo?.trim()) query.set('dateTo', filters.dateTo.trim());
+      if (filters.categoryId?.trim()) query.set('categoryId', filters.categoryId.trim());
+      if (filters.cursor) query.set('cursor', filters.cursor);
+      return request<TransactionListEnvelope>(`/api/v1/transactions?${query.toString()}`, { method: 'GET' });
+    },
+    reviseTransaction(transactionId, etag, idempotencyKey, body) {
+      return request<TransactionEnvelope>(`/api/v1/transactions/${encodeURIComponent(transactionId)}/revisions`, {
+        method: 'POST',
+        headers: { 'If-Match': etag, 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      });
+    },
+    reverseTransaction(transactionId, etag, idempotencyKey, body) {
+      return request<TransactionEnvelope>(`/api/v1/transactions/${encodeURIComponent(transactionId)}/reversal`, {
+        method: 'POST',
+        headers: { 'If-Match': etag, 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      });
     },
   };
 }
