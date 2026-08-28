@@ -1,9 +1,13 @@
 import type { paths } from '@ziji/api-types'
-import { AlertCircleIcon, BarChart3Icon, DatabaseIcon, HomeIcon, MoonIcon, ReceiptTextIcon, SunIcon, WalletCardsIcon } from 'lucide-react'
-import { useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { AlertCircleIcon, BarChart3Icon, DatabaseIcon, HomeIcon, LoaderCircleIcon, MoonIcon, ReceiptTextIcon, SunIcon, WalletCardsIcon } from 'lucide-react'
+import { useEffect, useRef } from 'react'
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 
 import { AuthPage } from '@/auth/AuthPage'
+import { CurrentSessionSignOutButton, DeviceSessionsSheet } from '@/auth/DeviceSessionsSheet'
+import { retryWebSessionInitialization, useWebAuth } from '@/auth/auth-session'
+import { useWebSessionInitialization } from '@/auth/use-web-session-initialization'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -13,7 +17,6 @@ import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupConte
 import { Skeleton } from '@/components/ui/skeleton'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { MotionGroup } from '@/motion/motion-group'
-import { useWebAuth } from '@/auth/auth-session'
 import { useUiStore } from '@/stores/ui-store'
 
 type DashboardResponse = paths['/dashboard']['get']['responses'][200]
@@ -112,11 +115,19 @@ function PlaceholderPage({ title }: { title: string }) {
 }
 
 function ProtectedShell() {
-  const { accessToken, user } = useWebAuth()
+  const { accessToken, recoverWebSession, status, user } = useWebSessionInitialization()
   const { theme, toggleTheme } = useUiStore()
 
+  if (status === 'unknown' || status === 'recovering') {
+    return <main className="grid min-h-dvh place-items-center p-6" aria-busy="true"><Card className="w-full max-w-sm"><CardHeader><CardTitle>正在恢复会话</CardTitle><CardDescription>正在安全恢复登录状态，请稍候。</CardDescription></CardHeader><CardContent className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircleIcon className="animate-spin" />正在验证设备会话…</CardContent></Card></main>
+  }
+
+  if (status === 'recovery_failed') {
+    return <main className="grid min-h-dvh place-items-center p-6"><Card className="w-full max-w-sm"><CardHeader><CardTitle>无法恢复会话</CardTitle><CardDescription>网络或服务暂时不可用，尚未退出当前会话。</CardDescription></CardHeader><CardContent className="flex flex-col gap-3"><Button onClick={() => void retryWebSessionInitialization(recoverWebSession)}><LoaderCircleIcon data-icon="inline-start" />再次尝试</Button><Button variant="outline" asChild><a href="/login">前往登录</a></Button></CardContent></Card></main>
+  }
+
   // 只有短期 Access Token 与服务端用户资料同时存在时才挂载业务壳，避免仅凭登录成功响应放行。
-  if (!accessToken || !user) return <Navigate to="/login" replace />
+  if (status === 'unauthenticated' || !accessToken || !user) return <Navigate to="/login" replace />
 
   return (
     <SidebarProvider>
@@ -125,14 +136,33 @@ function ProtectedShell() {
       <SidebarInset>
         <header className="flex min-h-17 items-center justify-between border-b px-4 lg:px-6">
           <SidebarTrigger aria-label="切换侧栏" />
-          <Button variant="outline" size="icon" onClick={toggleTheme} aria-label={theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'}>
+          <div className="flex items-center gap-2"><DeviceSessionsSheet /><CurrentSessionSignOutButton /><Button variant="outline" size="icon" onClick={toggleTheme} aria-label={theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'}>
             {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
-          </Button>
+          </Button></div>
         </header>
         <Outlet />
       </SidebarInset>
     </SidebarProvider>
   )
+}
+
+function AuthQueryCacheBoundary() {
+  const queryClient = useQueryClient()
+  const { status, user } = useWebAuth()
+  const previousUserId = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      // 认证终态必须立即移除所有受保护查询，防止 A 退出后 B 看见 A 的缓存。
+      queryClient.clear()
+      previousUserId.current = null
+      return
+    }
+    if (user && previousUserId.current !== null && previousUserId.current !== user.id) queryClient.clear()
+    if (user) previousUserId.current = user.id
+  }, [queryClient, status, user])
+
+  return null
 }
 
 function App() {
@@ -144,6 +174,7 @@ function App() {
 
   return (
     <TooltipProvider>
+      <AuthQueryCacheBoundary />
       {/* 公开认证页与受保护业务壳分离，避免未登录时渲染任何业务导航或占位数据。 */}
       <Routes>
         <Route path="/login" element={<AuthPage mode="login" />} />

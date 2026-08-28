@@ -9,6 +9,7 @@ export type PasswordResetRequest = components['schemas']['PasswordResetRequest']
 export type ChallengeAccepted = operations['createRegistrationChallenge']['responses'][202]['content']['application/json']
 export type UserEnvelope = components['schemas']['UserEnvelope']
 export type WebSessionEnvelope = components['schemas']['WebSessionEnvelope']
+export type SessionListEnvelope = components['schemas']['SessionListEnvelope']
 
 export function createRegistrationChallenge(body: EmailChallengeRequest) {
   return apiRequest<ChallengeAccepted>('/api/v1/auth/registration-challenges', {
@@ -52,8 +53,37 @@ export function resetPassword(body: PasswordResetRequest, idempotencyKey: string
   })
 }
 
-export function getCurrentUser() {
-  return apiRequest<UserEnvelope>('/api/v1/users/me')
+export function getCurrentUser(retryAuthentication = true) {
+  return apiRequest<UserEnvelope>('/api/v1/users/me', { retryAuthentication })
+}
+
+export function refreshWebSession() {
+  return apiRequest<WebSessionEnvelope>('/api/v1/auth/web/sessions/refresh', {
+    method: 'POST',
+    auth: false,
+    retryAuthentication: false,
+  })
+}
+
+export function revokeCurrentSession() {
+  return apiRequest<void>('/api/v1/auth/sessions/current', {
+    method: 'DELETE',
+    retryAuthentication: false,
+  })
+}
+
+export function listUserSessions(cursor?: string) {
+  const params = new URLSearchParams({ limit: '20' })
+  if (cursor) params.set('cursor', cursor)
+  return apiRequest<SessionListEnvelope>(`/api/v1/users/me/sessions?${params.toString()}`)
+}
+
+export function revokeUserSession(sessionId: string) {
+  return apiRequest<void>(`/api/v1/users/me/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+}
+
+export function revokeAllUserSessions() {
+  return apiRequest<void>('/api/v1/users/me/sessions', { method: 'DELETE' })
 }
 
 export function createIdempotencyKey() {

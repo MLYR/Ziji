@@ -7,6 +7,7 @@ import java.util.function.Supplier;
 
 import app.ziji.auth.application.AccessTokenService;
 import app.ziji.auth.application.DeviceSessionQueryService;
+import app.ziji.auth.interfaces.WebSessionCookieService;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.context.annotation.Bean;
@@ -17,6 +18,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfException;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.csrf.CsrfTokenRequestHandler;
@@ -49,7 +51,8 @@ class SecurityConfiguration {
 		HttpSecurity http,
 		ObjectMapper objectMapper,
 		AccessTokenAuthenticationFilter accessTokenAuthenticationFilter,
-		CookieCsrfTokenRepository csrfTokenRepository) throws Exception {
+		CookieCsrfTokenRepository csrfTokenRepository,
+		WebSessionCookieService webSessionCookies) throws Exception {
 		// 已实现 operation 精确开放或认证；其余路径继续 fail closed。
 		http.authorizeHttpRequests(authorize -> authorize
 			.requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
@@ -98,8 +101,13 @@ class SecurityConfiguration {
 				// 未实现或未知路由保持原有 403 deny-all，不能因认证功能扩大路由面。
 				response.sendError(403);
 			})
-			.accessDeniedHandler((request, response, exception) ->
-				AuthenticationProblemResponses.permissionDenied(request, response, objectMapper)));
+			.accessDeniedHandler((request, response, exception) -> {
+				if (exception instanceof CsrfException) {
+					// 仅 CSRF 拒绝清理成对 Cookie，防止缺失 ziji_csrf 时旧 HttpOnly refresh 凭据永久阻塞重新认证。
+					webSessionCookies.clear(response);
+				}
+				AuthenticationProblemResponses.permissionDenied(request, response, objectMapper);
+			}));
 		return http.build();
 	}
 

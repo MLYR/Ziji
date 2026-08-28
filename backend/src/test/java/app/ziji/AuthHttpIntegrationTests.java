@@ -122,22 +122,33 @@ class AuthHttpIntegrationTests extends PostgresIntegrationTestSupport {
 		assertCookieAttributes(webLogin, "ziji_refresh", "HttpOnly");
 		assertCookieAttributes(webLogin, "ziji_csrf", "SameSite=Strict");
 
-		mvc.perform(post("/api/v1/auth/web/sessions/refresh")
+		MvcResult missingCsrf = mvc.perform(post("/api/v1/auth/web/sessions/refresh")
 				.cookie(new Cookie("ziji_refresh", webRefresh), new Cookie("ziji_csrf", webCsrf)))
 			.andExpect(status().isForbidden())
 			.andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
-			.andExpect(jsonPath("$.code").value("PERMISSION_DENIED"));
-		mvc.perform(post("/api/v1/auth/web/sessions/refresh")
+			.andExpect(jsonPath("$.code").value("PERMISSION_DENIED"))
+			.andReturn();
+		assertCookieAttributes(missingCsrf, "ziji_refresh", "Max-Age=0");
+		assertCookieAttributes(missingCsrf, "ziji_csrf", "Max-Age=0");
+		MvcResult wrongCsrf = mvc.perform(post("/api/v1/auth/web/sessions/refresh")
 				.cookie(new Cookie("ziji_refresh", webRefresh), new Cookie("ziji_csrf", webCsrf))
 				.header("X-CSRF-Token", "wrong-csrf-token"))
 			.andExpect(status().isForbidden())
-			.andExpect(jsonPath("$.code").value("PERMISSION_DENIED"));
+			.andExpect(jsonPath("$.code").value("PERMISSION_DENIED"))
+			.andReturn();
+		assertCookieAttributes(wrongCsrf, "ziji_refresh", "Max-Age=0");
+		assertCookieAttributes(wrongCsrf, "ziji_csrf", "Max-Age=0");
 		mvc.perform(post("/api/v1/auth/web/sessions/refresh")
 				.cookie(new Cookie("ziji_refresh", webRefresh), new Cookie("ziji_csrf", webCsrf))
 				.header("X-CSRF-Token", webCsrf)
 				.header("X-CSRF-Token", webCsrf))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("PERMISSION_DENIED"));
+		mvc.perform(post("/api/v1/not-yet-implemented")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + json(webLogin).at("/data/accessToken").asString()))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("PERMISSION_DENIED"))
+			.andExpect(header().doesNotExist(HttpHeaders.SET_COOKIE));
 
 		MvcResult webRefreshResult = mvc.perform(post("/api/v1/auth/web/sessions/refresh")
 				.cookie(new Cookie("ziji_refresh", webRefresh), new Cookie("ziji_csrf", webCsrf))

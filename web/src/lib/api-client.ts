@@ -1,6 +1,6 @@
 import type { components } from '@ziji/api-types'
 
-import { getWebAccessToken } from '@/auth/auth-session'
+import { clearWebSession, getWebAccessToken, setWebSession } from '@/auth/auth-session'
 
 export type ApiProblem = components['schemas']['Problem']
 
@@ -19,7 +19,10 @@ export class ApiClientError extends Error {
 export interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
   body?: unknown
   auth?: boolean
+  retryAuthentication?: boolean
 }
+
+let refreshPromise: Promise<void> | null = null
 
 function readCookie(name: string): string | undefined {
   // 浏览器只读取非 HttpOnly 的 CSRF cookie；刷新会话 cookie 始终由浏览器自动携带。
@@ -36,8 +39,14 @@ function isApiProblem(value: unknown): value is ApiProblem {
   return typeof problem.title === 'string' && typeof problem.status === 'number'
 }
 
-export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
-  const { auth = true, ...requestOptions } = options
+function isAuthenticationRequired(error: unknown) {
+  return error instanceof ApiClientError
+    && error.problem.status === 401
+    && error.problem.code === 'AUTHENTICATION_REQUIRED'
+}
+
+async function requestOnce<T>(path: string, options: Omit<ApiRequestOptions, 'retryAuthentication'> & { auth: boolean }): Promise<T> {
+  const { auth, ...requestOptions } = options
   const headers = new Headers(requestOptions.headers)
   const method = (requestOptions.method ?? 'GET').toUpperCase()
 
@@ -77,4 +86,43 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
 
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
+}
+
+async function refreshAccessSession() {
+  if (refreshPromise) return refreshPromise
+
+  refreshPromise = (async () => {
+    try {
+      const refreshed = await requestOnce<components['schemas']['WebSessionEnvelope']>('/api/v1/auth/web/sessions/refresh', {
+        method: 'POST',
+        auth: false,
+      })
+      // 仅保存短期 Access Token 和稳定 session；HttpOnly Refresh Cookie 永不进入 JS 状态。
+      setWebSession(refreshed.data)
+    } catch (error) {
+      if (isAuthenticationRequired(error) || (error instanceof ApiClientError && error.problem.status === 403)) {
+        // Refresh 的 403 无法区分 CSRF 细节，按安全边界 fail-closed，绝不继续重放敏感请求。
+        clearWebSession()
+      }
+      throw error
+    } finally {
+      refreshPromise = null
+    }
+  })()
+
+  return refreshPromise
+}
+
+export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+  const { auth = true, retryAuthentication = true, ...requestOptions } = options
+
+  try {
+    return await requestOnce<T>(path, { ...requestOptions, auth })
+  } catch (error) {
+    if (!auth || !retryAuthentication || !isAuthenticationRequired(error)) throw error
+
+    await refreshAccessSession()
+    // 原请求仅重放一次，headers/body/幂等键/If-Match 均来自同一份 requestOptions。
+    return requestOnce<T>(path, { ...requestOptions, auth })
+  }
 }

@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { clearWebSession } from '@/auth/auth-session'
+import { clearWebSession, getWebAuthSnapshot, resetWebSessionForTests, setWebSession, setWebUser } from '@/auth/auth-session'
 import App from './App'
 
 const session = {
@@ -12,7 +12,7 @@ const session = {
   deviceId: null,
   createdAt: '2026-08-26T00:00:00Z',
   lastSeenAt: '2026-08-26T00:00:00Z',
-  status: 'ACTIVE',
+  status: 'ACTIVE' as const,
 }
 
 const user = {
@@ -22,8 +22,8 @@ const user = {
   timezone: 'Asia/Shanghai',
   baseCurrency: 'CNY',
   locale: 'zh-CN',
-  amountFormat: 'STANDARD',
-  status: 'ACTIVE',
+  amountFormat: 'STANDARD' as const,
+  status: 'ACTIVE' as const,
   version: 1,
 }
 
@@ -36,7 +36,8 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
 
 function renderApp(initialEntries: string[]) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<MemoryRouter initialEntries={initialEntries}><QueryClientProvider client={client}><App /></QueryClientProvider></MemoryRouter>)
+  const view = render(<MemoryRouter initialEntries={initialEntries}><QueryClientProvider client={client}><App /></QueryClientProvider></MemoryRouter>)
+  return { ...view, client }
 }
 
 function fillLoginForm() {
@@ -53,8 +54,22 @@ describe('应用壳', () => {
   })
 
   it('未认证访问业务路径时进入登录页', () => {
+    resetWebSessionForTests()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({ title: 'Unauthorized', status: 401, code: 'AUTHENTICATION_REQUIRED', requestId: 'request-1' }, 401))
     renderApp(['/dashboard'])
-    expect(screen.getByRole('heading', { name: '欢迎回来' })).toBeInTheDocument()
+    return waitFor(() => expect(screen.getByRole('heading', { name: '欢迎回来' })).toBeInTheDocument())
+  })
+
+  it('受保护路由恢复会话后加载用户资料，StrictMode 重复渲染不重复刷新', async () => {
+    resetWebSessionForTests()
+    document.cookie = 'ziji_csrf=csrf-test; path=/'
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({ data: { session, accessToken: 'access-test', expiresIn: 1800 }, meta: {} }))
+      .mockResolvedValueOnce(jsonResponse({ data: user, meta: {} }))
+    renderApp(['/dashboard'])
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: '总览基础设施已就绪' })).toBeInTheDocument())
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/v1/auth/web/sessions/refresh', '/api/v1/users/me'])
   })
 
   it('展示明确的未加载状态而不是伪造财务数据', () => {
@@ -117,5 +132,80 @@ describe('应用壳', () => {
     expect(submitButton).toHaveTextContent('登录中…')
     resolveSession(jsonResponse({ data: { session, accessToken: 'access-test', expiresIn: 1800 }, meta: {} }, 201))
     await waitFor(() => expect(screen.getByRole('heading', { name: '总览基础设施已就绪' })).toBeInTheDocument())
+  })
+
+  it('设备会话支持加载更多，并明确标记当前设备', async () => {
+    setWebSession({ session, accessToken: 'access-test', expiresIn: 1800 })
+    setWebUser(user)
+    const nextSession = { ...session, id: 'session-2', deviceName: '另一台浏览器' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({ data: [session], meta: { requestId: 'request-1', nextCursor: 'next-page', hasMore: true } }))
+      .mockResolvedValueOnce(jsonResponse({ data: [nextSession], meta: { requestId: 'request-2', nextCursor: null, hasMore: false } }))
+    renderApp(['/dashboard'])
+
+    fireEvent.click(screen.getByRole('button', { name: '设备与会话' }))
+    await waitFor(() => expect(screen.getByText('这是当前设备')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: '加载更多设备' }))
+    await waitFor(() => expect(screen.getByText('另一台浏览器')).toBeInTheDocument())
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      '/api/v1/users/me/sessions?limit=20',
+      '/api/v1/users/me/sessions?limit=20&cursor=next-page',
+    ])
+  })
+
+  it('退出当前设备后清理受保护查询并返回登录页', async () => {
+    setWebSession({ session, accessToken: 'access-test', expiresIn: 1800 })
+    setWebUser(user)
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const { client } = renderApp(['/dashboard'])
+    client.setQueryData(['private-data', user.id], { userId: user.id })
+
+    fireEvent.click(screen.getByRole('button', { name: '退出登录' }))
+    fireEvent.click(await screen.findByRole('button', { name: '确认退出' }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: '欢迎回来' })).toBeInTheDocument())
+    expect(client.getQueryData(['private-data', user.id])).toBeUndefined()
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/auth/sessions/current')
+  })
+
+  it('撤销其他设备后保留当前登录并刷新设备列表', async () => {
+    setWebSession({ session, accessToken: 'access-test', expiresIn: 1800 })
+    setWebUser(user)
+    const other = { ...session, id: 'session-2', deviceName: '其他设备' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({ data: [session, other], meta: { requestId: 'request-1', nextCursor: null, hasMore: false } }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(jsonResponse({ data: [session], meta: { requestId: 'request-2', nextCursor: null, hasMore: false } }))
+    renderApp(['/dashboard'])
+
+    fireEvent.click(screen.getByRole('button', { name: '设备与会话' }))
+    await waitFor(() => expect(screen.getByText('其他设备')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: '撤销此设备' }))
+    fireEvent.click(screen.getByRole('button', { name: '确认撤销' }))
+    await waitFor(() => expect(screen.queryByText('其他设备')).not.toBeInTheDocument())
+    expect(getWebAuthSnapshot().user?.id).toBe(user.id)
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      '/api/v1/users/me/sessions?limit=20',
+      '/api/v1/users/me/sessions/session-2',
+      '/api/v1/users/me/sessions?limit=20',
+    ])
+  })
+
+  it('退出全部设备后清理认证态并返回登录页', async () => {
+    setWebSession({ session, accessToken: 'access-test', expiresIn: 1800 })
+    setWebUser(user)
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({ data: [session], meta: { requestId: 'request-1', nextCursor: null, hasMore: false } }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    renderApp(['/dashboard'])
+
+    fireEvent.click(screen.getByRole('button', { name: '设备与会话' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '退出全部设备' })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: '退出全部设备' }))
+    fireEvent.click(screen.getByRole('button', { name: '确认撤销' }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: '欢迎回来' })).toBeInTheDocument())
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      '/api/v1/users/me/sessions?limit=20',
+      '/api/v1/users/me/sessions',
+    ])
   })
 })

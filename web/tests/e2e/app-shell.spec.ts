@@ -27,6 +27,13 @@ function responseBody(body: unknown) {
 
 async function stubLogin(page: Page) {
   // 端到端用例只替换认证边界，仍通过页面真实表单和内存会话进入受保护路由。
+  await page.route('**/api/v1/auth/web/sessions/refresh', async (route) => {
+    await route.fulfill({
+      status: 401,
+      contentType: 'application/problem+json',
+      body: responseBody({ type: 'about:blank', title: 'Unauthorized', status: 401, code: 'AUTHENTICATION_REQUIRED', requestId: 'request-1' }),
+    })
+  })
   await page.route('**/api/v1/auth/web/sessions', async (route) => {
     await route.fulfill({
       status: 201,
@@ -53,6 +60,37 @@ test('应用壳登录后可进入总览并切换主题', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '总览基础设施已就绪' })).toBeVisible()
   await page.getByRole('button', { name: '切换到浅色主题', exact: true }).click()
   await expect(page.locator('html')).toHaveClass(/light/)
+})
+
+test('有效 Web 会话在访问受保护路由时恢复，并可从壳退出', async ({ page }) => {
+  await page.route('**/api/v1/auth/web/sessions/refresh', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: responseBody({ data: { session, accessToken: 'restored-access', expiresIn: 1800 }, meta: {} }) })
+  })
+  await page.route('**/api/v1/users/me', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: responseBody({ data: user, meta: {} }) })
+  })
+  await page.route('**/api/v1/auth/sessions/current', async (route) => {
+    await route.fulfill({ status: 204, body: '' })
+  })
+
+  await page.goto('/dashboard')
+  await expect(page.getByRole('heading', { name: '总览基础设施已就绪' })).toBeVisible()
+  await page.getByRole('button', { name: '退出登录' }).click()
+  await page.getByRole('button', { name: '确认退出' }).click()
+  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible()
+})
+
+test('设备会话管理入口可加载并标记当前设备', async ({ page }) => {
+  await stubLogin(page)
+  await page.route('**/api/v1/users/me/sessions?limit=20', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: responseBody({ data: [session], meta: { requestId: 'request-1', nextCursor: null, hasMore: false } }) })
+  })
+
+  await page.goto('/login')
+  await fillLogin(page)
+  await page.getByRole('button', { name: '设备与会话' }).click()
+  await expect(page.getByText('这是当前设备')).toBeVisible()
+  await expect(page.getByRole('button', { name: '退出全部设备' })).toBeVisible()
 })
 
 test('邮箱注册发送验证码并完成注册', async ({ page }) => {
