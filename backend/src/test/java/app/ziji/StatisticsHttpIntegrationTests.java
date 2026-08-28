@@ -129,6 +129,58 @@ class StatisticsHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			.andExpect(status().isUnauthorized());
 	}
 
+	@Test
+	void granularityBucketsAlignToCalendarRulesAndKeepDenseSeries() throws Exception {
+		User owner = user("stat-gran-owner");
+		String token = bearer(owner);
+		UUID bank = createAccount(token, "stat-gran-bank-0001", "ASSET", "BANK", "现金卡", "5000.00");
+		UUID expenseCategory = category(owner.id(), "EXPENSE");
+		// 2026-08-18（周二）支出 100、2026-08-20（周四）支出 200、2026-08-25（周二）支出 30。
+		postTransaction(token, "stat-gran-spend-0001", """
+			{"type":"EXPENSE","businessAt":"2026-08-18T02:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"100.00","currency":"CNY","categoryId":"%s"}
+			""".formatted(bank, expenseCategory));
+		postTransaction(token, "stat-gran-spend-0002", """
+			{"type":"EXPENSE","businessAt":"2026-08-20T02:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"200.00","currency":"CNY","categoryId":"%s"}
+			""".formatted(bank, expenseCategory));
+		postTransaction(token, "stat-gran-spend-0003", """
+			{"type":"EXPENSE","businessAt":"2026-08-25T02:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"30.00","currency":"CNY","categoryId":"%s"}
+			""".formatted(bank, expenseCategory));
+
+		// DAY：密集序列逐日归属，无事实日期也为 0。
+		mvc.perform(get("/api/v1/statistics/cash-flow")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.param("dateFrom", "2026-08-18").param("dateTo", "2026-08-20").param("granularity", "DAY"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.data.points[0].businessDate").value("2026-08-18"))
+			.andExpect(jsonPath("$.data.points[0].values.expense").value("100.00"))
+			.andExpect(jsonPath("$.data.points[1].businessDate").value("2026-08-19"))
+			.andExpect(jsonPath("$.data.points[1].values.expense").value("0.00"))
+			.andExpect(jsonPath("$.data.points[2].businessDate").value("2026-08-20"))
+			.andExpect(jsonPath("$.data.points[2].values.expense").value("200.00"));
+
+		// WEEK：桶起始对齐周一（date_trunc week），08-18/08-20 都落入 08-17 起始桶。
+		mvc.perform(get("/api/v1/statistics/cash-flow")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.param("dateFrom", "2026-08-18").param("dateTo", "2026-08-25").param("granularity", "WEEK"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.data.points[0].businessDate").value("2026-08-17"))
+			.andExpect(jsonPath("$.data.points[0].values.expense").value("300.00"))
+			.andExpect(jsonPath("$.data.points[1].businessDate").value("2026-08-24"))
+			.andExpect(jsonPath("$.data.points[1].values.expense").value("30.00"));
+
+		// YEAR：单桶覆盖全年，收支合计与明细一致。
+		mvc.perform(get("/api/v1/statistics/cash-flow")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.param("dateFrom", "2026-08-01").param("dateTo", "2026-09-30").param("granularity", "YEAR"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.data.points[0].businessDate").value("2026-01-01"))
+			.andExpect(jsonPath("$.data.points[0].values.expense").value("330.00"))
+			.andExpect(jsonPath("$.data.points[0].values.netCashFlow").value("-330.00"));
+	}
+
 	private User user(String suffix) {
 		UUID id = UUID.randomUUID();
 		String email = suffix + "-" + id + "@example.test";
