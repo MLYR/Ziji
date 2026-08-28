@@ -66,7 +66,8 @@ class SecurityConfiguration {
 				"/api/v1/accounts", "/api/v1/accounts/*", "/api/v1/accounts/*/liability-details",
 				"/api/v1/accounts/*/balance", "/api/v1/accounts/*/liquidity-holds",
 				"/api/v1/sync/changes", "/api/v1/transactions", "/api/v1/transactions/*",
-				"/api/v1/dashboard").authenticated()
+				"/api/v1/dashboard", "/api/v1/statistics/assets", "/api/v1/statistics/cash-flow",
+				"/api/v1/statistics/accounts").authenticated()
 			.requestMatchers(HttpMethod.PATCH, "/api/v1/users/me").authenticated()
 			.requestMatchers(HttpMethod.PATCH,
 				"/api/v1/accounts/*", "/api/v1/accounts/*/liability-details").authenticated()
@@ -137,6 +138,9 @@ class SecurityConfiguration {
 				|| "/api/v1/sync/changes".equals(path)
 				|| "/api/v1/transactions".equals(path)
 				|| "/api/v1/dashboard".equals(path)
+				|| "/api/v1/statistics/assets".equals(path)
+				|| "/api/v1/statistics/cash-flow".equals(path)
+				|| "/api/v1/statistics/accounts".equals(path)
 				|| path.matches("/api/v1/transactions/[^/]+")
 				|| path.matches("/api/v1/accounts/[^/]+")
 				|| path.matches("/api/v1/accounts/[^/]+/balance")

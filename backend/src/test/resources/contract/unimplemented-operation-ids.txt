@@ -40,11 +40,8 @@ getInvestmentPerformance
 getInvestmentOverview
 getInvestmentReturnCalendar
 getInvestmentReturnDayDetails
-getAssetStatistics
 getAssetChangeCalendar
 getAssetChangeDayDetails
-getCashFlowStatistics
-getAccountStatistics
 listExchangeRates
 createManualExchangeRate
 correctExchangeRate
