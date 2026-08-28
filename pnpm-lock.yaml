@@ -35,6 +35,9 @@ importers:
       expo-linking:
         specifier: 56.0.17
         version: 56.0.17(expo@56.0.20)(react-native@0.85.3(@babel/core@7.29.7)(@react-native/jest-preset@0.85.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
+      expo-local-authentication:
+        specifier: ~56.0.5
+        version: 56.0.5(expo@56.0.20)
       expo-router:
         specifier: 56.2.19
         version: 56.2.19(1c28defe842d16f6729d27631000ea5a)
@@ -3554,6 +3557,11 @@ packages:
     peerDependencies:
       react: '*'
       react-native: '*'
+
+  expo-local-authentication@56.0.5:
+    resolution: {integrity: sha512-VZOt20da5wIzOU3WgCrbFPvCFICsQnI5fWuQnpDZ7xzY75nnrRxDIcPdfMc7ryqOnxQmjTZx+eRWDA8Y+gDpNA==}
+    peerDependencies:
+      expo: '*'
 
   expo-modules-autolinking@56.0.22:
     resolution: {integrity: sha512-okvttTwsaDHzyRLp4/1qpkK2QV9gFIhp7qWZlIHzM4xCatoPSTT2dtvBD5VbXkf4whWUA7Y+DJy99hxnnUONYg==}
@@ -10389,6 +10397,11 @@ snapshots:
     transitivePeerDependencies:
       - expo
       - supports-color
+
+  expo-local-authentication@56.0.5(expo@56.0.20):
+    dependencies:
+      expo: 56.0.20(@babel/core@7.29.7)(@expo/dom-webview@56.0.6)(@expo/metro-runtime@56.0.20)(expo-router@56.2.19)(react-dom@19.2.3(react@19.2.3))(react-native-web@0.21.2(react-dom@19.2.3(react@19.2.3))(react@19.2.3))(react-native-worklets@0.8.3(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(react-native@0.85.3(@babel/core@7.29.7)(@react-native/jest-preset@0.85.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.3))(react@19.2.3))(react-native@0.85.3(@babel/core@7.29.7)(@react-native/jest-preset@0.85.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)(typescript@6.0.3)
+      invariant: 2.2.4
 
   expo-modules-autolinking@56.0.22(typescript@6.0.3):
     dependencies:

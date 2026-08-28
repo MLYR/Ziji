@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { AppState, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ApiClientError } from '@/api/api-client';
 import { mobileAuthenticationSession } from '@/auth/default-auth-session';
 import { createRegistrationIdempotencyKey, type MobileAuthenticationState } from '@/auth/auth-session';
+import { localBiometricLock, type LocalBiometricCapability, type LocalBiometricOutcome } from '@/auth/local-biometric-lock';
 import { useThemeStore } from '@/state/theme-store';
 import { SyncStatusPanel } from '@/sync/sync-status-panel';
 
 type AuthMode = 'LOGIN' | 'REGISTER';
 type FieldName = 'email' | 'password' | 'verificationCode' | 'nickname';
+// 本地生物识别锁门禁状态：CHECKING=启动检查中，LOCKED=凭据受本地锁保护未解锁，UNLOCKED=可正常恢复会话。
+type LocalLockStatus = 'CHECKING' | 'LOCKED' | 'UNLOCKED';
 
 function problemMessage(error: unknown): { message: string; fieldErrors: Partial<Record<FieldName, string>> } {
   if (error instanceof Error && error.name === 'SecureCredentialWriteError') {
@@ -28,6 +31,30 @@ function problemMessage(error: unknown): { message: string; fieldErrors: Partial
   return { message: rateLimit, fieldErrors };
 }
 
+// 锁定屏的失败提示：所有非 SUCCESS 结果都必须停留在本地锁定状态，不允许恢复会话。
+function localLockFailureMessage(outcome: LocalBiometricOutcome): string {
+  switch (outcome) {
+    case 'UNAVAILABLE': return '当前设备不支持生物识别，无法完成本地解锁，请重新登录后继续。';
+    case 'NOT_ENROLLED': return '当前设备未录入生物识别，请录入后重试，或重新登录。';
+    case 'CANCELLED': return '已取消生物识别验证，可重试或重新登录。';
+    case 'LOCKED_OUT': return '生物识别已被系统暂时锁定，请稍后重试，或重新登录。';
+    case 'ERROR': return '生物识别服务异常，请重试或重新登录。';
+    default: return '生物识别验证未通过，请重试。';
+  }
+}
+
+// 启用失败提示：任何失败都不得把本机锁偏好标记为已启用。
+function biometricEnableFailureMessage(outcome: LocalBiometricOutcome): string {
+  switch (outcome) {
+    case 'UNAVAILABLE': return '当前设备不支持生物识别，无法启用本地解锁。';
+    case 'NOT_ENROLLED': return '当前设备未录入生物识别，请先在系统设置中录入。';
+    case 'CANCELLED': return '已取消生物识别验证，未启用本地解锁。';
+    case 'LOCKED_OUT': return '生物识别已被系统暂时锁定，请稍后重试。';
+    case 'ERROR': return '生物识别服务异常，请稍后重试。';
+    default: return '生物识别验证未通过，未启用本地解锁。';
+  }
+}
+
 export default function AuthenticationScreen() {
   const [authentication, setAuthentication] = useState<MobileAuthenticationState>(() => mobileAuthenticationSession.getState());
   const [mode, setMode] = useState<AuthMode>('LOGIN');
@@ -39,14 +66,106 @@ export default function AuthenticationScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<FieldName, string>>>({});
+  const [localLockStatus, setLocalLockStatus] = useState<LocalLockStatus>('CHECKING');
+  const [localLockMessage, setLocalLockMessage] = useState<string | null>(null);
+  const [biometricEnabled, setBiometricEnabled] = useState(false);
+  const [biometricCapability, setBiometricCapability] = useState<LocalBiometricCapability | null>(null);
+  const [biometricCapabilityFailed, setBiometricCapabilityFailed] = useState(false);
+  const [biometricMessage, setBiometricMessage] = useState<string | null>(null);
   const registrationIdempotencyKey = useRef<string | null>(null);
+  // 本地锁代次：重新登录/退出使进行中的解锁结果失效，防止旧 unlock 完成后恢复已失效会话。
+  const lockGenerationRef = useRef(0);
+  // 冷启动本地锁解除后只允许补发一次现有 restore；前台重复解锁不得重复恢复会话。
+  const coldStartRestorePendingRef = useRef(false);
+  const requiresUnlockOnReturnRef = useRef(false);
+  // AppState 监听挂载一次即不再更新，锁偏好通过 ref 镜像供其读取，避免闭包读到陈旧值。
+  const biometricEnabledRef = useRef(false);
   const themePreference = useThemeStore((state) => state.preference);
   const setThemePreference = useThemeStore((state) => state.setPreference);
 
   useEffect(() => {
+    biometricEnabledRef.current = biometricEnabled;
+  }, [biometricEnabled]);
+
+  useEffect(() => {
     const unsubscribe = mobileAuthenticationSession.subscribe(setAuthentication);
-    void mobileAuthenticationSession.restore();
-    return unsubscribe;
+    let cancelled = false;
+    void (async () => {
+      let enabled: boolean;
+      try {
+        enabled = await localBiometricLock.isEnabled();
+      } catch {
+        // 本机锁设置读取失败时 fail-closed：按已启用处理，不允许直接读取刷新凭据恢复会话。
+        enabled = true;
+        if (!cancelled) setLocalLockMessage('无法读取本机生物识别设置，可重新登录后继续。');
+      }
+      if (cancelled) return;
+      setBiometricEnabled(enabled);
+      if (enabled) {
+        // 已启用本地锁：先停在本机解锁界面，验证成功前不得调用 restore 读取并使用刷新凭据。
+        coldStartRestorePendingRef.current = true;
+        setLocalLockStatus('LOCKED');
+        return;
+      }
+      setLocalLockStatus('UNLOCKED');
+      await mobileAuthenticationSession.restore();
+    })();
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (authentication.status !== 'AUTHENTICATED') return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const capability = await localBiometricLock.checkCapability();
+        if (cancelled) return;
+        setBiometricCapability(capability);
+        setBiometricCapabilityFailed(false);
+      } catch {
+        if (!cancelled) {
+          setBiometricCapability(null);
+          setBiometricCapabilityFailed(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authentication.status]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'background' || nextState === 'inactive') {
+        // 生物识别 prompt 自身会让应用进入 inactive；认证任务在途时不得标记重新锁定，避免递归弹框。
+        if (localBiometricLock.isAuthenticating()) return;
+        requiresUnlockOnReturnRef.current = true;
+        // 进入后台立即遮罩敏感内容，避免应用切换器快照和回前台渲染窗口泄露；只读进程内状态，不碰存储。
+        if (biometricEnabledRef.current && mobileAuthenticationSession.getState().status !== 'UNAUTHENTICATED') {
+          setLocalLockStatus('LOCKED');
+        }
+        return;
+      }
+      if (nextState !== 'active' || !requiresUnlockOnReturnRef.current) return;
+      requiresUnlockOnReturnRef.current = false;
+      void (async () => {
+        // 前台不自动弹原生认证框，只切到本机锁定界面；恢复敏感内容由用户显式点击解锁。
+        if (mobileAuthenticationSession.getState().status === 'UNAUTHENTICATED') return;
+        let enabled: boolean;
+        try {
+          enabled = await localBiometricLock.isEnabled();
+        } catch {
+          enabled = true;
+        }
+        if (!enabled) return;
+        setLocalLockMessage(null);
+        setLocalLockStatus('LOCKED');
+      })();
+    });
+    return () => subscription.remove();
   }, []);
 
   function updateField(field: FieldName, value: string): void {
@@ -66,6 +185,13 @@ export default function AuthenticationScreen() {
     try {
       if (mode === 'LOGIN') {
         await mobileAuthenticationSession.signIn(email, password);
+        try {
+          // 新登录主体不得继承上一主体的本机锁偏好，需要在新会话下重新主动启用。
+          await localBiometricLock.disable();
+          setBiometricEnabled(false);
+        } catch {
+          // 清除失败方向安全：下次启动仍会要求本地解锁，不会降低保护。
+        }
         return;
       }
 
@@ -82,6 +208,13 @@ export default function AuthenticationScreen() {
         registrationIdempotencyKey.current,
       );
       registrationIdempotencyKey.current = null;
+      try {
+        // 注册意味着新主体将接管设备，旧主体的本机锁偏好不得继续残留。
+        await localBiometricLock.disable();
+        setBiometricEnabled(false);
+      } catch {
+        // 清除失败方向安全：下次启动仍会要求本地解锁，不会降低保护。
+      }
       setMessage('注册成功，请使用邮箱和密码登录。');
       setMode('LOGIN');
       setVerificationCode('');
@@ -95,12 +228,85 @@ export default function AuthenticationScreen() {
   }
 
   async function signOut(): Promise<void> {
+    // 使进行中的解锁结果失效，防止旧 unlock 完成后恢复已失效会话。
+    lockGenerationRef.current += 1;
+    // 退出后不再存在“冷启动待补发的恢复”，新主体登录前不得复用旧门禁状态。
+    coldStartRestorePendingRef.current = false;
     setIsSubmitting(true);
     try {
       const result = await mobileAuthenticationSession.signOut();
+      if (result.localCredentialsCleared) {
+        try {
+          // 本机凭据已清除时锁偏好一并清除；凭据清除失败则保留本地锁，继续保护遗留凭据。
+          await localBiometricLock.disable();
+          setBiometricEnabled(false);
+        } catch {
+          // 锁偏好清除失败仅影响下次启动的本地解锁提示，方向安全。
+        }
+      }
+      setLocalLockStatus('UNLOCKED');
+      setLocalLockMessage(null);
+      setBiometricMessage(null);
       setMessage(result.localCredentialsCleared
         ? result.remoteSessionRevoked ? '已退出当前设备。' : '已安全退出本机；服务端会话将在恢复网络后失效。'
         : '本机安全凭据未能清除，请解锁设备后重试。');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function unlockLocalLock(): Promise<void> {
+    const generation = lockGenerationRef.current;
+    setIsSubmitting(true);
+    setLocalLockMessage(null);
+    try {
+      const outcome = await localBiometricLock.unlock();
+      if (generation !== lockGenerationRef.current) return;
+      if (outcome !== 'SUCCESS') {
+        setLocalLockMessage(localLockFailureMessage(outcome));
+        return;
+      }
+      setLocalLockMessage(null);
+      setLocalLockStatus('UNLOCKED');
+      if (coldStartRestorePendingRef.current) {
+        // 本地解锁成功后才允许读取刷新凭据恢复会话，且整个冷启动只补发一次 restore。
+        coldStartRestorePendingRef.current = false;
+        await mobileAuthenticationSession.restore();
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function enableBiometric(): Promise<void> {
+    setIsSubmitting(true);
+    setBiometricMessage(null);
+    try {
+      const outcome = await localBiometricLock.enable();
+      if (outcome !== 'SUCCESS') {
+        setBiometricMessage(biometricEnableFailureMessage(outcome));
+        return;
+      }
+      setBiometricEnabled(true);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function disableBiometric(): Promise<void> {
+    setIsSubmitting(true);
+    setBiometricMessage(null);
+    try {
+      // 关闭本地锁前要求一次生物识别验证；设备已不可用或未录入时没有可验证对象，直接允许关闭。
+      const outcome = await localBiometricLock.unlock();
+      if (outcome !== 'SUCCESS' && outcome !== 'UNAVAILABLE' && outcome !== 'NOT_ENROLLED') {
+        setBiometricMessage('关闭生物识别解锁前需要先完成本地验证。');
+        return;
+      }
+      await localBiometricLock.disable();
+      setBiometricEnabled(false);
+    } catch {
+      setBiometricMessage('无法更新本机生物识别设置，请解锁设备后重试。');
     } finally {
       setIsSubmitting(false);
     }
@@ -135,11 +341,85 @@ export default function AuthenticationScreen() {
           <Text className="mt-3 text-base leading-6 text-muted-light dark:text-muted-dark">登录后继续查看资金全貌。</Text>
         </View>
 
-        {isAuthenticated ? (
+        {localLockStatus === 'CHECKING' ? (
+          // 本机锁状态确认前只显示中性占位，既不能直通已认证面板，也不闪烁登录表单。
+          <View className="my-10" accessibilityLiveRegion="polite">
+            <Text className="text-base text-muted-light dark:text-muted-dark">正在准备安全环境…</Text>
+          </View>
+        ) : localLockStatus === 'LOCKED' ? (
+          <View className="my-10 rounded-xl bg-surface-light p-5 dark:bg-surface-dark" accessibilityLiveRegion="polite">
+            <Text className="text-xl font-bold text-ink-light dark:text-ink-dark">资迹已锁定</Text>
+            <Text className="mt-2 text-base text-muted-light dark:text-muted-dark">使用生物识别验证后才能继续查看内容。</Text>
+            {localLockMessage ? <Text className="mt-3 text-sm leading-5 text-muted-light dark:text-muted-dark" accessibilityRole="alert">{localLockMessage}</Text> : null}
+            <Pressable
+              accessibilityLabel="使用生物识别解锁"
+              accessibilityRole="button"
+              accessibilityState={{ disabled: isSubmitting }}
+              className={`mt-5 min-h-11 items-center justify-center rounded-lg bg-accent ${isSubmitting ? 'opacity-50' : 'active:opacity-70'}`}
+              disabled={isSubmitting}
+              onPress={() => void unlockLocalLock()}
+              testID="biometric-unlock"
+            >
+              <Text className="font-bold text-canvas-dark">使用生物识别解锁</Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel="重新登录"
+              accessibilityRole="button"
+              // 原生认证框在途时也必须可回退重新登录；并发安全由本地锁代次与 signOut 内部保证。
+              className="mt-3 min-h-11 items-center justify-center rounded-lg border border-accent active:opacity-70"
+              onPress={() => void signOut()}
+              testID="biometric-relogin"
+            >
+              <Text className="font-semibold text-ink-light dark:text-ink-dark">重新登录</Text>
+            </Pressable>
+          </View>
+        ) : isAuthenticated ? (
           <View className="my-10 rounded-xl bg-surface-light p-5 dark:bg-surface-dark" accessibilityLiveRegion="polite">
             <Text className="text-xl font-bold text-ink-light dark:text-ink-dark">已安全登录</Text>
             <Text className="mt-2 text-base text-muted-light dark:text-muted-dark">当前设备：{authentication.session?.deviceName}</Text>
             {authentication.userId ? <SyncStatusPanel userId={authentication.userId} /> : null}
+            <View className="mt-5 border-t border-canvas-light pt-4 dark:border-canvas-dark">
+              <Text className="text-base font-semibold text-ink-light dark:text-ink-dark">本机生物识别解锁</Text>
+              {biometricEnabled ? (
+                <>
+                  <Text className="mt-2 text-sm text-muted-light dark:text-muted-dark">生物识别解锁已开启，下次进入应用需要先完成本地验证。</Text>
+                  <Pressable
+                    accessibilityLabel="关闭生物识别解锁"
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: isSubmitting }}
+                    className={`mt-3 min-h-11 items-center justify-center rounded-lg border border-accent ${isSubmitting ? 'opacity-50' : 'active:opacity-70'}`}
+                    disabled={isSubmitting}
+                    onPress={() => void disableBiometric()}
+                    testID="biometric-disable"
+                  >
+                    <Text className="font-semibold text-ink-light dark:text-ink-dark">关闭生物识别解锁</Text>
+                  </Pressable>
+                </>
+              ) : biometricCapability?.hasHardware && biometricCapability.isEnrolled ? (
+                <Pressable
+                  accessibilityLabel="启用生物识别解锁"
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: isSubmitting }}
+                  className={`mt-3 min-h-11 items-center justify-center rounded-lg border border-accent ${isSubmitting ? 'opacity-50' : 'active:opacity-70'}`}
+                  disabled={isSubmitting}
+                  onPress={() => void enableBiometric()}
+                  testID="biometric-enable"
+                >
+                  <Text className="font-semibold text-ink-light dark:text-ink-dark">启用生物识别解锁</Text>
+                </Pressable>
+              ) : (
+                <Text className="mt-2 text-sm text-muted-light dark:text-muted-dark">
+                  {biometricCapabilityFailed
+                    ? '暂时无法检测本机生物识别能力，请稍后重试。'
+                    : biometricCapability === null
+                      ? '正在检测本机生物识别能力…'
+                      : !biometricCapability.hasHardware
+                        ? '当前设备不支持生物识别，无法启用本地解锁。'
+                        : '当前设备未录入生物识别，请先在系统设置中录入后再启用。'}
+                </Text>
+              )}
+              {biometricMessage ? <Text className="mt-3 text-sm leading-5 text-muted-light dark:text-muted-dark" accessibilityRole="alert">{biometricMessage}</Text> : null}
+            </View>
             <Pressable
               accessibilityLabel="退出当前设备"
               accessibilityRole="button"
