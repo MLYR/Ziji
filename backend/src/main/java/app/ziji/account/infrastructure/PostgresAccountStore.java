@@ -208,7 +208,7 @@ public class PostgresAccountStore implements AccountStore, AccountQueryReadPort,
 	}
 
 	@Override
-	public List<ClassSummary> listClassSummariesByIds(Collection<UUID> accountIds) {
+	public List<ClassSummary> listClassSummariesByIds(Collection<UUID> accountIds, Instant asOf) {
 		if (accountIds == null || accountIds.isEmpty()) {
 			return List.of();
 		}
@@ -219,8 +219,20 @@ public class PostgresAccountStore implements AccountStore, AccountQueryReadPort,
 			WHERE status = 'ACTIVE' AND id IN (%s)
 			ORDER BY created_at DESC, id DESC
 			""".formatted(placeholders);
+		List<Object> bindings = new ArrayList<>(ids);
+		if (asOf != null) {
+			// 历史时点重建：asOf 前创建且尚未归档的账户才可见，之后归档的账户仍参与统计。
+			sql = """
+				SELECT id, account_class, currency FROM accounts
+				WHERE id IN (%s) AND created_at <= CAST(? AS timestamptz)
+					AND (archived_at IS NULL OR archived_at > CAST(? AS timestamptz))
+				ORDER BY created_at DESC, id DESC
+				""".formatted(placeholders);
+			bindings.add(utc(asOf));
+			bindings.add(utc(asOf));
+		}
 		try {
-			return dsl.resultQuery(sql, ids.toArray()).fetch(record -> new ClassSummary(
+			return dsl.resultQuery(sql, bindings.toArray()).fetch(record -> new ClassSummary(
 				record.get("id", UUID.class),
 				record.get("account_class", String.class),
 				record.get("currency", String.class)));

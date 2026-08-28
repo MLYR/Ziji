@@ -18,7 +18,7 @@ import jakarta.servlet.http.HttpServletResponse;
 
 import java.security.Principal;
 
-/** GET /api/v1/dashboard：只读当前指标；历史 projectionAsOf 语义由后续统计任务实现。 */
+/** GET /api/v1/dashboard：只读指标；asOf 为空返回当前，非空按该 UTC 时点从事实重建历史指标。 */
 @RestController
 public class DashboardController {
 
@@ -34,15 +34,25 @@ public class DashboardController {
 
 	@GetMapping(path = "/api/v1/dashboard", name = "getDashboard")
 	public ResponseEntity<DashboardEnvelope> getDashboard(
-		@RequestParam(name = "asOf", required = false) Instant asOf,
+		@RequestParam(name = "asOf", required = false) String asOf,
 		Principal principal,
 		HttpServletResponse response) {
+		// 身份解析先于参数校验，保持认证错误不被 asOf 参数覆盖。
 		UUID userId = currentUserIdResolver.resolve(principal);
-		if (asOf != null) {
-			throw new app.ziji.statistics.application.DashboardValidationException("Dashboard 暂不支持历史估值时点。");
-		}
-		DashboardResult result = dashboard.getDashboard(userId);
+		Instant requestedAsOf = parseAsOf(asOf);
+		DashboardResult result = dashboard.getDashboard(userId, requestedAsOf);
 		return ResponseEntity.ok(new DashboardEnvelope(view(result), new ResponseMeta(requestId(response))));
+	}
+
+	private Instant parseAsOf(String rawAsOf) {
+		if (rawAsOf == null || rawAsOf.isBlank()) {
+			return null;
+		}
+		try {
+			return Instant.parse(rawAsOf);
+		} catch (RuntimeException exception) {
+			throw new app.ziji.statistics.application.DashboardValidationException("asOf 必须是合法的 UTC 时刻。");
+		}
 	}
 
 	private DashboardView view(DashboardResult result) {

@@ -57,6 +57,12 @@ class DashboardHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			{"type":"EXPENSE","businessAt":"2026-08-18T02:00:00Z","timezone":"Asia/Shanghai",
 			 "accountId":"%s","amount":"300.00","currency":"CNY","categoryId":"%s"}
 			""".formatted(card, expenseCategory));
+		// 第二笔支出业务日期在真实时钟 +10 天，用于验证 projectionAsOf 的业务日期截止。
+		String futureBusinessAt = Instant.now().plusSeconds(10 * 24 * 3600).truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+		postTransaction(token, "dash-golden-spend-0002", """
+			{"type":"EXPENSE","businessAt":"%s","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"200.00","currency":"CNY","categoryId":"%s"}
+			""".formatted(futureBusinessAt, card, expenseCategory));
 
 		drainOutbox();
 		MvcResult result = mvc.perform(get("/api/v1/dashboard")
@@ -67,7 +73,7 @@ class DashboardHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			.andExpect(jsonPath("$.data.asOf").isNotEmpty())
 			.andExpect(jsonPath("$.data.valuationRevision").value(1))
 			.andExpect(jsonPath("$.data.projectionStatus").value("CURRENT"))
-			// 总资产 = 普通资产 20,000 + 投资券商现金 50,000 − 信用卡消费 300；美元账户不按 0/1 折算。
+			// 总资产 = 普通资产 20,000 + 投资券商现金 50,000；信用卡消费只增加负债；美元账户不按 0/1 折算。
 			.andExpect(jsonPath("$.data.summary.totalAssets").value("70000.00"))
 			// 可用资金只包含普通 ASSET 账户可用余额：20,000；投资与负债不计入。
 			.andExpect(jsonPath("$.data.summary.availableFunds").value("20000.00"))
@@ -95,11 +101,24 @@ class DashboardHttpIntegrationTests extends PostgresIntegrationTestSupport {
 		long asOfSequence = json(result).at("/data/asOfSequence").asLong();
 		assertTrue(asOfSequence >= 1, "outbox 消费后 asOfSequence 应至少为 1");
 
-		// 未认证请求继续 fail closed；历史估值时点尚未提供，显式 400 而非静默按当前值返回。
+		// 未认证请求继续 fail closed；非法 asOf 显式 400。
 		mvc.perform(get("/api/v1/dashboard")).andExpect(status().isUnauthorized());
 		mvc.perform(get("/api/v1/dashboard").header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
-				.param("asOf", "2026-08-18T00:00:00Z"))
+				.param("asOf", "not-a-timestamp"))
 			.andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+		// projectionAsOf：asOf = 真实时钟 +15 天，晚于第二笔支出业务日期（+10 天）但早于未来更多事实，
+		// 该时点负债含第二笔支出（2,500、净资产 67,500），与当前值（未来业务日期未到期，2,300）不同。
+		String historicalAsOf = Instant.now().plusSeconds(15 * 24 * 3600).truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+		mvc.perform(get("/api/v1/dashboard").header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.param("asOf", historicalAsOf))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.data.asOf").value(historicalAsOf))
+			.andExpect(jsonPath("$.data.summary.totalAssets").value("70000.00"))
+			.andExpect(jsonPath("$.data.summary.totalLiabilities").value("2500.00"))
+			.andExpect(jsonPath("$.data.summary.netAssets").value("67500.00"))
+			.andExpect(jsonPath("$.data.dataQualityWarnings[0].code").value("MISSING_EXCHANGE_RATES"))
+			.andExpect(jsonPath("$.data.dataQualityWarnings[0].affectedCount").value(1));
 
 		// 归档美元账户后统计立即排除，质量告警随之消失。
 		mvc.perform(post("/api/v1/accounts/" + usdBank + "/archive")

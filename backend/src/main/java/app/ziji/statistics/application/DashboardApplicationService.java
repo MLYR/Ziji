@@ -41,7 +41,7 @@ public class DashboardApplicationService implements DashboardQueryUseCase {
 	/** 账户摘要直接复用 account 公开端口的 ClassSummary，不引入 account 领域类型。 */
 	public interface AccountQueryPort {
 
-		List<AccountQueryReadPort.ClassSummary> listActiveByIds(List<UUID> accountIds);
+		List<AccountQueryReadPort.ClassSummary> listActiveByIds(List<UUID> accountIds, Instant asOf);
 	}
 
 	public DashboardApplicationService(
@@ -68,13 +68,15 @@ public class DashboardApplicationService implements DashboardQueryUseCase {
 	}
 
 	@Override
-	public DashboardResult getDashboard(UUID userId) {
+	public DashboardResult getDashboard(UUID userId, Instant requestedAsOf) {
 		if (userId == null) {
 			throw new DashboardValidationException("Dashboard 需要当前用户。");
 		}
 		// 全部事实读取共享一个数据库快照，避免余额与占用聚合读到不同时刻的事实。
 		return snapshots.read(() -> {
-			Instant asOf = clock.instant();
+			// projectionAsOf：显式时点重建历史指标；缺省时为当前时刻。余额按业务日期截止，
+			// 账户按 asOf 前创建且未归档过滤，序列按 changed_at ≤ asOf 截止，同一事实快照内一致。
+			Instant asOf = requestedAsOf == null ? clock.instant() : requestedAsOf;
 			String baseCurrency = baseCurrencies.currentBaseCurrency(userId);
 			CurrencyCode base = CurrencyCode.fromCode(baseCurrency);
 
@@ -86,7 +88,7 @@ public class DashboardApplicationService implements DashboardQueryUseCase {
 				}
 			}
 			List<AccountQueryReadPort.ClassSummary> accounts = includedAccountIds.isEmpty()
-				? List.of() : this.accounts.listActiveByIds(includedAccountIds);
+				? List.of() : this.accounts.listActiveByIds(includedAccountIds, asOf);
 
 			BigDecimal totalAssets = BigDecimal.ZERO;
 			BigDecimal availableFunds = BigDecimal.ZERO;
@@ -145,7 +147,7 @@ public class DashboardApplicationService implements DashboardQueryUseCase {
 				warnings.add(new DashboardResult.QualityWarning(WARNING_MISSING_EXCHANGE_RATES, missingRateCount));
 			}
 			return new DashboardResult(
-				baseCurrency, asOf, changeSequences.latestSequence(userId), 1, asOf, "CURRENT",
+				baseCurrency, asOf, changeSequences.latestSequence(userId, asOf), 1, asOf, "CURRENT",
 				summary, attribution, List.of(), investmentOverview, warnings);
 		});
 	}

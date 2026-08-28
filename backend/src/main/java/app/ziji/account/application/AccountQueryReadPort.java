@@ -17,8 +17,14 @@ public interface AccountQueryReadPort {
 		AccountKeysetPosition after,
 		int maximumRecords);
 
-	/** 跨模块汇总读取的账户分类摘要；只暴露分类与币种，不把领域模型泄漏到其他模块。 */
-	List<ClassSummary> listClassSummariesByIds(Collection<UUID> accountIds);
+	/**
+	 * 跨模块汇总读取的账户分类摘要；只暴露分类与币种，不把领域模型泄漏到其他模块。
+	 * asOf 非空时按历史时点过滤：asOf 前创建且尚未归档的账户才参与统计。
+	 * 保留 default 抛错以兼容既有测试替身，真实 PostgreSQL 实现必须覆盖。
+	 */
+	default List<ClassSummary> listClassSummariesByIds(Collection<UUID> accountIds, java.time.Instant asOf) {
+		throw new UnsupportedOperationException("账户分类摘要读取未实现。");
+	}
 
 	record ClassSummary(UUID accountId, String accountClass, String currency) {
 
