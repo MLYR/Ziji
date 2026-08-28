@@ -62,8 +62,16 @@ test('应用壳登录后可进入总览并切换主题', async ({ page }) => {
   await expect(page.locator('html')).toHaveClass(/light/)
 })
 
-test('有效 Web 会话在访问受保护路由时恢复，并可从壳退出', async ({ page }) => {
+test('有效 Web 会话在浏览器硬刷新后恢复，并可从壳退出', async ({ page, context }) => {
+  await context.addCookies([
+    { name: 'ziji_refresh', value: 'opaque-refresh-test-value', url: 'http://127.0.0.1:4175', httpOnly: true, sameSite: 'Strict' },
+    { name: 'ziji_csrf', value: 'csrf-test', url: 'http://127.0.0.1:4175', sameSite: 'Strict' },
+  ])
+  let refreshCount = 0
   await page.route('**/api/v1/auth/web/sessions/refresh', async (route) => {
+    refreshCount += 1
+    expect(route.request().headers()['x-csrf-token']).toBe('csrf-test')
+    expect(route.request().headers().cookie).toContain('ziji_refresh=opaque-refresh-test-value')
     await route.fulfill({ status: 200, contentType: 'application/json', body: responseBody({ data: { session, accessToken: 'restored-access', expiresIn: 1800 }, meta: {} }) })
   })
   await page.route('**/api/v1/users/me', async (route) => {
@@ -75,6 +83,9 @@ test('有效 Web 会话在访问受保护路由时恢复，并可从壳退出', 
 
   await page.goto('/dashboard')
   await expect(page.getByRole('heading', { name: '总览基础设施已就绪' })).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('heading', { name: '总览基础设施已就绪' })).toBeVisible()
+  expect(refreshCount).toBe(2)
   await page.getByRole('button', { name: '退出登录' }).click()
   await page.getByRole('button', { name: '确认退出' }).click()
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible()

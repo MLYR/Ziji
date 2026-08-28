@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { StrictMode } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -36,7 +37,7 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
 
 function renderApp(initialEntries: string[]) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const view = render(<MemoryRouter initialEntries={initialEntries}><QueryClientProvider client={client}><App /></QueryClientProvider></MemoryRouter>)
+  const view = render(<StrictMode><MemoryRouter initialEntries={initialEntries}><QueryClientProvider client={client}><App /></QueryClientProvider></MemoryRouter></StrictMode>)
   return { ...view, client }
 }
 

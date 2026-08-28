@@ -34,6 +34,11 @@ export function setWebSession(data: WebSessionData) {
   })
 }
 
+export function beginWebSession(data: WebSessionData) {
+  // 新登录可能切换主体；先移除旧用户，待 /users/me 确认新主体后才允许挂载受保护页面。
+  publish({ accessToken: data.accessToken, session: data.session, user: null, status: 'recovering' })
+}
+
 export function setWebAccessToken(accessToken: string) {
   // 允许 API client 测试和后续会话恢复只更新短期凭据，不引入持久化存储。
   publish({ ...snapshot, accessToken })

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { clearWebSession, getWebAuthSnapshot, setWebAccessToken } from '@/auth/auth-session'
+import { beginWebSession, clearWebSession, getWebAuthSnapshot, setWebAccessToken, setWebSession } from '@/auth/auth-session'
+import { createWebSession, refreshWebSession } from '@/auth/auth-api'
 import { ApiClientError, apiRequest } from './api-client'
 
 function jsonResponse(body: unknown, status = 200) {
@@ -112,6 +113,102 @@ describe('Web API client', () => {
 
     await expect(Promise.all([first, second])).resolves.toEqual([{ id: '/api/v1/one' }, { id: '/api/v1/two' }])
     expect(fetchMock.mock.calls.filter(([path]) => path === '/api/v1/auth/web/sessions/refresh')).toHaveLength(1)
+  })
+
+  it('迟到的旧 Token 401 复用已恢复的会话而不再次轮换', async () => {
+    setWebSession({ session: { id: 'session-1', deviceName: 'Web', createdAt: '2026-08-28T00:00:00Z', lastSeenAt: '2026-08-28T00:00:00Z', status: 'ACTIVE' }, accessToken: 'expired-access', expiresIn: 1800 })
+    let releaseLateFailure!: (response: Response) => void
+    const lateFailure = new Promise<Response>((resolve) => { releaseLateFailure = resolve })
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((path, request) => {
+      const authorization = new Headers(request?.headers).get('Authorization')
+      if (path === '/api/v1/auth/web/sessions/refresh') {
+        return Promise.resolve(jsonResponse({ data: { session: { id: 'session-1' }, accessToken: 'fresh-access', expiresIn: 1800 }, meta: {} }))
+      }
+      if (path === '/api/v1/two' && authorization === 'Bearer expired-access') return lateFailure
+      return Promise.resolve(authorization === 'Bearer fresh-access'
+        ? jsonResponse({ id: String(path) })
+        : jsonResponse(authenticationRequired, 401))
+    })
+
+    const lateRequest = apiRequest('/api/v1/two')
+    await expect(apiRequest('/api/v1/one')).resolves.toEqual({ id: '/api/v1/one' })
+    releaseLateFailure(jsonResponse(authenticationRequired, 401))
+
+    await expect(lateRequest).resolves.toEqual({ id: '/api/v1/two' })
+    expect(fetchMock.mock.calls.filter(([path]) => path === '/api/v1/auth/web/sessions/refresh')).toHaveLength(1)
+  })
+
+  it('认证重放覆盖调用方传入的旧 Bearer', async () => {
+    setWebAccessToken('expired-access')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((path, request) => {
+      if (path === '/api/v1/auth/web/sessions/refresh') {
+        return Promise.resolve(jsonResponse({ data: { session: { id: 'session-1' }, accessToken: 'fresh-access', expiresIn: 1800 }, meta: {} }))
+      }
+      return Promise.resolve(new Headers(request?.headers).get('Authorization') === 'Bearer fresh-access'
+        ? jsonResponse({ id: 'ok' })
+        : jsonResponse(authenticationRequired, 401))
+    })
+
+    await expect(apiRequest('/api/v1/example', { headers: { Authorization: 'Bearer caller-supplied-old-token' } })).resolves.toEqual({ id: 'ok' })
+
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get('Authorization')).toBe('Bearer expired-access')
+    expect(new Headers(fetchMock.mock.calls[2]?.[1]?.headers).get('Authorization')).toBe('Bearer fresh-access')
+  })
+
+  it('启动恢复与 401 恢复共享同一个 Refresh 协调器', async () => {
+    setWebAccessToken('expired-access')
+    let releaseRefresh!: (response: Response) => void
+    const refreshPending = new Promise<Response>((resolve) => { releaseRefresh = resolve })
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((path, request) => {
+      if (path === '/api/v1/auth/web/sessions/refresh') return refreshPending
+      return Promise.resolve(new Headers(request?.headers).get('Authorization') === 'Bearer fresh-access'
+        ? jsonResponse({ id: 'ok' })
+        : jsonResponse(authenticationRequired, 401))
+    })
+
+    const initialization = refreshWebSession()
+    const request = apiRequest('/api/v1/example')
+    await vi.waitFor(() => expect(fetchMock.mock.calls.filter(([path]) => path === '/api/v1/auth/web/sessions/refresh')).toHaveLength(1))
+    releaseRefresh(jsonResponse({ data: { session: { id: 'session-1' }, accessToken: 'fresh-access', expiresIn: 1800 }, meta: {} }))
+
+    await expect(Promise.all([initialization, request])).resolves.toEqual([
+      { session: { id: 'session-1' }, accessToken: 'fresh-access', expiresIn: 1800 },
+      { id: 'ok' },
+    ])
+  })
+
+  it('主体切换后不以新主体身份重放旧请求', async () => {
+    setWebSession({ session: { id: 'session-a', deviceName: 'A', createdAt: '2026-08-28T00:00:00Z', lastSeenAt: '2026-08-28T00:00:00Z', status: 'ACTIVE' }, accessToken: 'access-a', expiresIn: 1800 })
+    let releaseOldFailure!: (response: Response) => void
+    const oldFailure = new Promise<Response>((resolve) => { releaseOldFailure = resolve })
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(() => oldFailure)
+
+    const oldRequest = apiRequest('/api/v1/users/me', { method: 'PATCH', body: { nickname: 'A 的请求' }, headers: { 'Idempotency-Key': 'a-key' } })
+    beginWebSession({ session: { id: 'session-b', deviceName: 'B', createdAt: '2026-08-28T00:00:00Z', lastSeenAt: '2026-08-28T00:00:00Z', status: 'ACTIVE' }, accessToken: 'access-b', expiresIn: 1800 })
+    releaseOldFailure(jsonResponse(authenticationRequired, 401))
+
+    await expect(oldRequest).rejects.toBeInstanceOf(ApiClientError)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('新登录等待在飞 Refresh 结算，确保新会话最后写入', async () => {
+    setWebSession({ session: { id: 'session-a', deviceName: 'A', createdAt: '2026-08-28T00:00:00Z', lastSeenAt: '2026-08-28T00:00:00Z', status: 'ACTIVE' }, accessToken: 'access-a', expiresIn: 1800 })
+    let releaseRefresh!: (response: Response) => void
+    const refreshPending = new Promise<Response>((resolve) => { releaseRefresh = resolve })
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((path) => {
+      if (path === '/api/v1/auth/web/sessions/refresh') return refreshPending
+      return Promise.resolve(jsonResponse({ data: { session: { id: 'session-b', deviceName: 'B', createdAt: '2026-08-28T00:00:00Z', lastSeenAt: '2026-08-28T00:00:00Z', status: 'ACTIVE' }, accessToken: 'access-b', expiresIn: 1800 }, meta: {} }, 201))
+    })
+
+    const refreshing = refreshWebSession()
+    const login = createWebSession({ email: 'b@example.com', password: 'correct-password', deviceName: 'B' }, beginWebSession)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    releaseRefresh(jsonResponse({ data: { session: { id: 'session-a', deviceName: 'A', createdAt: '2026-08-28T00:00:00Z', lastSeenAt: '2026-08-28T00:00:00Z', status: 'ACTIVE' }, accessToken: 'fresh-a', expiresIn: 1800 }, meta: {} }))
+
+    await refreshing
+    await login
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/v1/auth/web/sessions/refresh', '/api/v1/auth/web/sessions'])
+    expect(getWebAuthSnapshot()).toMatchObject({ accessToken: 'access-b', session: { id: 'session-b' }, user: null })
   })
 
   it('Refresh 认证终态清理内存态且不递归重试', async () => {

@@ -1,6 +1,6 @@
 import type { components, operations } from '@ziji/api-types'
 
-import { apiRequest } from '@/lib/api-client'
+import { apiRequest, refreshAccessSession, runWithWebSessionTransition } from '@/lib/api-client'
 
 export type EmailChallengeRequest = components['schemas']['EmailChallengeRequest']
 export type RegisterRequest = components['schemas']['RegisterRequest']
@@ -28,11 +28,15 @@ export function registerUser(body: RegisterRequest, idempotencyKey: string) {
   })
 }
 
-export function createWebSession(body: LoginRequest) {
-  return apiRequest<WebSessionEnvelope>('/api/v1/auth/web/sessions', {
-    method: 'POST',
-    auth: false,
-    body,
+export function createWebSession(body: LoginRequest, activateSession: (data: WebSessionEnvelope['data']) => void) {
+  return runWithWebSessionTransition(async () => {
+    const session = await apiRequest<WebSessionEnvelope>('/api/v1/auth/web/sessions', {
+      method: 'POST',
+      auth: false,
+      body,
+    })
+    activateSession(session.data)
+    return session
   })
 }
 
@@ -58,18 +62,14 @@ export function getCurrentUser(retryAuthentication = true) {
 }
 
 export function refreshWebSession() {
-  return apiRequest<WebSessionEnvelope>('/api/v1/auth/web/sessions/refresh', {
-    method: 'POST',
-    auth: false,
-    retryAuthentication: false,
-  })
+  return refreshAccessSession()
 }
 
 export function revokeCurrentSession() {
-  return apiRequest<void>('/api/v1/auth/sessions/current', {
+  return runWithWebSessionTransition(() => apiRequest<void>('/api/v1/auth/sessions/current', {
     method: 'DELETE',
     retryAuthentication: false,
-  })
+  }))
 }
 
 export function listUserSessions(cursor?: string) {
@@ -83,7 +83,7 @@ export function revokeUserSession(sessionId: string) {
 }
 
 export function revokeAllUserSessions() {
-  return apiRequest<void>('/api/v1/users/me/sessions', { method: 'DELETE' })
+  return runWithWebSessionTransition(() => apiRequest<void>('/api/v1/users/me/sessions', { method: 'DELETE', retryAuthentication: false }))
 }
 
 export function createIdempotencyKey() {

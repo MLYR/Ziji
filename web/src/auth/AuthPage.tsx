@@ -1,4 +1,5 @@
 import type { FormEvent, MutableRefObject, ReactNode } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
@@ -31,7 +32,7 @@ import {
   registerUser,
   resetPassword,
 } from './auth-api'
-import { clearWebSession, setWebSession, setWebUser, useWebAuth } from './auth-session'
+import { beginWebSession, clearWebSession, setWebUser, useWebAuth } from './auth-session'
 import { cn } from '@/lib/utils'
 import { useUiStore } from '@/stores/ui-store'
 
@@ -299,6 +300,7 @@ function AuthLayout({ children, description, title }: { children: ReactNode; des
 
 function LoginForm() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const refs = useRef<Partial<Record<AuthFieldName, HTMLInputElement | null>>>({})
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -322,9 +324,12 @@ function LoginForm() {
     setError(null)
     setFieldErrors({})
     try {
-      const session = await createWebSession({ email: email.trim(), password, deviceName: WEB_DEVICE_NAME })
+      const session = await createWebSession({ email: email.trim(), password, deviceName: WEB_DEVICE_NAME }, (data) => {
+        // 在写入新主体的 Access Token 前同步清除旧主体的服务端缓存。
+        queryClient.clear()
+        beginWebSession(data)
+      })
       if (!session.data?.accessToken) throw new Error('登录响应无效')
-      setWebSession(session.data)
       const profile = await getCurrentUser()
       setWebUser(profile.data)
       navigate('/dashboard', { replace: true })
