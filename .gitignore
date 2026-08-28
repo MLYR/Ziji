@@ -53,3 +53,4 @@ temp/
 /.workbuddy/
 /outputs/
 .mimosa/hook-state
+.mimosa/
