@@ -57,7 +57,8 @@ public class PostgresCategoryRepository implements CategoryQueryReadPort, Catego
 		UUID accountId,
 		CategoryType categoryType,
 		UUID parentId,
-		String nameNormalized) {
+		String nameNormalized,
+		UUID excludeCategoryId) {
 		if (categoryType == null || nameNormalized == null) {
 			throw new CategoryPersistenceException(new IllegalArgumentException("分类唯一性预检参数无效。"));
 		}
@@ -73,11 +74,27 @@ public class PostgresCategoryRepository implements CategoryQueryReadPort, Catego
 					  AND COALESCE(parent_id, '00000000-0000-0000-0000-000000000000'::uuid)
 						= COALESCE(?, '00000000-0000-0000-0000-000000000000'::uuid)
 					  AND name_normalized = ?
+					  AND (?::uuid IS NULL OR id <> ?::uuid)
 				)
-				""", Boolean.class, ownerUserId, accountId, categoryType.name(), parentId, nameNormalized);
+				""", Boolean.class, ownerUserId, accountId, categoryType.name(), parentId, nameNormalized,
+				excludeCategoryId, excludeCategoryId);
 		} catch (DataAccessException exception) {
 			throw new CategoryPersistenceException(exception);
 		}
+	}
+
+	@Override
+	public Optional<CategorySnapshot> findByIdForUpdate(UUID categoryId) {
+		if (categoryId == null) {
+			return Optional.empty();
+		}
+		return jdbc.query("""
+			SELECT %s
+			FROM categories
+			WHERE id = ?
+			FOR UPDATE
+			""".formatted(SELECT_COLUMNS), records -> records.next()
+				? Optional.of(toSnapshot(records)) : Optional.empty(), categoryId);
 	}
 
 	@Override
@@ -143,6 +160,64 @@ public class PostgresCategoryRepository implements CategoryQueryReadPort, Catego
 			}
 		} catch (DuplicateKeyException exception) {
 			throw new app.ziji.category.application.CategoryNameConflictException();
+		} catch (DataAccessException exception) {
+			throw new CategoryPersistenceException(exception);
+		}
+	}
+
+	@Override
+	public Optional<CategorySnapshot> updateIfVersion(CategorySnapshot category, int expectedVersion) {
+		if (category == null || expectedVersion < 1) {
+			throw new CategoryPersistenceException(new IllegalArgumentException("分类更新参数无效。"));
+		}
+		try {
+			int updated = jdbc.update("""
+				UPDATE categories
+				SET name = ?, name_normalized = ?, status = ?, updated_at = ?, version = version + 1
+				WHERE id = ? AND version = ?
+				""", category.name(), category.nameNormalized(), category.status().name(),
+				utc(category.updatedAt()), category.id(), expectedVersion);
+			if (updated == 0) {
+				return Optional.empty();
+			}
+			if (updated != 1) {
+				throw new CategoryPersistenceException(new IllegalStateException("分类更新写入数量异常。"));
+			}
+			return Optional.ofNullable(jdbc.queryForObject(
+				"SELECT %s FROM categories WHERE id = ?".formatted(SELECT_COLUMNS),
+				(records, rowNumber) -> toSnapshot(records), category.id()));
+		} catch (DuplicateKeyException exception) {
+			throw new app.ziji.category.application.CategoryNameConflictException();
+		} catch (DataAccessException exception) {
+			throw new CategoryPersistenceException(exception);
+		}
+	}
+
+	@Override
+	public Optional<CategorySnapshot> markMergedIfVersion(
+		UUID categoryId,
+		UUID targetCategoryId,
+		int expectedVersion,
+		Instant updatedAt) {
+		if (categoryId == null || targetCategoryId == null || categoryId.equals(targetCategoryId)
+			|| expectedVersion < 1 || updatedAt == null) {
+			throw new CategoryPersistenceException(new IllegalArgumentException("分类合并参数无效。"));
+		}
+		try {
+			int updated = jdbc.update("""
+				UPDATE categories
+				SET status = 'MERGED', merged_into_id = ?, updated_at = ?, version = version + 1
+				WHERE id = ? AND version = ?
+				""", targetCategoryId, utc(updatedAt), categoryId, expectedVersion);
+			if (updated == 0) {
+				return Optional.empty();
+			}
+			if (updated != 1) {
+				throw new CategoryPersistenceException(new IllegalStateException("分类合并写入数量异常。"));
+			}
+			return Optional.ofNullable(jdbc.queryForObject(
+				"SELECT %s FROM categories WHERE id = ?".formatted(SELECT_COLUMNS),
+				(records, rowNumber) -> toSnapshot(records), categoryId));
 		} catch (DataAccessException exception) {
 			throw new CategoryPersistenceException(exception);
 		}

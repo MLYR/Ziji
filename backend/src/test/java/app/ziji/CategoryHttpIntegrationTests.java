@@ -27,6 +27,7 @@ import tools.jackson.databind.ObjectMapper;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -63,6 +64,151 @@ class CategoryHttpIntegrationTests extends PostgresIntegrationTestSupport {
 					"""))
 			.andExpect(status().isUnauthorized())
 			.andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+	}
+
+	@Test
+	void unauthenticatedUpdateAndMergeAreRejected() throws Exception {
+		mvc.perform(patch("/api/v1/categories/{categoryId}", UUID.randomUUID())
+				.header("If-Match", "\"1\"")
+				.contentType("application/merge-patch+json")
+				.content("{\"name\":\"未认证修改\"}"))
+			.andExpect(status().isUnauthorized())
+			.andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+		mvc.perform(post("/api/v1/categories/{categoryId}/merge", UUID.randomUUID())
+				.header("Idempotency-Key", "category-merge-unauth-001")
+				.header("If-Match", "\"1\"")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"targetCategoryId\":\"" + UUID.randomUUID() + "\"}"))
+			.andExpect(status().isUnauthorized())
+			.andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+	}
+
+	@Test
+	void updatesCategoryWithOptimisticVersionAndRejectsNameConflict() throws Exception {
+		User owner = insertUser("update");
+		String token = bearer(owner);
+		UUID rootId = extractId(create(token, "category-update-root-00001", """
+			{"name":"原分类","categoryType":"EXPENSE"}
+			"""));
+		create(token, "category-update-target-01", """
+			{"name":"目标分类","categoryType":"EXPENSE"}
+			""");
+
+		mvc.perform(patch("/api/v1/categories/{categoryId}", rootId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("If-Match", "\"2\"")
+				.contentType("application/merge-patch+json")
+				.content("{\"name\":\"新名字\"}"))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(1));
+
+		mvc.perform(patch("/api/v1/categories/{categoryId}", rootId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("If-Match", "\"1\"")
+				.contentType("application/merge-patch+json")
+				.content("{\"name\":\"目标分类\"}"))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("CATEGORY_NAME_ALREADY_EXISTS"));
+
+		mvc.perform(patch("/api/v1/categories/{categoryId}", rootId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("If-Match", "\"1\"")
+				.contentType("application/merge-patch+json")
+				.content("""
+					{"name":"更新分类","status":"INACTIVE"}
+					"""))
+			.andExpect(status().isOk())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"2\""))
+			.andExpect(jsonPath("$.data.name").value("更新分类"))
+			.andExpect(jsonPath("$.data.status").value("INACTIVE"));
+		assertEquals(1, jdbc.queryForObject(
+			"SELECT count(*) FROM categories WHERE id = ? AND name = '更新分类' AND status = 'INACTIVE' AND version = 2",
+			Integer.class, rootId));
+	}
+
+	@Test
+	void mergesUsedAccountCategoryAndReplaysWithoutChangingHistory() throws Exception {
+		User owner = insertUser("merge");
+		UUID accountId = accountCreationService.createAccount(new AccountCreationCommand(
+			AccountClass.ASSET, AccountType.BANK, "合并现金", null,
+			app.ziji.account.domain.AccountCurrency.CNY, null, owner.userId())).id();
+		String token = bearer(owner);
+		UUID sourceId = extractId(create(token, "category-merge-source-001", """
+			{"name":"旧支出","categoryType":"EXPENSE","accountId":"%s"}
+			""".formatted(accountId)));
+		UUID targetId = extractId(create(token, "category-merge-target-001", """
+			{"name":"新支出","categoryType":"EXPENSE","accountId":"%s"}
+			""".formatted(accountId)));
+		String key = "category-merge-idempotent-1";
+		String transactionBody = """
+			{"type":"EXPENSE","businessAt":"2026-08-29T12:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"10.00","currency":"CNY","categoryId":"%s","tagIds":[]}
+			""".formatted(accountId, sourceId);
+		mvc.perform(post("/api/v1/transactions")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "category-merge-transaction-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(transactionBody))
+			.andExpect(status().isCreated());
+
+		MvcResult firstMerge = merge(token, sourceId, targetId, key, "\"1\"");
+		assertEquals(targetId, UUID.fromString(objectMapper.readTree(
+			firstMerge.getResponse().getContentAsString()).at("/data/mergedIntoId").asString()));
+		MvcResult replayMerge = merge(token, sourceId, targetId, key, "\"1\"");
+		assertEquals(extractId(firstMerge), extractId(replayMerge));
+		assertEquals(firstMerge.getResponse().getHeader(HttpHeaders.ETAG),
+			replayMerge.getResponse().getHeader(HttpHeaders.ETAG));
+		assertEquals(1, idempotencyCount(owner.userId(), key, "mergeCategory"));
+		assertEquals(1, jdbc.queryForObject(
+			"SELECT count(*) FROM categories WHERE id = ? AND status = 'MERGED' AND merged_into_id = ? AND version = 2",
+			Integer.class, sourceId, targetId));
+		// 合并不迁移、不删除历史交易分类映射；旧事实仍指向已合并分类。
+		assertEquals(1, jdbc.queryForObject(
+			"SELECT count(*) FROM transaction_categories WHERE category_id = ?",
+			Integer.class, sourceId));
+
+		mvc.perform(post("/api/v1/transactions")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "category-merge-reuse-denied")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(transactionBody.replace("10.00", "11.00")))
+			.andExpect(status().isUnprocessableEntity())
+			.andExpect(jsonPath("$.code").value("BUSINESS_RULE_VIOLATION"));
+	}
+
+	@Test
+	void accountViewerCannotUpdateOrMergeCategory() throws Exception {
+		User owner = insertUser("merge-viewer");
+		UUID accountId = accountCreationService.createAccount(new AccountCreationCommand(
+			AccountClass.ASSET, AccountType.BANK, "只读现金", null,
+			app.ziji.account.domain.AccountCurrency.CNY, null, owner.userId())).id();
+		String ownerToken = bearer(owner);
+		UUID sourceId = extractId(create(ownerToken, "category-view-source-001", """
+			{"name":"只读旧分类","categoryType":"INCOME","accountId":"%s"}
+			""".formatted(accountId)));
+		UUID targetId = extractId(create(ownerToken, "category-view-target-001", """
+			{"name":"只读新分类","categoryType":"INCOME","accountId":"%s"}
+			""".formatted(accountId)));
+		User viewer = insertUser("merge-viewer-member");
+		insertMembership(accountId, viewer.userId(), "VIEWER");
+		String viewerToken = bearer(viewer);
+
+		mvc.perform(patch("/api/v1/categories/{categoryId}", sourceId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + viewerToken)
+				.header("If-Match", "\"1\"")
+				.contentType("application/merge-patch+json")
+				.content("{\"name\":\"越权改名\"}"))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("PERMISSION_DENIED"));
+		mvc.perform(post("/api/v1/categories/{categoryId}/merge", sourceId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + viewerToken)
+				.header("Idempotency-Key", "category-view-merge-00001")
+				.header("If-Match", "\"1\"")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"targetCategoryId\":\"" + targetId + "\"}"))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("PERMISSION_DENIED"));
 	}
 
 	@Test
@@ -203,9 +349,22 @@ class CategoryHttpIntegrationTests extends PostgresIntegrationTestSupport {
 		return false;
 	}
 
-	private String extractId(MvcResult result) throws Exception {
-		return objectMapper.readTree(result.getResponse().getContentAsString())
-			.get("data").get("id").textValue();
+	private MvcResult merge(String token, UUID sourceId, UUID targetId, String key, String ifMatch) throws Exception {
+		return mvc.perform(post("/api/v1/categories/{categoryId}/merge", sourceId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", key)
+				.header("If-Match", ifMatch)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"targetCategoryId\":\"" + targetId + "\"}"))
+			.andExpect(status().isOk())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"2\""))
+			.andExpect(jsonPath("$.data.status").value("MERGED"))
+			.andReturn();
+	}
+
+	private UUID extractId(MvcResult result) throws Exception {
+		return UUID.fromString(objectMapper.readTree(result.getResponse().getContentAsString())
+			.get("data").get("id").textValue());
 	}
 
 	private int idempotencyCount(UUID userId, String key) {
@@ -213,6 +372,13 @@ class CategoryHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			SELECT count(*) FROM idempotency_records
 			WHERE user_id = ? AND operation_id = 'createCategory' AND idempotency_key = ?
 			""", Integer.class, userId, key);
+	}
+
+	private int idempotencyCount(UUID userId, String key, String operationId) {
+		return jdbc.queryForObject("""
+			SELECT count(*) FROM idempotency_records
+			WHERE user_id = ? AND operation_id = ? AND idempotency_key = ?
+			""", Integer.class, userId, operationId, key);
 	}
 
 	private String bearer(User user) {

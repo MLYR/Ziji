@@ -1,12 +1,14 @@
 package app.ziji.category.interfaces;
 
 import java.net.URI;
+import java.util.Map;
 
 import app.ziji.category.application.CategoryNameConflictException;
 import app.ziji.category.application.CategoryNotVisibleException;
 import app.ziji.category.application.CategoryPermissionDeniedException;
 import app.ziji.category.application.CategoryPersistenceException;
 import app.ziji.category.application.CategoryValidationException;
+import app.ziji.category.application.CategoryVersionConflictException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.core.Ordered;
@@ -39,6 +41,19 @@ public final class CategoryApiExceptionHandler {
 	@ExceptionHandler(CategoryNameConflictException.class)
 	ProblemDetail nameConflict(HttpServletRequest request, HttpServletResponse response) {
 		return base(HttpStatus.CONFLICT, "分类名称已存在", "CATEGORY_NAME_ALREADY_EXISTS", request, response);
+	}
+
+	@ExceptionHandler(CategoryVersionConflictException.class)
+	ProblemDetail versionConflict(
+		CategoryVersionConflictException exception,
+		HttpServletRequest request,
+		HttpServletResponse response) {
+		ProblemDetail problem = base(HttpStatus.CONFLICT, "资源版本冲突", "VERSION_CONFLICT", request, response);
+		problem.setProperty("versionConflict", Map.of(
+			"currentVersion", exception.currentVersion(),
+			"currentEtag", "\"" + exception.currentVersion() + "\"",
+			"resourceLocation", request.getRequestURI()));
+		return problem;
 	}
 
 	@ExceptionHandler(CategoryPersistenceException.class)

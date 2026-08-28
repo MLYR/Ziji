@@ -16,7 +16,11 @@ public interface CategoryQueryReadPort {
 		UUID accountId,
 		CategoryType categoryType,
 		UUID parentId,
-		String nameNormalized);
+		String nameNormalized,
+		UUID excludeCategoryId);
+
+	/** 修改和合并前锁定分类事实行，避免两个乐观锁判定读取到不同基线。 */
+	Optional<CategorySnapshot> findByIdForUpdate(UUID categoryId);
 
 	List<CategorySnapshot> listVisible(
 		UUID userId,

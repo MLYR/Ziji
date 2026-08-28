@@ -13,7 +13,10 @@ import app.ziji.category.application.CategoryNameConflictException;
 import app.ziji.category.application.CategoryPage;
 import app.ziji.category.application.CategoryService;
 import app.ziji.category.application.CategorySnapshot;
+import app.ziji.category.application.CategoryStatus;
 import app.ziji.category.application.CategoryType;
+import app.ziji.category.application.CategoryUpdateCommand;
+import app.ziji.category.application.CategoryVersionConflictException;
 import app.ziji.shared.application.IdempotencyExecution;
 import app.ziji.shared.application.IdempotencyRequestHasher;
 import app.ziji.shared.application.IdempotencyResponse;
@@ -23,10 +26,14 @@ import app.ziji.user.application.CurrentUserIdResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -40,6 +47,7 @@ public class CategoryController {
 
 	private static final java.util.Set<String> CREATE_FIELDS = java.util.Set.of(
 		"name", "categoryType", "parentId", "accountId");
+	private static final java.util.Set<String> UPDATE_FIELDS = java.util.Set.of("name", "status");
 
 	private final CategoryService categoryService;
 	private final CurrentUserIdResolver currentUserIdResolver;
@@ -52,6 +60,57 @@ public class CategoryController {
 		this.categoryService = categoryService;
 		this.currentUserIdResolver = currentUserIdResolver;
 		this.idempotency = idempotency;
+	}
+
+	@PatchMapping(
+		path = "/{categoryId}",
+		consumes = "application/merge-patch+json",
+		name = "updateCategory")
+	public ResponseEntity<CategoryEnvelope> updateCategory(
+		@PathVariable String categoryId,
+		@RequestHeader(value = "If-Match", required = false) String ifMatch,
+		@RequestBody JsonNode body,
+		Principal principal,
+		HttpServletResponse response) {
+		UUID userId = currentUserIdResolver.resolve(principal);
+		UUID parsedCategoryId = parseUuid(categoryId);
+		int expectedVersion = parseIfMatch(ifMatch);
+		CategoryUpdateCommand command = parseUpdate(body);
+		CategorySnapshot category = categoryService.updateCategory(
+			userId, parsedCategoryId, command, expectedVersion);
+		return success(category, category.version(), response, false);
+	}
+
+	@PostMapping(path = "/{categoryId}/merge", name = "mergeCategory")
+	public ResponseEntity<?> mergeCategory(
+		@PathVariable String categoryId,
+		@RequestHeader(value = "If-Match", required = false) String ifMatch,
+		@RequestBody JsonNode body,
+		Principal principal,
+		HttpServletRequest request,
+		HttpServletResponse response) {
+		UUID userId = currentUserIdResolver.resolve(principal);
+		UUID parsedCategoryId = parseUuid(categoryId);
+		UUID targetCategoryId = parseMergeTarget(body);
+		int expectedVersion = parseIfMatch(ifMatch);
+		String key = idempotencyKey(request);
+		String resource = resource() + "/" + parsedCategoryId;
+		IdempotencyExecution<CategorySnapshot> execution = idempotency.executeAuthenticated(
+			userId, 1, "mergeCategory", key,
+			requestHashMerge(resource, targetCategoryId, expectedVersion), () -> {
+				try {
+					CategorySnapshot merged = categoryService.mergeCategory(
+						userId, parsedCategoryId, targetCategoryId, expectedVersion);
+					return IdempotencyWorkResult.completed(merged, IdempotencyResponse.succeededResource(
+						200, "CATEGORY", merged.id(), new IdempotencyResponse.ResourceReference(
+							resource, etag(merged.version()), (long) merged.version())));
+				} catch (CategoryVersionConflictException conflict) {
+					return IdempotencyWorkResult.completed(null,
+						IdempotencyResponse.failedFinalVersionConflict(
+							409, conflict.currentVersion(), resource));
+				}
+			});
+		return writeMerge(execution, userId, response);
 	}
 
 	@GetMapping(name = "listCategories")
@@ -130,6 +189,53 @@ public class CategoryController {
 		return idempotencyProblem(execution, response);
 	}
 
+	private ResponseEntity<?> writeMerge(
+		IdempotencyExecution<CategorySnapshot> execution,
+		UUID userId,
+		HttpServletResponse response) {
+		IdempotencyResponse stored = execution.response();
+		if (execution.status() == IdempotencyExecution.Status.EXECUTED
+			&& stored != null && stored.reference() instanceof IdempotencyResponse.VersionConflictReference conflict) {
+			ProblemDetail detail = problemDetail(HttpStatus.CONFLICT, "VERSION_CONFLICT", response);
+			detail.setProperty("versionConflict", java.util.Map.of(
+				"currentVersion", conflict.currentVersion(),
+				"currentEtag", conflict.currentEtag(),
+				"resourceLocation", conflict.resourceLocation()));
+			return ResponseEntity.status(HttpStatus.CONFLICT).body(detail);
+		}
+		if (execution.status() == IdempotencyExecution.Status.EXECUTED
+			&& stored != null && stored.reference() instanceof IdempotencyResponse.ProblemReference problem) {
+			return problem(HttpStatus.resolve(stored.responseStatus()), problem.errorCode(), response, false);
+		}
+		if (execution.status() == IdempotencyExecution.Status.EXECUTED && execution.value() != null) {
+			return success(execution.value(), execution.value().version(), response, false);
+		}
+		if (execution.status() == IdempotencyExecution.Status.REPLAYED && stored != null
+			&& stored.reference() instanceof IdempotencyResponse.ResourceReference reference
+			&& stored.resourceId() != null && reference.resourceVersion() != null) {
+			CategorySnapshot current;
+			try {
+				current = categoryService.getVisibleCategory(userId, stored.resourceId());
+			} catch (RuntimeException exception) {
+				return problem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", response, false);
+			}
+			if (!reference.etag().equals(etag(current.version())) || reference.resourceVersion() != current.version()) {
+				return problem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", response, false);
+			}
+			return success(current, current.version(), response, false);
+		}
+		if (execution.status() == IdempotencyExecution.Status.REPLAYED && stored != null
+			&& stored.reference() instanceof IdempotencyResponse.VersionConflictReference conflict) {
+			ProblemDetail detail = problemDetail(HttpStatus.CONFLICT, "VERSION_CONFLICT", response);
+			detail.setProperty("versionConflict", java.util.Map.of(
+				"currentVersion", conflict.currentVersion(),
+				"currentEtag", conflict.currentEtag(),
+				"resourceLocation", conflict.resourceLocation()));
+			return ResponseEntity.status(HttpStatus.CONFLICT).body(detail);
+		}
+		return idempotencyProblem(execution, response);
+	}
+
 	private ResponseEntity<CategoryEnvelope> success(
 		CategorySnapshot category,
 		int version,
@@ -167,6 +273,48 @@ public class CategoryController {
 		}
 	}
 
+	private CategoryUpdateCommand parseUpdate(JsonNode body) {
+		if (body == null || !body.isObject() || body.size() == 0) {
+			throw new app.ziji.category.application.CategoryValidationException();
+		}
+		for (String field : body.propertyNames()) {
+			if (!UPDATE_FIELDS.contains(field)) {
+				throw new app.ziji.category.application.CategoryValidationException();
+			}
+		}
+		String name = null;
+		CategoryStatus status = null;
+		if (body.has("name")) {
+			if (!body.get("name").isTextual()) {
+				throw new app.ziji.category.application.CategoryValidationException();
+			}
+			name = body.get("name").textValue();
+		}
+		if (body.has("status")) {
+			if (!body.get("status").isTextual()) {
+				throw new app.ziji.category.application.CategoryValidationException();
+			}
+			try {
+				status = CategoryStatus.valueOf(body.get("status").textValue());
+			} catch (RuntimeException exception) {
+				throw new app.ziji.category.application.CategoryValidationException();
+			}
+			if (status == CategoryStatus.MERGED) {
+				throw new app.ziji.category.application.CategoryValidationException();
+			}
+		}
+		return new CategoryUpdateCommand(name, status);
+	}
+
+	private UUID parseMergeTarget(JsonNode body) {
+		if (body == null || !body.isObject()
+			|| !body.has("targetCategoryId") || !body.get("targetCategoryId").isTextual()
+			|| body.size() != 1) {
+			throw new app.ziji.category.application.CategoryValidationException();
+		}
+		return parseUuid(body.get("targetCategoryId").textValue());
+	}
+
 	private String requestHash(CategoryCommand command) {
 		Map<String, Object> payload = new LinkedHashMap<>();
 		payload.put("name", command.name());
@@ -174,6 +322,13 @@ public class CategoryController {
 		payload.put("parentId", command.parentId());
 		payload.put("accountId", command.accountId());
 		return IdempotencyRequestHasher.hash("POST", MediaType.APPLICATION_JSON_VALUE, resource(), payload, null);
+	}
+
+	private String requestHashMerge(String resource, UUID targetCategoryId, int expectedVersion) {
+		Map<String, Object> payload = new LinkedHashMap<>();
+		payload.put("targetCategoryId", targetCategoryId);
+		return IdempotencyRequestHasher.hash(
+			"POST", MediaType.APPLICATION_JSON_VALUE, resource, payload, etag(expectedVersion));
 	}
 
 	private static String resource() {
@@ -219,6 +374,13 @@ public class CategoryController {
 		}
 	}
 
+	private int parseIfMatch(String value) {
+		if (value == null || !value.matches("\"[1-9][0-9]*\"")) {
+			throw new app.ziji.category.application.CategoryValidationException();
+		}
+		return Integer.parseInt(value.substring(1, value.length() - 1));
+	}
+
 	private static CategoryView view(CategorySnapshot category) {
 		return new CategoryView(
 			category.id(), category.type().name(), category.name(), category.parentId(),
@@ -248,6 +410,17 @@ public class CategoryController {
 			builder.header("Retry-After", "5");
 		}
 		return builder.body(detail);
+	}
+
+	private org.springframework.http.ProblemDetail problemDetail(
+		HttpStatus status,
+		String code,
+		HttpServletResponse response) {
+		org.springframework.http.ProblemDetail detail = org.springframework.http.ProblemDetail
+			.forStatusAndDetail(status, code);
+		detail.setProperty("code", code);
+		detail.setProperty("requestId", requestId(response));
+		return detail;
 	}
 
 	private ResponseEntity<org.springframework.http.ProblemDetail> idempotencyProblem(

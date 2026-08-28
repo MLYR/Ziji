@@ -52,6 +52,85 @@ public class CategoryService {
 		this.idGenerator = idGenerator;
 	}
 
+	/**
+	 * merge-patch 修改分类；已合并分类是终态事实，不允许再改名或改状态。
+	 * 行锁先于版本比较，乐观锁失败交给基础设施的原子 UPDATE 再复核。
+	 */
+	public CategorySnapshot updateCategory(
+		UUID userId,
+		UUID categoryId,
+		CategoryUpdateCommand command,
+		int expectedVersion) {
+		if (userId == null || categoryId == null || command == null || expectedVersion < 1) {
+			throw new CategoryValidationException();
+		}
+		return transactions.required(() -> {
+			CategorySnapshot current = lockVisibleCategory(userId, categoryId);
+			assertWritable(current, userId);
+			if (current.status() == CategoryStatus.MERGED) {
+				throw new CategoryValidationException();
+			}
+			if (current.version() != expectedVersion) {
+				throw new CategoryVersionConflictException(current.version());
+			}
+
+			String name = command.name() == null ? current.name() : normalizeName(command.name());
+			CategoryStatus status = command.status() == null ? current.status() : command.status();
+			// 归一化重名检查必须排除自身，否则不改名只改状态的合法 PATCH 会被误判冲突。
+			if (queries.existsNameConflict(
+				current.ownerUserId(), current.accountId(), current.type(), current.parentId(),
+				nameNormalized(name), current.id())) {
+				throw new CategoryNameConflictException();
+			}
+			CategorySnapshot updated = new CategorySnapshot(
+				current.id(), current.ownerUserId(), current.accountId(), current.type(), current.parentId(),
+				name, nameNormalized(name), status, current.mergedIntoId(), current.createdAt(),
+				clock.instant(), current.version() + 1);
+			return commands.updateIfVersion(updated, expectedVersion)
+				.orElseThrow(() -> new CategoryVersionConflictException(current.version()));
+		});
+	}
+
+	/**
+	 * 合并只改 categories 自身状态和 merged_into_id；transaction_categories 历史映射不迁移也不删除。
+	 * 先按 UUID 顺序锁两行，避免反向合并并发请求形成锁等待环。
+	 */
+	public CategorySnapshot mergeCategory(
+		UUID userId,
+		UUID categoryId,
+		UUID targetCategoryId,
+		int expectedVersion) {
+		if (userId == null || categoryId == null || targetCategoryId == null || expectedVersion < 1) {
+			throw new CategoryValidationException();
+		}
+		if (categoryId.equals(targetCategoryId)) {
+			throw new CategoryValidationException();
+		}
+		return transactions.nested(() -> {
+			UUID first = categoryId.compareTo(targetCategoryId) < 0 ? categoryId : targetCategoryId;
+			UUID second = first.equals(categoryId) ? targetCategoryId : categoryId;
+			CategorySnapshot lockedFirst = lockVisibleCategory(userId, first);
+			CategorySnapshot lockedSecond = lockVisibleCategory(userId, second);
+			CategorySnapshot current = categoryId.equals(first) ? lockedFirst : lockedSecond;
+			CategorySnapshot target = targetCategoryId.equals(first) ? lockedFirst : lockedSecond;
+			assertWritable(current, userId);
+			if (current.status() != CategoryStatus.ACTIVE && current.status() != CategoryStatus.INACTIVE) {
+				throw new CategoryValidationException();
+			}
+			if (current.version() != expectedVersion) {
+				throw new CategoryVersionConflictException(current.version());
+			}
+			if (target.status() != CategoryStatus.ACTIVE
+				|| target.type() != current.type()
+				|| !java.util.Objects.equals(target.ownerUserId(), current.ownerUserId())
+				|| !java.util.Objects.equals(target.accountId(), current.accountId())) {
+				throw new CategoryValidationException();
+			}
+			return commands.markMergedIfVersion(current.id(), target.id(), expectedVersion, clock.instant())
+				.orElseThrow(() -> new CategoryVersionConflictException(current.version()));
+		});
+	}
+
 	public CategoryPage listCategories(UUID userId, UUID accountId, Integer requestedLimit, String cursor) {
 		if (userId == null) {
 			throw new CategoryValidationException();
@@ -94,6 +173,32 @@ public class CategoryService {
 		return category;
 	}
 
+	private CategorySnapshot lockVisibleCategory(UUID userId, UUID categoryId) {
+		CategorySnapshot category = queries.findByIdForUpdate(categoryId)
+			.orElseThrow(CategoryNotVisibleException::new);
+		if (!isVisible(category, userId)) {
+			throw new CategoryNotVisibleException();
+		}
+		return category;
+	}
+
+	private void assertWritable(CategorySnapshot category, UUID userId) {
+		if (category.ownerUserId() == null && category.accountId() == null) {
+			throw new CategoryPermissionDeniedException();
+		}
+		if (category.accountId() != null) {
+			var membership = memberships.findActiveMembership(userId, category.accountId())
+				.orElseThrow(CategoryNotVisibleException::new);
+			if (!"OWNER".equals(membership.role()) && !"EDITOR".equals(membership.role())) {
+				throw new CategoryPermissionDeniedException();
+			}
+			return;
+		}
+		if (!userId.equals(category.ownerUserId())) {
+			throw new CategoryPermissionDeniedException();
+		}
+	}
+
 	/** empty 表示当前作用域同名冲突；调用方必须映射稳定 409，避免异常污染外层幂等事务。 */
 	public Optional<CategorySnapshot> createCategory(UUID userId, CategoryCommand command) {
 		if (userId == null || command == null) {
@@ -129,7 +234,7 @@ public class CategoryService {
 			// 可预期冲突先按当前事实预检；并发竞争仍由唯一索引 fail closed，不静默改写结果。
 			if (queries.existsNameConflict(
 				userId, command.accountId(), command.categoryType(), parent == null ? null : parent.id(),
-				nameNormalized(name))) {
+				nameNormalized(name), null)) {
 				return Optional.empty();
 			}
 			commands.insert(category);

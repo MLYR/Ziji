@@ -71,7 +71,8 @@ class SecurityConfiguration {
 				"/api/v1/statistics/accounts").authenticated()
 			.requestMatchers(HttpMethod.PATCH, "/api/v1/users/me").authenticated()
 			.requestMatchers(HttpMethod.PATCH,
-				"/api/v1/accounts/*", "/api/v1/accounts/*/liability-details").authenticated()
+				"/api/v1/accounts/*", "/api/v1/accounts/*/liability-details",
+				"/api/v1/categories/*").authenticated()
 			.requestMatchers(HttpMethod.PUT, "/api/v1/accounts/*/liability-details").authenticated()
 			.requestMatchers(HttpMethod.POST, "/api/v1/accounts").authenticated()
 			.requestMatchers(HttpMethod.POST, "/api/v1/users/me/password-change").authenticated()
@@ -81,6 +82,7 @@ class SecurityConfiguration {
 				"/api/v1/accounts/*/liquidity-holds/*/release",
 				"/api/v1/categories",
 				"/api/v1/accounts/*/archive",
+				"/api/v1/categories/*/merge",
 				"/api/v1/transactions",
 				"/api/v1/transactions/*/revisions",
 				"/api/v1/transactions/*/reversal",
@@ -152,7 +154,8 @@ class SecurityConfiguration {
 		}
 		if ("PATCH".equals(method)) {
 			return "/api/v1/users/me".equals(path) || path.matches("/api/v1/accounts/[^/]+")
-				|| path.matches("/api/v1/accounts/[^/]+/liability-details");
+				|| path.matches("/api/v1/accounts/[^/]+/liability-details")
+				|| path.matches("/api/v1/categories/[^/]+");
 		}
 		if ("PUT".equals(method)) {
 			return path.matches("/api/v1/accounts/[^/]+/liability-details");
@@ -160,6 +163,7 @@ class SecurityConfiguration {
 		if ("POST".equals(method)) {
 			return "/api/v1/accounts".equals(path)
 				|| "/api/v1/categories".equals(path)
+				|| path.matches("/api/v1/categories/[^/]+/merge")
 				|| "/api/v1/users/me/password-change".equals(path)
 				|| "/api/v1/sync/operations".equals(path)
 				|| "/api/v1/transactions".equals(path)
