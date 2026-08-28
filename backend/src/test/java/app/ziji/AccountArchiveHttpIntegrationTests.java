@@ -309,6 +309,8 @@ class AccountArchiveHttpIntegrationTests extends PostgresIntegrationTestSupport 
 			.andExpect(jsonPath("$.data.id").value(accountId.toString()))
 			.andExpect(jsonPath("$.data.name").value(updatedName))
 			.andExpect(jsonPath("$.data.status").value("ARCHIVED"))
+			.andExpect(jsonPath("$.data.currentUserRole").value("OWNER"))
+			.andExpect(jsonPath("$.data.inclusionRatio").value("1.000000"))
 			.andExpect(jsonPath("$.data.version").value(3));
 		mvc.perform(get("/api/v1/accounts")
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
