@@ -66,6 +66,7 @@ class SecurityConfiguration {
 				"/api/v1/accounts", "/api/v1/accounts/*", "/api/v1/accounts/*/liability-details",
 				"/api/v1/accounts/*/balance", "/api/v1/accounts/*/liquidity-holds",
 				"/api/v1/sync/changes", "/api/v1/transactions", "/api/v1/transactions/*",
+				"/api/v1/categories",
 				"/api/v1/dashboard", "/api/v1/statistics/assets", "/api/v1/statistics/cash-flow",
 				"/api/v1/statistics/accounts").authenticated()
 			.requestMatchers(HttpMethod.PATCH, "/api/v1/users/me").authenticated()
@@ -78,6 +79,7 @@ class SecurityConfiguration {
 				"/api/v1/accounts/*/liquidity-holds",
 				"/api/v1/accounts/*/liquidity-holds/*/revisions",
 				"/api/v1/accounts/*/liquidity-holds/*/release",
+				"/api/v1/categories",
 				"/api/v1/accounts/*/archive",
 				"/api/v1/transactions",
 				"/api/v1/transactions/*/revisions",
@@ -135,6 +137,7 @@ class SecurityConfiguration {
 		if ("GET".equals(method)) {
 			return "/api/v1/users/me".equals(path) || "/api/v1/users/me/sessions".equals(path)
 				|| "/api/v1/accounts".equals(path)
+				|| "/api/v1/categories".equals(path)
 				|| "/api/v1/sync/changes".equals(path)
 				|| "/api/v1/transactions".equals(path)
 				|| "/api/v1/dashboard".equals(path)
@@ -156,6 +159,7 @@ class SecurityConfiguration {
 		}
 		if ("POST".equals(method)) {
 			return "/api/v1/accounts".equals(path)
+				|| "/api/v1/categories".equals(path)
 				|| "/api/v1/users/me/password-change".equals(path)
 				|| "/api/v1/sync/operations".equals(path)
 				|| "/api/v1/transactions".equals(path)
