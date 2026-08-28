@@ -113,7 +113,8 @@ class LiquidityHoldExpiryFinalizerTests {
 		}
 
 		@Override
-		public Optional<LiquidityHold> supersedeIfVersion(UUID accountId, UUID holdId, int expectedVersion, Instant now) {
+		public Optional<LiquidityHold> supersedeIfVersion(
+			UUID accountId, UUID holdId, int expectedVersion, Instant endedAt, Instant updatedAt) {
 			return Optional.empty();
 		}
 

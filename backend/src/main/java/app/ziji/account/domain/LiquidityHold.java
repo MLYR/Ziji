@@ -145,16 +145,19 @@ public final class LiquidityHold {
 		if (asOf == null) {
 			throw invalid();
 		}
-		if (endReason == LiquidityHoldEndReason.RELEASED) {
-			return LiquidityHoldStatus.RELEASED;
+		// 结束原因是历史事实；只有到达 endedAt 后，按 asOf 才能把版本显示为终态。
+		if (endedAt != null && !endedAt.isAfter(asOf)) {
+			return switch (endReason) {
+				case RELEASED -> LiquidityHoldStatus.RELEASED;
+				case SUPERSEDED -> LiquidityHoldStatus.SUPERSEDED;
+				case EXPIRED -> LiquidityHoldStatus.EXPIRED;
+			};
 		}
-		if (endReason == LiquidityHoldEndReason.SUPERSEDED) {
-			return LiquidityHoldStatus.SUPERSEDED;
+		if (effectiveAt.isAfter(asOf)) {
+			return LiquidityHoldStatus.PENDING;
 		}
-		if (endReason == LiquidityHoldEndReason.EXPIRED || (endedAt == null && expiresAt != null && !expiresAt.isAfter(asOf))) {
-			return LiquidityHoldStatus.EXPIRED;
-		}
-		return effectiveAt.isAfter(asOf) ? LiquidityHoldStatus.PENDING : LiquidityHoldStatus.ACTIVE;
+		return expiresAt != null && !expiresAt.isAfter(asOf)
+			? LiquidityHoldStatus.EXPIRED : LiquidityHoldStatus.ACTIVE;
 	}
 
 	public boolean isOperableAt(Instant asOf) {

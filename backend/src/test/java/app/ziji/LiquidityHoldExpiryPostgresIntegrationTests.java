@@ -24,6 +24,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import app.ziji.account.application.AccountStore;
+import app.ziji.account.application.AccountBalanceResult;
+import app.ziji.account.application.AccountBalanceUseCase;
 import app.ziji.account.application.LiquidityHoldCommand;
 import app.ziji.account.application.LiquidityHoldCursorCodec;
 import app.ziji.account.application.LiquidityHoldExpiryFinalizer;
@@ -58,6 +60,9 @@ class LiquidityHoldExpiryPostgresIntegrationTests extends PostgresIntegrationTes
 
 	@Autowired
 	private LiquidityHoldStore holds;
+
+	@Autowired
+	private AccountBalanceUseCase balanceUseCase;
 
 	@Autowired
 	private AuditLogWritePort auditLogs;
@@ -318,6 +323,74 @@ class LiquidityHoldExpiryPostgresIntegrationTests extends PostgresIntegrationTes
 			executor.shutdownNow();
 			assertTrue(executor.awaitTermination(15, TimeUnit.SECONDS), "revision 竞态线程未清理");
 		}
+	}
+
+	@Test
+	void revisionSwitchesHistoricalBalanceAtNewEffectiveAtWithoutCreatedAtCutoffOrOverlap() {
+		UserFixture user = user("revision-effective-boundary");
+		UUID accountId = account(user.userId(), "修订生效边界", false);
+		Instant operationAt = AS_OF;
+		Instant revisionEffectiveAt = AS_OF.plusSeconds(60);
+		UUID holdId = seedHold(accountId, user.userId(), AS_OF.minusSeconds(10), null, null, null, 1);
+		LiquidityHoldService manual = manualService(auditLogs, Clock.fixed(operationAt, ZoneOffset.UTC));
+
+		LiquidityHold revised = manual.revise(
+			user.userId(), accountId, holdId, 1,
+			new LiquidityHoldCommand(
+				LiquidityHoldType.RESERVED, new BigDecimal("20.00"), AccountCurrency.CNY,
+				revisionEffectiveAt, null, "未来生效修订"),
+			"revision-effective-boundary");
+
+		assertEquals(revisionEffectiveAt, revised.effectiveAt());
+		assertEquals(revisionEffectiveAt, jdbc.queryForObject(
+			"SELECT ended_at FROM liquidity_holds WHERE id = ?", Timestamp.class, holdId).toInstant());
+		assertEquals(operationAt, jdbc.queryForObject(
+			"SELECT updated_at FROM liquidity_holds WHERE id = ?", Timestamp.class, holdId).toInstant());
+
+		AccountBalanceResult beforeSwitch = balanceUseCase.getBalance(
+			user.userId(), accountId, revisionEffectiveAt.minusSeconds(1));
+		AccountBalanceResult atSwitch = balanceUseCase.getBalance(user.userId(), accountId, revisionEffectiveAt);
+		assertEquals(new BigDecimal("10.00"), beforeSwitch.unavailableAmount());
+		assertEquals(new BigDecimal("10.00"), beforeSwitch.unavailableBreakdown().frozen());
+		assertEquals(new BigDecimal("20.00"), atSwitch.unavailableAmount());
+		assertEquals(new BigDecimal("20.00"), atSwitch.unavailableBreakdown().reserved());
+	}
+
+	@Test
+	void rejectsOutOfOrderFutureRevisionBeforeCreatingAnOverlappingHistoricalInterval() {
+		UserFixture user = user("out-of-order-revision");
+		UUID accountId = account(user.userId(), "乱序修订账户", false);
+		Instant operationAt = AS_OF;
+		Instant firstFutureEffectiveAt = AS_OF.plusSeconds(120);
+		Instant earlierFutureEffectiveAt = AS_OF.plusSeconds(60);
+		UUID holdId = seedHold(accountId, user.userId(), AS_OF.minusSeconds(10), null, null, null, 1);
+		LiquidityHoldService manual = manualService(auditLogs, Clock.fixed(operationAt, ZoneOffset.UTC));
+
+		LiquidityHold firstRevision = manual.revise(
+			user.userId(), accountId, holdId, 1,
+			new LiquidityHoldCommand(
+				LiquidityHoldType.RESERVED, new BigDecimal("20.00"), AccountCurrency.CNY,
+				firstFutureEffectiveAt, null, "第一条未来修订"),
+			"out-of-order-first-revision");
+
+		// 同一修订链的生效时点必须单调不减，否则旧版本区间与较早的新版本会重叠并被余额双计。
+		assertThrows(LiquidityHoldException.BusinessRule.class, () -> manual.revise(
+			user.userId(), accountId, firstRevision.id(), 1,
+			new LiquidityHoldCommand(
+				LiquidityHoldType.FROZEN, new BigDecimal("30.00"), AccountCurrency.CNY,
+				earlierFutureEffectiveAt, null, "乱序未来修订"),
+			"out-of-order-second-revision"));
+
+		assertEquals(2, count("SELECT count(*) FROM liquidity_holds WHERE root_hold_id = ?", holdId));
+		assertEquals(firstFutureEffectiveAt, jdbc.queryForObject(
+			"SELECT effective_at FROM liquidity_holds WHERE id = ?", Timestamp.class, firstRevision.id()).toInstant());
+		assertNull(jdbc.queryForObject(
+			"SELECT ended_at FROM liquidity_holds WHERE id = ?", Timestamp.class, firstRevision.id()));
+
+		AccountBalanceResult duringFutureGap = balanceUseCase.getBalance(
+			user.userId(), accountId, AS_OF.plusSeconds(90));
+		assertEquals(new BigDecimal("10.00"), duringFutureGap.unavailableAmount());
+		assertEquals(new BigDecimal("10.00"), duringFutureGap.unavailableBreakdown().frozen());
 	}
 
 	@Test

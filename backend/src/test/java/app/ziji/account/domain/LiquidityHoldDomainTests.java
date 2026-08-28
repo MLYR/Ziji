@@ -102,6 +102,40 @@ class LiquidityHoldDomainTests {
 	}
 
 	@Test
+	void evaluatesSupersededAndExpiredVersionsByTheirHistoricalEndBoundary() {
+		Instant end = NOW.plusSeconds(100);
+		UUID supersededId = UUID.randomUUID();
+		LiquidityHold superseded = LiquidityHold.restore(
+			supersededId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 2, LiquidityHoldType.FROZEN,
+			new BigDecimal("1"), AccountCurrency.JPY, NOW, null, null, LiquidityHoldSource.MANUAL, "r", end,
+			LiquidityHoldEndReason.SUPERSEDED, UUID.randomUUID(), NOW, NOW, 2);
+		assertEquals(LiquidityHoldStatus.ACTIVE, superseded.statusAt(NOW.plusSeconds(99)));
+		assertEquals(LiquidityHoldStatus.SUPERSEDED, superseded.statusAt(end));
+
+		UUID expiredId = UUID.randomUUID();
+		LiquidityHold expired = LiquidityHold.restore(
+			expiredId, UUID.randomUUID(), expiredId, null, 1, LiquidityHoldType.FROZEN,
+			new BigDecimal("1"), AccountCurrency.JPY, NOW, end, null, LiquidityHoldSource.MANUAL, "r", end,
+			LiquidityHoldEndReason.EXPIRED, UUID.randomUUID(), NOW, NOW, 2);
+		assertEquals(LiquidityHoldStatus.ACTIVE, expired.statusAt(NOW.plusSeconds(99)));
+		assertEquals(LiquidityHoldStatus.EXPIRED, expired.statusAt(end));
+	}
+
+	@Test
+	void terminalStatusTakesPrecedenceWhenFutureEffectiveVersionEndsEarly() {
+		Instant effectiveAt = NOW.plusSeconds(100);
+		UUID holdId = UUID.randomUUID();
+		LiquidityHold released = LiquidityHold.restore(
+			holdId, UUID.randomUUID(), holdId, null, 1, LiquidityHoldType.FROZEN,
+			new BigDecimal("1"), AccountCurrency.JPY, effectiveAt, null, NOW, LiquidityHoldSource.MANUAL, "r", NOW,
+			LiquidityHoldEndReason.RELEASED, UUID.randomUUID(), NOW, NOW, 2);
+
+		// 终止事实发生在生效前，查询跨过 endedAt 后不能被未来 effectiveAt 误判为 PENDING。
+		assertEquals(LiquidityHoldStatus.PENDING, released.statusAt(NOW.minusSeconds(1)));
+		assertEquals(LiquidityHoldStatus.RELEASED, released.statusAt(NOW));
+	}
+
+	@Test
 	void expiresAtMustBeAfterEffectiveAtAndTerminalVersionsAreNotOperable() {
 		assertThrows(AccountDomainException.class, () -> root(LiquidityHoldType.FROZEN, new BigDecimal("1"), AccountCurrency.JPY, NOW, NOW, "r"));
 		LiquidityHold expired = root(LiquidityHoldType.FROZEN, new BigDecimal("1"), AccountCurrency.JPY, NOW.minusSeconds(10), NOW, "r");
