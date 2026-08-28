@@ -16,4 +16,16 @@ public interface AccountQueryReadPort {
 		Collection<UUID> accountIds,
 		AccountKeysetPosition after,
 		int maximumRecords);
+
+	/** 跨模块汇总读取的账户分类摘要；只暴露分类与币种，不把领域模型泄漏到其他模块。 */
+	List<ClassSummary> listClassSummariesByIds(Collection<UUID> accountIds);
+
+	record ClassSummary(UUID accountId, String accountClass, String currency) {
+
+		public ClassSummary {
+			if (accountId == null || accountClass == null || currency == null) {
+				throw new IllegalArgumentException("账户分类摘要不完整。");
+			}
+		}
+	}
 }

@@ -208,6 +208,28 @@ public class PostgresAccountStore implements AccountStore, AccountQueryReadPort,
 	}
 
 	@Override
+	public List<ClassSummary> listClassSummariesByIds(Collection<UUID> accountIds) {
+		if (accountIds == null || accountIds.isEmpty()) {
+			return List.of();
+		}
+		List<UUID> ids = new ArrayList<>(accountIds);
+		String placeholders = String.join(", ", java.util.Collections.nCopies(ids.size(), "?"));
+		String sql = """
+			SELECT id, account_class, currency FROM accounts
+			WHERE status = 'ACTIVE' AND id IN (%s)
+			ORDER BY created_at DESC, id DESC
+			""".formatted(placeholders);
+		try {
+			return dsl.resultQuery(sql, ids.toArray()).fetch(record -> new ClassSummary(
+				record.get("id", UUID.class),
+				record.get("account_class", String.class),
+				record.get("currency", String.class)));
+		} catch (DataAccessException | org.jooq.exception.DataAccessException exception) {
+			throw new AccountPersistenceException(exception);
+		}
+	}
+
+	@Override
 	public Optional<Account> updateIfVersion(
 		UUID accountId,
 		int expectedVersion,

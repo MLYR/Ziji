@@ -40,7 +40,6 @@ getInvestmentPerformance
 getInvestmentOverview
 getInvestmentReturnCalendar
 getInvestmentReturnDayDetails
-getDashboard
 getAssetStatistics
 getAssetChangeCalendar
 getAssetChangeDayDetails
