@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AppState, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 
 import { ApiClientError } from '@/api/api-client';
 import { mobileAuthenticationSession } from '@/auth/default-auth-session';
@@ -56,6 +57,7 @@ function biometricEnableFailureMessage(outcome: LocalBiometricOutcome): string {
 }
 
 export default function AuthenticationScreen() {
+  const router = useRouter();
   const [authentication, setAuthentication] = useState<MobileAuthenticationState>(() => mobileAuthenticationSession.getState());
   const [mode, setMode] = useState<AuthMode>('LOGIN');
   const [email, setEmail] = useState('');
@@ -377,6 +379,15 @@ export default function AuthenticationScreen() {
           <View className="my-10 rounded-xl bg-surface-light p-5 dark:bg-surface-dark" accessibilityLiveRegion="polite">
             <Text className="text-xl font-bold text-ink-light dark:text-ink-dark">已安全登录</Text>
             <Text className="mt-2 text-base text-muted-light dark:text-muted-dark">当前设备：{authentication.session?.deviceName}</Text>
+            <Pressable
+              accessibilityLabel="快速记账"
+              accessibilityRole="button"
+              className="mt-4 min-h-11 items-center justify-center rounded-lg bg-accent active:opacity-70"
+              onPress={() => router.push('/quick-record')}
+              testID="open-quick-record"
+            >
+              <Text className="font-bold text-canvas-dark">快速记账</Text>
+            </Pressable>
             {authentication.userId ? <SyncStatusPanel userId={authentication.userId} /> : null}
             <View className="mt-5 border-t border-canvas-light pt-4 dark:border-canvas-dark">
               <Text className="text-base font-semibold text-ink-light dark:text-ink-dark">本机生物识别解锁</Text>

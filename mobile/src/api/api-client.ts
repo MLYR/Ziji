@@ -14,6 +14,7 @@ export type MobileRefreshRequest = components['schemas']['MobileRefreshRequest']
 export type UserEnvelope = components['schemas']['UserEnvelope'];
 export type MobileSessionEnvelope = components['schemas']['MobileSessionEnvelope'];
 export type TransactionEnvelope = components['schemas']['TransactionEnvelope'];
+export type PostTransactionRequest = components['schemas']['PostTransactionRequest'];
 export type RegistrationChallengeEnvelope = operations['createRegistrationChallenge']['responses'][202]['content']['application/json'];
 
 export interface MobileSyncApiClient {
@@ -32,6 +33,7 @@ export interface MobileAuthApiClient {
 
 export interface MobileTransactionApiClient {
   getTransaction(transactionId: string): Promise<TransactionEnvelope>;
+  createTransaction(idempotencyKey: string, body: PostTransactionRequest): Promise<TransactionEnvelope>;
 }
 
 export class ApiClientError extends Error {
@@ -152,6 +154,13 @@ export function createMobileTransactionApiClient(options: MobileApiClientOptions
   return {
     getTransaction(transactionId) {
       return request<TransactionEnvelope>(`/api/v1/transactions/${encodeURIComponent(transactionId)}`, { method: 'GET' });
+    },
+    createTransaction(idempotencyKey, body) {
+      return request<TransactionEnvelope>('/api/v1/transactions', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      });
     },
   };
 }

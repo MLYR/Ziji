@@ -21,6 +21,7 @@ authenticationSession = new MobileAuthenticationSession(
 );
 
 export const mobileAuthenticationSession = authenticationSession;
+export const mobileAuthApiClient = api;
 
 // 同步与冲突详情复用已确认主体的进程内 Bearer，不读取或复制安全存储中的刷新凭据。
 const readAccessToken = async () => authenticationSession?.getAccessToken() ?? null;
