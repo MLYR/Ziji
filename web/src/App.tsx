@@ -2,9 +2,10 @@ import type { paths } from '@ziji/api-types'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertCircleIcon, BarChart3Icon, DatabaseIcon, HomeIcon, LoaderCircleIcon, MoonIcon, ReceiptTextIcon, SunIcon, WalletCardsIcon } from 'lucide-react'
 import { useEffect, useRef } from 'react'
-import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
+import { Link, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 
 import { AuthPage } from '@/auth/AuthPage'
+import { RecordTransactionPage } from '@/ledger/RecordTransactionPage'
 import { CurrentSessionSignOutButton, DeviceSessionsSheet } from '@/auth/DeviceSessionsSheet'
 import { retryWebSessionInitialization, useWebAuth } from '@/auth/auth-session'
 import { useWebSessionInitialization } from '@/auth/use-web-session-initialization'
@@ -79,7 +80,7 @@ function DashboardPage() {
             <h1 className="font-heading text-2xl font-semibold tracking-tight">总览基础设施已就绪</h1>
             <p className="text-sm text-muted-foreground">正式财务数据将在 B1 业务接口完成后接入。</p>
           </div>
-          <Button>新增一笔</Button>
+          <Button asChild><Link to="/transactions/new">记一笔</Link></Button>
         </section>
         <section className="grid gap-4 md:grid-cols-3" aria-label="资产指标加载示例" data-motion-item>
           {['净资产', '总资产', '总负债'].map((label) => (
@@ -184,6 +185,7 @@ function App() {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/accounts" element={<PlaceholderPage title="账户" />} />
           <Route path="/transactions" element={<PlaceholderPage title="流水" />} />
+          <Route path="/transactions/new" element={<RecordTransactionPage />} />
           <Route path="/investments" element={<PlaceholderPage title="投资" />} />
         </Route>
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
