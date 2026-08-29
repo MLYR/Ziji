@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-/** V014/V015 验收：每消费者 outbox 回执、内置 SYNC 订阅与 V013 历史升级基线。 */
+/** V014/V015/V017 验收：每消费者 outbox 回执、内置 SYNC 订阅与历史升级基线。 */
 @Testcontainers
 class OutboxConsumerReceiptMigrationTests {
 
@@ -32,13 +32,17 @@ class OutboxConsumerReceiptMigrationTests {
 	private static final org.testcontainers.postgresql.PostgreSQLContainer UPGRADE_POSTGRES = newContainer(
 		"ziji_outbox_receipt_upgrade");
 
+	@Container
+	private static final org.testcontainers.postgresql.PostgreSQLContainer V015_UPGRADE_POSTGRES = newContainer(
+		"ziji_outbox_receipt_v015_upgrade");
+
 	@Test
 	void emptyDatabaseCreatesIndependentReceiptFactsAndConstraints() throws Exception {
 		migrate(EMPTY_POSTGRES, null);
 		migrate(EMPTY_POSTGRES, null);
 		try (Connection connection = connection(EMPTY_POSTGRES)) {
 			Instant syncSubscriptionStart = syncSubscriptionStart(connection, "TransactionPosted");
-			assertEquals(16, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			assertEquals(17, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
 			assertEquals(1, count(connection, """
 				SELECT COUNT(*) FROM outbox_consumer_subscriptions
 				WHERE consumer_name = 'SYNC' AND aggregate_type = 'Transaction'
@@ -167,6 +171,28 @@ class OutboxConsumerReceiptMigrationTests {
 	}
 
 	@Test
+	void v015DatabaseUpgradesBuiltInSyncBoundaryWithoutRewritingV015() throws Exception {
+		migrate(V015_UPGRADE_POSTGRES, "15");
+		try (Connection connection = connection(V015_UPGRADE_POSTGRES)) {
+			assertEquals(-920552827, checksum(connection, "015"));
+			assertEquals(Instant.EPOCH, syncSubscriptionStart(connection, "TransactionPosted"));
+			assertEquals(Instant.EPOCH, syncSubscriptionCreatedAt(connection, "TransactionPosted"));
+		}
+
+		migrate(V015_UPGRADE_POSTGRES, null);
+
+		try (Connection connection = connection(V015_UPGRADE_POSTGRES)) {
+			assertEquals(17, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			assertEquals(-920552827, checksum(connection, "015"));
+			Instant subscriptionStart = syncSubscriptionStart(connection, "TransactionPosted");
+			assertFalse(Instant.EPOCH.equals(subscriptionStart));
+			assertEquals(subscriptionStart, syncSubscriptionCreatedAt(connection, "TransactionPosted"));
+			assertEquals(subscriptionStart, syncSubscriptionStart(connection, "TransactionReversed"));
+			assertEquals(subscriptionStart, syncSubscriptionCreatedAt(connection, "TransactionReversed"));
+		}
+	}
+
+	@Test
 	void v013DatabaseUpgradesToCurrentWithoutRewritingPreviousMigrations() throws Exception {
 		migrate(UPGRADE_POSTGRES, "13");
 		Map<String, Integer> previousChecksums;
@@ -177,7 +203,7 @@ class OutboxConsumerReceiptMigrationTests {
 		migrate(UPGRADE_POSTGRES, null);
 
 		try (Connection connection = connection(UPGRADE_POSTGRES)) {
-			assertEquals(16, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			assertEquals(17, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
 			assertEquals(previousChecksums, checksumsThroughV013(connection));
 			assertFalse(Instant.EPOCH.equals(syncSubscriptionStart(connection, "TransactionPosted")));
 			assertEquals(1, count(connection, """
@@ -336,6 +362,16 @@ class OutboxConsumerReceiptMigrationTests {
 		try (var statement = connection.prepareStatement("DELETE FROM outbox_events WHERE id = ?")) {
 			statement.setObject(1, eventId);
 			statement.executeUpdate();
+		}
+	}
+
+	private static int checksum(Connection connection, String version) throws SQLException {
+		try (var statement = connection.prepareStatement("SELECT checksum FROM flyway_schema_history WHERE version = ?")) {
+			statement.setString(1, version);
+			try (ResultSet result = statement.executeQuery()) {
+				assertTrue(result.next());
+				return result.getInt(1);
+			}
 		}
 	}
 
