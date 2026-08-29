@@ -1,4 +1,4 @@
-import { createMobileApiClient, createMobileAuthApiClient, createMobileSyncApiClient, createMobileTransactionApiClient } from './api-client';
+import { createMobileAccountsApiClient, createMobileApiClient, createMobileAuthApiClient, createMobileSyncApiClient, createMobileTransactionApiClient } from './api-client';
 
 describe('Mobile API client', () => {
   afterEach(() => {
@@ -76,5 +76,22 @@ describe('Mobile API client', () => {
     expect(fetchMock.mock.calls[0]?.[0].toString()).toBe('https://api.ziji.test/api/v1/transactions/transaction%20%2F%20id');
     expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get('Authorization')).toBe('Bearer access-test');
     expect(fetchMock.mock.calls[0]?.[1]?.credentials).toBe('omit');
+  });
+
+  it('更新账户经真实请求层发送 merge-patch Media Type', async () => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: { id: 'account-1' }, meta: { requestId: 'request-1' } }), { status: 200 }),
+    );
+    const client = createMobileAccountsApiClient({ baseUrl: 'https://api.ziji.test/', readAccessToken: async () => 'access-test' });
+
+    await client.updateAccount('account / id', '"2"', { name: '新名称' });
+
+    expect(fetchMock.mock.calls[0]?.[0].toString()).toBe('https://api.ziji.test/api/v1/accounts/account%20%2F%20id');
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(init?.method).toBe('PATCH');
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer access-test');
+    expect(new Headers(init?.headers).get('If-Match')).toBe('"2"');
+    expect(new Headers(init?.headers).get('Content-Type')).toBe('application/merge-patch+json');
+    expect(init?.body).toBe(JSON.stringify({ name: '新名称' }));
   });
 });

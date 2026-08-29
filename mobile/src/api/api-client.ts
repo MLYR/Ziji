@@ -218,7 +218,8 @@ export function createMobileAccountsApiClient(options: MobileApiClientOptions): 
     updateAccount(accountId, etag, body) {
       return request<AccountEnvelope>(`/api/v1/accounts/${encodeURIComponent(accountId)}`, {
         method: 'PATCH',
-        headers: { 'If-Match': etag },
+        // 后端账户更新只接受 JSON Merge Patch；显式声明后通用层不会回退为 application/json。
+        headers: { 'If-Match': etag, 'Content-Type': 'application/merge-patch+json' },
         body: JSON.stringify(body),
       });
     },
