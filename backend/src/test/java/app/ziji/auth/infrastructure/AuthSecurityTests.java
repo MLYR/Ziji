@@ -1,7 +1,6 @@
 package app.ziji.auth.infrastructure;
 
 import java.net.InetAddress;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Clock;
@@ -14,10 +13,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-
-import javax.crypto.Cipher;
-import javax.crypto.spec.GCMParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
 
 import app.ziji.auth.application.AccessTokenService;
 import app.ziji.auth.application.AuthRateLimitSubjects;
@@ -203,7 +198,8 @@ class AuthSecurityTests {
 		assertEquals(7, first.keyVersion());
 		assertNotEquals(first.nonce(), second.nonce());
 		assertNotEquals("123456", first.ciphertext());
-		assertEquals("123456", decrypt(first, key, challengeId, EmailChallengePurpose.REGISTER));
+		assertEquals("123456", new AesGcmEnvelopeDecryptor(key).decrypt(
+			challengeId, EmailChallengePurpose.REGISTER, first));
 	}
 
 	@Test
@@ -278,40 +274,6 @@ class AuthSecurityTests {
 				throw new UnsupportedOperationException();
 			}
 		};
-	}
-
-	private static String decrypt(
-		EncryptedCodeEnvelope envelope,
-		EnvelopeKey key,
-		UUID challengeId,
-		EmailChallengePurpose purpose) throws Exception {
-		byte[] wrappedNonce = decode(envelope.wrappedDataKeyNonce());
-		Cipher unwrap = Cipher.getInstance("AES/GCM/NoPadding");
-		unwrap.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key.secretCopy(), "AES"),
-			new GCMParameterSpec(128, wrappedNonce));
-		unwrap.updateAAD(HmacInputEncoder.encode(
-			"ziji-email-challenge-kek-v1",
-			ByteBuffer.allocate(Integer.BYTES).putInt(key.version()).array()));
-		byte[] dataKey = unwrap.doFinal(decode(envelope.wrappedDataKey()));
-
-		Cipher payload = Cipher.getInstance("AES/GCM/NoPadding");
-		payload.init(Cipher.DECRYPT_MODE, new SecretKeySpec(dataKey, "AES"),
-			new GCMParameterSpec(128, decode(envelope.nonce())));
-		payload.updateAAD(HmacInputEncoder.encode(
-			"ziji-email-challenge-envelope-v1", uuidBytes(challengeId),
-			purpose.name().getBytes(StandardCharsets.UTF_8)));
-		return new String(payload.doFinal(decode(envelope.ciphertext())), StandardCharsets.UTF_8);
-	}
-
-	private static byte[] uuidBytes(UUID value) {
-		return ByteBuffer.allocate(Long.BYTES * 2)
-			.putLong(value.getMostSignificantBits())
-			.putLong(value.getLeastSignificantBits())
-			.array();
-	}
-
-	private static byte[] decode(String value) {
-		return Base64.getUrlDecoder().decode(value);
 	}
 
 	private static byte[] key(byte value) {

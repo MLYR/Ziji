@@ -111,6 +111,8 @@ pnpm --filter mobile start
 
 Web 开发服务器会将浏览器发出的同源 `/api/**` 请求原路径代理到本地 Backend `http://127.0.0.1:8080`；请从 Vite 输出的 `localhost` 地址访问页面，使 host-only 的 Web Session/CSRF Cookie 保持在同一浏览器 origin。该代理仅在 `vite dev` 生效，不改变生产构建、部署路由或业务 API Client。
 
+请求注册或重置密码验证码后，打开 Mailpit [http://localhost:8025](http://localhost:8025) 查看邮件。验证码只出现在邮件正文，不会写入应用日志；Backend 通过 EMAIL outbox 消费者把邮件投递到本地 SMTP `localhost:1025`。
+
 ## 3. OpenAPI 与共享类型
 
 ```bash

@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-/** V014/V015/V017 验收：每消费者 outbox 回执、内置 SYNC 订阅与历史升级基线。 */
+/** V014/V015/V017/V018 验收：每消费者 outbox 回执、内置 SYNC/EMAIL 订阅与历史升级基线。 */
 @Testcontainers
 class OutboxConsumerReceiptMigrationTests {
 
@@ -42,7 +42,7 @@ class OutboxConsumerReceiptMigrationTests {
 		migrate(EMPTY_POSTGRES, null);
 		try (Connection connection = connection(EMPTY_POSTGRES)) {
 			Instant syncSubscriptionStart = syncSubscriptionStart(connection, "TransactionPosted");
-			assertEquals(17, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			assertEquals(18, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
 			assertEquals(1, count(connection, """
 				SELECT COUNT(*) FROM outbox_consumer_subscriptions
 				WHERE consumer_name = 'SYNC' AND aggregate_type = 'Transaction'
@@ -59,6 +59,7 @@ class OutboxConsumerReceiptMigrationTests {
 			assertEquals(syncSubscriptionStart, syncSubscriptionStart(connection, "TransactionReversed"));
 			assertEquals(syncSubscriptionStart, syncSubscriptionCreatedAt(connection, "TransactionReversed"));
 			assertFalse(Instant.EPOCH.equals(syncSubscriptionStart));
+			assertEmailSubscriptionInitialized(connection);
 			assertEquals(1, count(connection, """
 				SELECT COUNT(*) FROM information_schema.tables
 				WHERE table_schema = 'public' AND table_name = 'outbox_consumer_receipts'
@@ -182,13 +183,14 @@ class OutboxConsumerReceiptMigrationTests {
 		migrate(V015_UPGRADE_POSTGRES, null);
 
 		try (Connection connection = connection(V015_UPGRADE_POSTGRES)) {
-			assertEquals(17, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			assertEquals(18, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
 			assertEquals(-920552827, checksum(connection, "015"));
 			Instant subscriptionStart = syncSubscriptionStart(connection, "TransactionPosted");
 			assertFalse(Instant.EPOCH.equals(subscriptionStart));
 			assertEquals(subscriptionStart, syncSubscriptionCreatedAt(connection, "TransactionPosted"));
 			assertEquals(subscriptionStart, syncSubscriptionStart(connection, "TransactionReversed"));
 			assertEquals(subscriptionStart, syncSubscriptionCreatedAt(connection, "TransactionReversed"));
+			assertEmailSubscriptionInitialized(connection);
 		}
 	}
 
@@ -203,9 +205,10 @@ class OutboxConsumerReceiptMigrationTests {
 		migrate(UPGRADE_POSTGRES, null);
 
 		try (Connection connection = connection(UPGRADE_POSTGRES)) {
-			assertEquals(17, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			assertEquals(18, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
 			assertEquals(previousChecksums, checksumsThroughV013(connection));
 			assertFalse(Instant.EPOCH.equals(syncSubscriptionStart(connection, "TransactionPosted")));
+			assertEmailSubscriptionInitialized(connection);
 			assertEquals(1, count(connection, """
 				SELECT COUNT(*) FROM pg_constraint
 				WHERE conrelid = 'outbox_consumer_receipts'::regclass
@@ -388,6 +391,31 @@ class OutboxConsumerReceiptMigrationTests {
 			}
 		}
 		return checksums;
+	}
+
+
+	private static void assertEmailSubscriptionInitialized(Connection connection) throws SQLException {
+		assertEquals(1, count(connection, """
+			SELECT COUNT(*) FROM outbox_consumer_subscriptions
+			WHERE consumer_name = 'EMAIL' AND aggregate_type = 'EmailChallenge'
+			  AND event_type = 'EmailChallengeIssued' AND subscribed_until IS NULL
+			  AND required_for_cleanup
+			"""));
+		Instant emailStart = emailSubscriptionTimestamp(connection, "subscribed_from");
+		assertEquals(emailStart, emailSubscriptionTimestamp(connection, "created_at"));
+		assertFalse(Instant.EPOCH.equals(emailStart));
+	}
+
+	private static Instant emailSubscriptionTimestamp(Connection connection, String column) throws SQLException {
+		try (var statement = connection.prepareStatement("""
+			SELECT %s
+			FROM outbox_consumer_subscriptions
+			WHERE consumer_name = 'EMAIL' AND aggregate_type = 'EmailChallenge'
+			  AND event_type = 'EmailChallengeIssued'
+			""".formatted(column)); ResultSet result = statement.executeQuery()) {
+			assertTrue(result.next());
+			return result.getTimestamp(1).toInstant();
+		}
 	}
 
 	private static Instant syncSubscriptionStart(Connection connection, String eventType) throws SQLException {
