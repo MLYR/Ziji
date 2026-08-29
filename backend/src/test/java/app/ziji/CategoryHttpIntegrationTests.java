@@ -33,7 +33,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** PostgreSQL 验收 T-CAT-001/002：两级分类、同树唯一、默认与账户分类可见性。 */
+/** PostgreSQL 验收 T-CAT-001～004：分类层级/唯一/合并与交易多标签事实链。 */
 @SpringBootTest
 @ActiveProfiles("test")
 @AutoConfigureMockMvc
