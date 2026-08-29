@@ -329,7 +329,7 @@ Access Token 固定为至少 2048 位 RSA 签发的 RS256 JWT，header 必须为
 }
 ```
 
-Web 登录/刷新响应不在 JSON 中返回 refreshToken，而是同时设置以下 host-only Cookie（不设置 `Domain`）：`ziji_refresh` 固定为 `Secure`、`HttpOnly`、`SameSite=Strict`、`Path=/api/v1`；`ziji_csrf` 固定为 `Secure`、非 `HttpOnly`、`SameSite=Strict`、`Path=/api/v1`。CSRF Header 固定为 `X-CSRF-Token`，不得使用 Spring 默认 `X-XSRF-TOKEN`。两枚 Cookie 的 `Max-Age` 不得超过稳定会话剩余绝对期限；本机 Web 会话退出、撤销全部设备、刷新 Token 无效或确认重用时以相同属性和 `Max-Age=0` 清理。Web 登录和刷新均返回 `Cache-Control: no-store`。携带 `ziji_refresh` 的不安全 Web 请求必须校验 CSRF；无该 Cookie 的 Mobile Bearer 请求不要求 CSRF。移动端在响应体返回刷新 Token 且绝不设置上述认证或 CSRF Cookie，并存入系统安全存储。两套 operationId 分离，底层复用同一认证服务。刷新 Token 正常轮换必须在同一数据库事务锁定当前 Token、消费旧 Token、插入新 Token、设置 `replacedById` 并更新 `lastSeenAt`；失败整体回滚且并发最多一个成功。已消费 Token 保留可识别状态，后续重用攻击撤销整个设备会话。
+Web 登录/刷新响应不在 JSON 中返回 refreshToken，而是同时设置以下 host-only Cookie（不设置 `Domain`）：`ziji_refresh` 固定为 `Secure`、`HttpOnly`、`SameSite=Strict`、`Path=/api/v1`；`ziji_csrf` 固定为 `Secure`、非 `HttpOnly`、`SameSite=Strict`、`Path=/`，以便 SPA 路由读取后提交 `X-CSRF-Token`。CSRF Header 固定为 `X-CSRF-Token`，不得使用 Spring 默认 `X-XSRF-TOKEN`。两枚 Cookie 的 `Max-Age` 不得超过稳定会话剩余绝对期限；本机 Web 会话退出、撤销全部设备、刷新 Token 无效或确认重用时以相同属性和 `Max-Age=0` 清理。Web 登录和刷新均返回 `Cache-Control: no-store`。携带 `ziji_refresh` 的不安全 Web 请求必须校验 CSRF；无该 Cookie 的 Mobile Bearer 请求不要求 CSRF。移动端在响应体返回刷新 Token 且绝不设置上述认证或 CSRF Cookie，并存入系统安全存储。两套 operationId 分离，底层复用同一认证服务。刷新 Token 正常轮换必须在同一数据库事务锁定当前 Token、消费旧 Token、插入新 Token、设置 `replacedById` 并更新 `lastSeenAt`；失败整体回滚且并发最多一个成功。已消费 Token 保留可识别状态，后续重用攻击撤销整个设备会话。
 
 ### 4.2 当前用户
 

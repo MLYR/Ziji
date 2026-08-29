@@ -21,8 +21,38 @@ const user = {
   version: 1,
 }
 
+const dashboard = {
+  baseCurrency: 'CNY',
+  asOf: '2026-08-28T00:00:00Z',
+  asOfSequence: 0,
+  valuationRevision: 1,
+  recalculatedAt: '2026-08-28T00:00:00Z',
+  projectionStatus: 'CURRENT',
+  summary: { totalAssets: '70000.00', availableFunds: '20000.00', investmentAssets: '50000.00', totalLiabilities: '2300.00', netAssets: '67700.00' },
+  changeAttribution: { income: '0.00', expense: '0.00', market: '0.00', fx: '0.00', adjustment: '0.00', inclusion: '0.00' },
+  distribution: [],
+  investmentOverview: { baseCurrency: 'CNY', brokerCash: '50000.00', positionMarketValue: '0.00', totalInvestmentAssets: '50000.00', unpricedInstrumentCount: 0 },
+  dataQualityWarnings: [],
+}
+
 function responseBody(body: unknown) {
   return JSON.stringify(body)
+}
+
+async function stubDashboard(page: Page) {
+  // Dashboard 已拆分为多个受保护读取端点，认证壳 E2E 统一替换它们的后端边界。
+  await page.route('**/api/v1/dashboard', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: responseBody({ data: dashboard, meta: { requestId: 'request-dashboard' } }) })
+  })
+  await page.route('**/api/v1/statistics/assets**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: responseBody({ data: { baseCurrency: 'CNY', valuationRevision: 1, points: [] }, meta: { requestId: 'request-assets' } }) })
+  })
+  await page.route('**/api/v1/statistics/accounts**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: responseBody({ data: { baseCurrency: 'CNY', valuationRevision: 1, points: [] }, meta: { requestId: 'request-accounts' } }) })
+  })
+  await page.route('**/api/v1/transactions?limit=5', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: responseBody({ data: [], meta: { requestId: 'request-transactions', nextCursor: null, hasMore: false } }) })
+  })
 }
 
 async function stubLogin(page: Page) {
@@ -44,6 +74,7 @@ async function stubLogin(page: Page) {
   await page.route('**/api/v1/users/me', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: responseBody({ data: user, meta: {} }) })
   })
+  await stubDashboard(page)
 }
 
 async function fillLogin(page: Page) {
@@ -57,7 +88,7 @@ test('应用壳登录后可进入总览并切换主题', async ({ page }) => {
   await page.goto('/dashboard')
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible()
   await fillLogin(page)
-  await expect(page.getByRole('heading', { name: '总览基础设施已就绪' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '总览' })).toBeVisible()
   await page.getByRole('button', { name: '切换到浅色主题', exact: true }).click()
   await expect(page.locator('html')).toHaveClass(/light/)
 })
@@ -80,11 +111,12 @@ test('有效 Web 会话在浏览器硬刷新后恢复，并可从壳退出', asy
   await page.route('**/api/v1/auth/sessions/current', async (route) => {
     await route.fulfill({ status: 204, body: '' })
   })
+  await stubDashboard(page)
 
   await page.goto('/dashboard')
-  await expect(page.getByRole('heading', { name: '总览基础设施已就绪' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '总览' })).toBeVisible()
   await page.reload()
-  await expect(page.getByRole('heading', { name: '总览基础设施已就绪' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '总览' })).toBeVisible()
   expect(refreshCount).toBe(2)
   await page.getByRole('button', { name: '退出登录' }).click()
   await page.getByRole('button', { name: '确认退出' }).click()
@@ -201,6 +233,7 @@ test('登录请求处理中禁用按钮并显示加载文案', async ({ page }) 
   await page.route('**/api/v1/users/me', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: responseBody({ data: user, meta: {} }) })
   })
+  await stubDashboard(page)
 
   await page.goto('/login')
   await page.getByLabel(/邮箱地址/).fill(user.email)
@@ -211,5 +244,5 @@ test('登录请求处理中禁用按钮并显示加载文案', async ({ page }) 
   await expect(submitButton).toBeDisabled()
   await expect(submitButton).toContainText('登录中…')
   releaseSession()
-  await expect(page.getByRole('heading', { name: '总览基础设施已就绪' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '总览' })).toBeVisible()
 })

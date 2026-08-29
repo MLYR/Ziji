@@ -673,9 +673,10 @@ class AuthHttpIntegrationTests extends PostgresIntegrationTestSupport {
 	private static void assertCookieAttributes(MvcResult result, String name, String requiredAttribute) {
 		for (String header : result.getResponse().getHeaders(HttpHeaders.SET_COOKIE)) {
 			if (header.startsWith(name + "=")) {
+				String expectedPath = "ziji_csrf".equals(name) ? "/" : "/api/v1";
 				assertTrue(header.contains("Secure"));
 				assertTrue(header.contains("SameSite=Strict"));
-				assertTrue(header.contains("Path=/api/v1"));
+				assertTrue(header.contains("Path=" + expectedPath + ";"));
 				assertTrue(header.contains(requiredAttribute));
 				assertFalse(header.contains("Domain="));
 				if ("ziji_csrf".equals(name)) {

@@ -18,7 +18,8 @@ public class WebSessionCookieService {
 
 	private static final String REFRESH_COOKIE = "ziji_refresh";
 	private static final String CSRF_COOKIE = "ziji_csrf";
-	private static final String PATH = "/api/v1";
+	private static final String REFRESH_PATH = "/api/v1";
+	private static final String CSRF_PATH = "/";
 
 	private final CookieCsrfTokenRepository csrfTokenRepository;
 	private final Clock clock;
@@ -33,7 +34,7 @@ public class WebSessionCookieService {
 		HttpServletResponse response,
 		SessionTokenResult session) {
 		Duration maxAge = remainingSessionLifetime(session);
-		// 不设 Domain 使两个 Cookie 固定为 host-only；路径和 SameSite 与清除 Cookie 完全一致。
+		// 不设 Domain 使两个 Cookie 固定为 host-only；各自路径和 SameSite 与清除 Cookie 完全一致。
 		response.addHeader(HttpHeaders.SET_COOKIE, refreshCookie(session.refreshToken(), maxAge).toString());
 		CsrfToken csrfToken = csrfTokenRepository.generateToken(request);
 		response.addHeader(HttpHeaders.SET_COOKIE, csrfCookie(csrfToken.getToken(), maxAge).toString());
@@ -51,7 +52,7 @@ public class WebSessionCookieService {
 
 	private static ResponseCookie refreshCookie(String value, Duration maxAge) {
 		return ResponseCookie.from(REFRESH_COOKIE, value)
-			.path(PATH)
+			.path(REFRESH_PATH)
 			.secure(true)
 			.httpOnly(true)
 			.sameSite("Strict")
@@ -61,7 +62,7 @@ public class WebSessionCookieService {
 
 	private static ResponseCookie csrfCookie(String value, Duration maxAge) {
 		return ResponseCookie.from(CSRF_COOKIE, value)
-			.path(PATH)
+			.path(CSRF_PATH)
 			.secure(true)
 			.httpOnly(false)
 			.sameSite("Strict")

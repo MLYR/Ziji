@@ -6,6 +6,8 @@ const e2eBaseUrl = `http://127.0.0.1:${e2ePort}`
 // Playwright 启动独立 Vite 预览端口，避免占用开发者正在使用的服务。
 export default defineConfig({
   testDir: './tests/e2e',
+  // 真实 Backend smoke 由 playwright.integration.config.ts 单独运行，默认 E2E 保持 Mock 边界。
+  testIgnore: 'backend-proxy.spec.ts',
   use: {
     baseURL: e2eBaseUrl,
     // 本地可复用已安装的稳定 Chrome；CI 未设置时仍使用 Playwright 自带 Chromium。

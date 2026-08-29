@@ -109,6 +109,8 @@ pnpm --filter mobile start
 
 后端健康检查为 `http://localhost:8080/actuator/health`。当前三个入口是生产技术栈的最小应用壳，不包含伪造余额或业务数据。
 
+Web 开发服务器会将浏览器发出的同源 `/api/**` 请求原路径代理到本地 Backend `http://127.0.0.1:8080`；请从 Vite 输出的 `localhost` 地址访问页面，使 host-only 的 Web Session/CSRF Cookie 保持在同一浏览器 origin。该代理仅在 `vite dev` 生效，不改变生产构建、部署路由或业务 API Client。
+
 ## 3. OpenAPI 与共享类型
 
 ```bash
@@ -183,6 +185,9 @@ TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock \
 pnpm --filter web check
 pnpm --filter web test
 ZIJI_PLAYWRIGHT_CHANNEL=chrome pnpm --filter web test:e2e
+
+# 真实 Backend 必须已启动；浏览器经 Vite 验证 /api proxy 未认证 Problem 响应
+ZIJI_PLAYWRIGHT_CHANNEL=chrome pnpm --filter web test:proxy
 
 # CI 或没有 Chrome 的机器安装 Playwright 锁定版 Chromium 后执行
 pnpm --filter web exec playwright install chromium

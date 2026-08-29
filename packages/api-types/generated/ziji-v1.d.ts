@@ -3442,7 +3442,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description Web 会话已创建；响应以重复 Set-Cookie 设置 host-only 的 ziji_refresh（Secure、HttpOnly、SameSite=Strict、Path=/api/v1）与 ziji_csrf（Secure、非 HttpOnly、SameSite=Strict、Path=/api/v1），并设置 Cache-Control: no-store；刷新 Token 不出现在 JSON */
+        /** @description Web 会话已创建；响应以重复 Set-Cookie 设置 host-only 的 ziji_refresh（Secure、HttpOnly、SameSite=Strict、Path=/api/v1）与 ziji_csrf（Secure、非 HttpOnly、SameSite=Strict、Path=/，供 SPA 路由读取并提交 X-CSRF-Token），并设置 Cache-Control: no-store；刷新 Token 不出现在 JSON */
         WebSessionCreated: {
             headers: {
                 [name: string]: unknown;

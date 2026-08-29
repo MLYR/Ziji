@@ -10,6 +10,7 @@
     "check": "tsc -b && oxlint",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:proxy": "playwright test --config playwright.integration.config.ts",
     "preview": "vite preview"
   },
   "dependencies": {

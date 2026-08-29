@@ -32,7 +32,8 @@ class SecurityConfiguration {
 		CookieCsrfTokenRepository repository = CookieCsrfTokenRepository.withHttpOnlyFalse();
 		repository.setCookieName("ziji_csrf");
 		repository.setHeaderName("X-CSRF-Token");
-		repository.setCookiePath("/api/v1");
+		// SPA 路由也必须读取 CSRF Cookie；刷新凭据仍由 WebSessionCookieService 限定为 API Path。
+		repository.setCookiePath("/");
 		repository.setCookieCustomizer(cookie -> cookie.secure(true).sameSite("Strict"));
 		return repository;
 	}
