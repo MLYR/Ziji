@@ -19,7 +19,7 @@ import {
   type Account,
 } from '@/ledger/transaction-api'
 
-type TransactionType = 'EXPENSE' | 'INCOME' | 'REFUND' | 'TRANSFER' | 'ADJUSTMENT'
+type TransactionType = 'EXPENSE' | 'INCOME' | 'REFUND' | 'TRANSFER' | 'LIABILITY_REPAYMENT' | 'ADJUSTMENT'
 
 type MoneyAmount = components['schemas']['MoneyAmount']
 
@@ -33,6 +33,7 @@ const TYPE_OPTIONS: { value: TransactionType; label: string; hint: string }[] = 
   { value: 'INCOME', label: '收入', hint: '资金进入资产账户，计入收入统计。' },
   { value: 'REFUND', label: '退款', hint: '关联原支出交易的退款到账。' },
   { value: 'TRANSFER', label: '转账', hint: '同币种账户间转账，可记录手续费。' },
+  { value: 'LIABILITY_REPAYMENT', label: '负债还款', hint: '本金不计支出；利息和手续费分别使用费用分类。' },
   { value: 'ADJUSTMENT', label: '余额调整', hint: '以实际余额为准的对账修正。' },
 ]
 
@@ -44,7 +45,7 @@ function currencyMinorUnits(currency: string): number {
 
 function amountPattern(currency: string): RegExp {
   const decimals = currencyMinorUnits(currency)
-  return decimals === 0 ? /^\d+/ : new RegExp(`^\\d+(\\.\\d{1,${decimals}})?$`)
+  return decimals === 0 ? /^\d+$/ : new RegExp(`^\\d+(\\.\\d{1,${decimals}})?$`)
 }
 
 function nowLocalInput(): string {
@@ -63,8 +64,14 @@ function toInstant(localValue: string): string {
 }
 
 function formatAmount(value: string, currency: string): string {
+  const [integer, fraction = ''] = value.trim().split('.')
   const decimals = currencyMinorUnits(currency)
-  return decimals === 0 ? value : Number(value).toFixed(decimals)
+  // 金额字符串不经二进制浮点数，避免在客户端格式化时丢失大金额的低位精度。
+  return decimals === 0 ? integer : `${integer}.${fraction.padEnd(decimals, '0')}`
+}
+
+function isPositiveAmount(value: string): boolean {
+  return !/^0+(?:\.0+)?$/.test(value.trim())
 }
 
 interface FormErrors {
@@ -80,6 +87,12 @@ const FIELD_LABELS: Record<string, string> = {
   originalTransactionId: '原交易 ID',
   fee: '手续费',
   feeCategoryId: '手续费分类',
+  cashAccountId: '付款账户',
+  liabilityAccountId: '负债账户',
+  principalAmount: '本金',
+  interestAmount: '利息',
+  interestCategoryId: '利息分类',
+  feeAmount: '手续费',
   actualBalance: '调整后余额',
   reason: '调整原因',
   categoryId: '分类',
@@ -104,6 +117,13 @@ export function RecordTransactionPage() {
   const [fromAmount, setFromAmount] = useState('')
   const [fee, setFee] = useState('')
   const [feeCategoryId, setFeeCategoryId] = useState('')
+  const [cashAccountId, setCashAccountId] = useState('')
+  const [liabilityAccountId, setLiabilityAccountId] = useState('')
+  const [principalAmount, setPrincipalAmount] = useState('')
+  const [interestAmount, setInterestAmount] = useState('0')
+  const [interestCategoryId, setInterestCategoryId] = useState('')
+  const [feeAmount, setFeeAmount] = useState('0')
+  const [repaymentFeeCategoryId, setRepaymentFeeCategoryId] = useState('')
   const [actualBalance, setActualBalance] = useState('')
   const [reason, setReason] = useState('')
   const [businessAt, setBusinessAt] = useState(nowLocalInput)
@@ -124,15 +144,21 @@ export function RecordTransactionPage() {
   }, [activeAccounts])
 
   const selectedAccount = accountById.get(accountId)
-  const selectedCurrency = selectedAccount?.currency ?? user?.baseCurrency ?? 'CNY'
+  const cashAccount = accountById.get(cashAccountId)
+  const selectedCurrency = (type === 'LIABILITY_REPAYMENT' ? cashAccount?.currency : selectedAccount?.currency) ?? user?.baseCurrency ?? 'CNY'
   const fromAccount = accountById.get(fromAccountId)
   const toAccount = accountById.get(toAccountId)
+  const liabilityAccount = accountById.get(liabilityAccountId)
 
   const payload = useMemo(() => JSON.stringify({
     type, accountId, amount, merchant, categoryId, note, originalTransactionId,
-    fromAccountId, toAccountId, fromAmount, fee, feeCategoryId, actualBalance, reason, businessAt,
+    fromAccountId, toAccountId, fromAmount, fee, feeCategoryId,
+    cashAccountId, liabilityAccountId, principalAmount, interestAmount, interestCategoryId, feeAmount, repaymentFeeCategoryId,
+    actualBalance, reason, businessAt,
   }), [type, accountId, amount, merchant, categoryId, note, originalTransactionId,
-    fromAccountId, toAccountId, fromAmount, fee, feeCategoryId, actualBalance, reason, businessAt])
+    fromAccountId, toAccountId, fromAmount, fee, feeCategoryId,
+    cashAccountId, liabilityAccountId, principalAmount, interestAmount, interestCategoryId, feeAmount, repaymentFeeCategoryId,
+    actualBalance, reason, businessAt])
 
   // 幂等键与载荷绑定：内容不变的重试复用同一键，修改内容后立即换新键，避免同键异参冲突。
   // oxlint-disable-next-line react-hooks/exhaustive-deps -- randomUUID 是刻意的副作用键，只随载荷变化重建。
@@ -188,6 +214,22 @@ export function RecordTransactionPage() {
           note: base.note,
         })
       }
+      if (type === 'LIABILITY_REPAYMENT') {
+        return createTransaction(idempotencyKey, {
+          type: 'LIABILITY_REPAYMENT',
+          cashAccountId,
+          liabilityAccountId,
+          currency: selectedCurrency,
+          principalAmount: formatAmount(principalAmount, selectedCurrency),
+          interestAmount: formatAmount(interestAmount.trim() === '' ? '0' : interestAmount, selectedCurrency),
+          feeAmount: formatAmount(feeAmount.trim() === '' ? '0' : feeAmount, selectedCurrency),
+          interestCategoryId: interestAmount.trim() === '' || !isPositiveAmount(interestAmount) ? null : interestCategoryId,
+          feeCategoryId: feeAmount.trim() === '' || !isPositiveAmount(feeAmount) ? null : repaymentFeeCategoryId,
+          businessAt: base.businessAt,
+          timezone: base.timezone,
+          note: base.note,
+        })
+      }
       return createTransaction(idempotencyKey, {
         type: 'TRANSFER',
         fromAccountId,
@@ -218,6 +260,9 @@ export function RecordTransactionPage() {
       if (value.trim() === '') fields[key] = `${fieldLabel(key)}不能为空`
       else if (!amountPattern(currency).test(value.trim())) fields[key] = `金额格式需符合 ${currency} 记账精度`
     }
+    const checkNonNegativeAmount = (key: string, value: string) => {
+      if (value.trim() !== '' && !amountPattern(currency).test(value.trim())) fields[key] = `金额格式需符合 ${currency} 记账精度`
+    }
     const checkAccount = (key: string, value: string) => {
       if (value === '') fields[key] = `${fieldLabel(key)}不能为空`
       else if (!accountById.has(value)) fields[key] = `${fieldLabel(key)}不存在或不可用`
@@ -237,9 +282,29 @@ export function RecordTransactionPage() {
         }
         if (fee.trim() !== '') {
           checkAmount('fee', fee)
-          if (Number(fee) > 0 && !UUID_PATTERN.test(feeCategoryId)) fields.feeCategoryId = '手续费大于 0 时必须填写手续费分类 ID'
-          if (Number(fee) === 0 && feeCategoryId !== '') fields.feeCategoryId = '手续费为 0 时不能填写分类'
+          if (isPositiveAmount(fee) && !UUID_PATTERN.test(feeCategoryId)) fields.feeCategoryId = '手续费大于 0 时必须填写手续费分类 ID'
+          if (!isPositiveAmount(fee) && feeCategoryId !== '') fields.feeCategoryId = '手续费为 0 时不能填写分类'
         } else if (feeCategoryId !== '') {
+          fields.feeCategoryId = '手续费为 0 时不能填写分类'
+        }
+      } else if (type === 'LIABILITY_REPAYMENT') {
+        checkAccount('cashAccountId', cashAccountId)
+        checkAccount('liabilityAccountId', liabilityAccountId)
+        if (cashAccountId !== '' && cashAccount?.accountClass !== 'ASSET') fields.cashAccountId = '付款账户必须是资产账户'
+        if (liabilityAccountId !== '' && liabilityAccount?.accountClass !== 'LIABILITY') fields.liabilityAccountId = '负债账户必须是负债账户'
+        if (cashAccount && liabilityAccount && cashAccount.currency !== liabilityAccount.currency) fields.liabilityAccountId = '还款仅支持同币种资产与负债账户'
+        checkAmount('principalAmount', principalAmount)
+        if (principalAmount.trim() !== '' && isPositiveAmount(principalAmount) === false) fields.principalAmount = '本金必须大于 0'
+        checkNonNegativeAmount('interestAmount', interestAmount)
+        checkNonNegativeAmount('feeAmount', feeAmount)
+        if (interestAmount.trim() !== '' && isPositiveAmount(interestAmount)) {
+          if (!UUID_PATTERN.test(interestCategoryId)) fields.interestCategoryId = '利息大于 0 时必须填写利息分类 ID'
+        } else if (interestCategoryId !== '') {
+          fields.interestCategoryId = '利息为 0 时不能填写分类'
+        }
+        if (feeAmount.trim() !== '' && isPositiveAmount(feeAmount)) {
+          if (!UUID_PATTERN.test(repaymentFeeCategoryId)) fields.feeCategoryId = '手续费大于 0 时必须填写手续费分类 ID'
+        } else if (repaymentFeeCategoryId !== '') {
           fields.feeCategoryId = '手续费为 0 时不能填写分类'
         }
       } else {
@@ -271,6 +336,13 @@ export function RecordTransactionPage() {
     setFromAmount('')
     setFee('')
     setFeeCategoryId('')
+    setCashAccountId('')
+    setLiabilityAccountId('')
+    setPrincipalAmount('')
+    setInterestAmount('0')
+    setInterestCategoryId('')
+    setFeeAmount('0')
+    setRepaymentFeeCategoryId('')
     setActualBalance('')
     setReason('')
     setErrors({ fields: {} })
@@ -406,10 +478,27 @@ export function RecordTransactionPage() {
                 {businessAtField}
                 {noteField}
               </>
+            ) : type === 'LIABILITY_REPAYMENT' ? (
+              <>
+                {accountSelect('repayment-cash-account', cashAccountId, setCashAccountId, '付款账户', (account) => account.accountClass === 'ASSET', 'cashAccountId')}
+                {accountSelect('repayment-liability-account', liabilityAccountId, setLiabilityAccountId, '负债账户', (account) => account.accountClass === 'LIABILITY', 'liabilityAccountId')}
+                {amountField('repayment-principal-amount', 'principalAmount', '本金', principalAmount, setPrincipalAmount, selectedCurrency)}
+                {amountField('repayment-interest-amount', 'interestAmount', '利息', interestAmount, setInterestAmount, selectedCurrency)}
+                {interestAmount.trim() !== '' && isPositiveAmount(interestAmount)
+                  ? categoryField('repayment-interest-category', 'interestCategoryId', '利息分类 ID', interestCategoryId, setInterestCategoryId)
+                  : null}
+                {amountField('repayment-fee-amount', 'feeAmount', '手续费', feeAmount, setFeeAmount, selectedCurrency)}
+                {feeAmount.trim() !== '' && isPositiveAmount(feeAmount)
+                  ? categoryField('repayment-fee-category', 'feeCategoryId', '手续费分类 ID', repaymentFeeCategoryId, setRepaymentFeeCategoryId)
+                  : null}
+                {businessAtField}
+                {noteField}
+                <p className="text-xs text-muted-foreground md:col-span-2">本金只减少资产和负债，不计入支出；利息和手续费会分别计入所选费用分类。</p>
+              </>
             ) : (
               <>
-                {accountSelect('record-account', accountId, setAccountId, type === 'REFUND' ? '退款到账账户' : '账户',
-                  (account) => account.accountClass === 'ASSET')}
+                {accountSelect('record-account', accountId, setAccountId, type === 'REFUND' ? '退款到账账户' : type === 'EXPENSE' ? '账户（资产或信用卡）' : '账户',
+                  (account) => type === 'EXPENSE' ? account.accountClass === 'ASSET' || account.accountType === 'CREDIT_CARD' : account.accountClass === 'ASSET')}
                 {amountField('record-amount', 'amount', type === 'INCOME' ? '收入金额' : type === 'REFUND' ? '退款金额' : '支出金额', amount, setAmount, selectedCurrency)}
                 {type === 'REFUND'
                   ? (

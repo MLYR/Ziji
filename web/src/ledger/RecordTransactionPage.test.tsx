@@ -70,7 +70,7 @@ function mockAccounts() {
 }
 
 function fillExpenseForm() {
-  fireEvent.change(screen.getByLabelText('账户'), { target: { value: 'account-bank' } })
+  fireEvent.change(screen.getByLabelText('账户（资产或信用卡）'), { target: { value: 'account-bank' } })
   fireEvent.change(screen.getByLabelText('支出金额'), { target: { value: '12.50' } })
   fireEvent.change(screen.getByLabelText('分类 ID'), { target: { value: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0aa' } })
 }
@@ -160,12 +160,64 @@ describe('记一笔表单', () => {
     mockAccounts()
     renderPage()
     await screen.findByText(/工资卡/)
-    fireEvent.change(screen.getByLabelText('账户'), { target: { value: 'account-bank' } })
+    fireEvent.change(screen.getByLabelText('账户（资产或信用卡）'), { target: { value: 'account-bank' } })
     fireEvent.change(screen.getByLabelText('支出金额'), { target: { value: '12.345' } })
     fireEvent.click(screen.getByRole('button', { name: '保存交易' }))
 
     await screen.findByText('金额格式需符合 CNY 记账精度')
     expect(screen.getByText('请填写有效的分类 ID')).toBeTruthy()
     expect(apiRequestMock.mock.calls.every(([path]) => path.startsWith('/api/v1/accounts'))).toBe(true)
+  })
+
+  it('信用卡消费仍提交公共 EXPENSE 语义命令，不提交分录', async () => {
+    apiRequestMock.mockImplementation(async (path: string) => {
+      if (path.startsWith('/api/v1/accounts')) return { data: accounts, meta: { requestId: 'req-accounts', nextCursor: null, hasMore: false } }
+      if (path === '/api/v1/transactions') return { data: { id: 'tx-card-expense' } }
+      throw new Error(`unexpected path ${path}`)
+    })
+
+    renderPage()
+    await screen.findByRole('option', { name: '信用卡 · CNY' })
+    fireEvent.change(screen.getByLabelText('账户（资产或信用卡）'), { target: { value: 'card' } })
+    fireEvent.change(screen.getByLabelText('支出金额'), { target: { value: '300' } })
+    fireEvent.change(screen.getByLabelText('分类 ID'), { target: { value: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0aa' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存交易' }))
+
+    await screen.findByText('交易已保存')
+    const postCall = apiRequestMock.mock.calls.find(([path]) => path === '/api/v1/transactions')!
+    const body = (postCall[1] as { body: Record<string, unknown> }).body
+    expect(body).toMatchObject({ type: 'EXPENSE', accountId: 'card', amount: '300.00', currency: 'CNY' })
+    expect(body).not.toHaveProperty('entries')
+    expect(body).not.toHaveProperty('ledgerAccountId')
+  })
+
+  it('负债还款分开提交本金、利息和手续费及对应费用分类', async () => {
+    apiRequestMock.mockImplementation(async (path: string) => {
+      if (path.startsWith('/api/v1/accounts')) return { data: accounts, meta: { requestId: 'req-accounts', nextCursor: null, hasMore: false } }
+      if (path === '/api/v1/transactions') return { data: { id: 'tx-repayment' } }
+      throw new Error(`unexpected path ${path}`)
+    })
+
+    renderPage()
+    await screen.findByText(/工资卡/)
+    fireEvent.click(screen.getByRole('tab', { name: '负债还款' }))
+    fireEvent.change(screen.getByLabelText('付款账户'), { target: { value: 'account-bank' } })
+    fireEvent.change(screen.getByLabelText('负债账户'), { target: { value: 'card' } })
+    fireEvent.change(screen.getByLabelText('本金'), { target: { value: '1000' } })
+    fireEvent.change(screen.getByLabelText('利息'), { target: { value: '50' } })
+    fireEvent.change(screen.getByLabelText('利息分类 ID'), { target: { value: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0aa' } })
+    fireEvent.change(screen.getByLabelText('手续费'), { target: { value: '10' } })
+    fireEvent.change(screen.getByLabelText('手续费分类 ID'), { target: { value: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0ab' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存交易' }))
+
+    await screen.findByText('交易已保存')
+    const postCall = apiRequestMock.mock.calls.find(([path]) => path === '/api/v1/transactions')!
+    const body = (postCall[1] as { body: Record<string, unknown> }).body
+    expect(body).toMatchObject({
+      type: 'LIABILITY_REPAYMENT', cashAccountId: 'account-bank', liabilityAccountId: 'card', currency: 'CNY',
+      principalAmount: '1000.00', interestAmount: '50.00', feeAmount: '10.00',
+      interestCategoryId: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0aa', feeCategoryId: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0ab',
+    })
+    expect(body).not.toHaveProperty('entries')
   })
 })

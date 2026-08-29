@@ -41,6 +41,18 @@ const account = {
   version: 2,
 }
 
+const cardAccount = {
+  id: 'acc-card',
+  accountClass: 'LIABILITY',
+  accountType: 'CREDIT_CARD',
+  name: '信用卡',
+  currency: 'CNY',
+  status: 'ACTIVE',
+  currentUserRole: 'OWNER',
+  inclusionRatio: '1.000000',
+  version: 2,
+}
+
 function renderPage(initialEntries: string[]) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
@@ -165,5 +177,68 @@ describe('账户创建/编辑/归档', () => {
     const body = (archiveCall![1] as { body: { reason: string; confirmNonZeroBalance: boolean } }).body
     expect(body.reason).toBe('不再使用')
     expect(body.confirmNonZeroBalance).toBe(true)
+  })
+
+  it('首次维护信用卡负债详情使用 If-None-Match 与完整提醒字段', async () => {
+    const emptyDetails = {
+      accountId: 'acc-card', interestRate: null, loanDate: null, dueDate: null,
+      billingDay: null, repaymentDay: null, currentAmountDue: null, version: 0,
+    }
+    apiRequestMock.mockImplementation(async (path: string, options?: RequestInit) => {
+      if (path === '/api/v1/accounts/acc-card' && (options?.method ?? 'GET') === 'GET') return { data: cardAccount }
+      if (path === '/api/v1/accounts/acc-card/balance') {
+        return { data: { accountId: 'acc-card', currency: 'CNY', ledgerBalance: '-2300.00', unavailableAmount: '0.00', unavailableBreakdown: { frozen: '0.00', inTransit: '0.00', reserved: '0.00' }, availableBalance: '-2300.00', liquidityStatus: 'NEGATIVE_AVAILABLE', asOf: '2026-08-28T00:00:00Z', asOfSequence: 0 } }
+      }
+      if (path === '/api/v1/accounts/acc-card/liability-details' && (options?.method ?? 'GET') === 'GET') return { data: emptyDetails }
+      if (path === '/api/v1/accounts/acc-card/liability-details' && options?.method === 'PUT') {
+        return { data: { ...emptyDetails, interestRate: '0.045', billingDay: 8, repaymentDay: 20, currentAmountDue: '1000.00', version: 1 } }
+      }
+      throw new Error(`unexpected path ${path} ${options?.method}`)
+    })
+
+    renderPage(['/accounts/acc-card'])
+    fireEvent.click(await screen.findByRole('button', { name: '维护负债详情' }))
+    fireEvent.change(screen.getByLabelText('年利率（年化比例）'), { target: { value: '0.045' } })
+    fireEvent.change(screen.getByLabelText('账单日'), { target: { value: '8' } })
+    fireEvent.change(screen.getByLabelText('还款日'), { target: { value: '20' } })
+    fireEvent.change(screen.getByLabelText('本期应还金额'), { target: { value: '1000' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存负债详情' }))
+
+    await waitFor(() => expect(apiRequestMock.mock.calls.some(([, options]) => (options as RequestInit | undefined)?.method === 'PUT')).toBe(true))
+    const putCall = apiRequestMock.mock.calls.find(([, options]) => (options as RequestInit | undefined)?.method === 'PUT')!
+    const options = putCall[1] as { headers: Record<string, string>; body: Record<string, unknown> }
+    expect(putCall[0]).toBe('/api/v1/accounts/acc-card/liability-details')
+    expect(options.headers['Idempotency-Key']).toMatch(/^[0-9a-f-]{36}$/i)
+    expect(options.headers['If-None-Match']).toBe('*')
+    expect(options.headers['If-Match']).toBeUndefined()
+    expect(options.body).toEqual({
+      interestRate: '0.045', loanDate: null, dueDate: null,
+      billingDay: 8, repaymentDay: 20, currentAmountDue: '1000.00',
+    })
+  })
+
+  it('已有负债详情使用其独立版本作为 If-Match', async () => {
+    const details = {
+      accountId: 'acc-card', interestRate: '0.045', loanDate: null, dueDate: null,
+      billingDay: 8, repaymentDay: 20, currentAmountDue: '1000.00', version: 3,
+    }
+    apiRequestMock.mockImplementation(async (path: string, options?: RequestInit) => {
+      if (path === '/api/v1/accounts/acc-card' && (options?.method ?? 'GET') === 'GET') return { data: cardAccount }
+      if (path === '/api/v1/accounts/acc-card/balance') {
+        return { data: { accountId: 'acc-card', currency: 'CNY', ledgerBalance: '-2300.00', unavailableAmount: '0.00', unavailableBreakdown: { frozen: '0.00', inTransit: '0.00', reserved: '0.00' }, availableBalance: '-2300.00', liquidityStatus: 'NEGATIVE_AVAILABLE', asOf: '2026-08-28T00:00:00Z', asOfSequence: 0 } }
+      }
+      if (path === '/api/v1/accounts/acc-card/liability-details' && (options?.method ?? 'GET') === 'GET') return { data: details }
+      if (path === '/api/v1/accounts/acc-card/liability-details' && options?.method === 'PUT') return { data: { ...details, currentAmountDue: '1200.00', version: 4 } }
+      throw new Error(`unexpected path ${path} ${options?.method}`)
+    })
+
+    renderPage(['/accounts/acc-card'])
+    fireEvent.click(await screen.findByRole('button', { name: '维护负债详情' }))
+    fireEvent.change(screen.getByLabelText('本期应还金额'), { target: { value: '1200' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存负债详情' }))
+
+    await waitFor(() => expect(apiRequestMock.mock.calls.some(([, options]) => (options as RequestInit | undefined)?.method === 'PUT')).toBe(true))
+    const putCall = apiRequestMock.mock.calls.find(([, options]) => (options as RequestInit | undefined)?.method === 'PUT')!
+    expect(new Headers((putCall[1] as RequestInit).headers).get('If-Match')).toBe('"3"')
   })
 })

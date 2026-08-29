@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { describeProblem } from '@/lib/problem-messages'
+import { LiabilityDetailsCard } from '@/accounts/LiabilityDetailsCard'
 import {
   accountEtag,
   archiveAccount,
@@ -161,6 +162,8 @@ export function AccountDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      {account.accountClass === 'LIABILITY' ? <LiabilityDetailsCard account={account} /> : null}
 
       {account.status === 'ACTIVE' ? (
         <Card>
