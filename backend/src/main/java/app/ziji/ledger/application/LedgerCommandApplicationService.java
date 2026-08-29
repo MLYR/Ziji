@@ -5,6 +5,7 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +20,7 @@ import app.ziji.audit.application.AuditLogWritePort;
 import app.ziji.category.application.CategoryReference;
 import app.ziji.category.application.CategoryStore;
 import app.ziji.category.application.CategoryType;
+import app.ziji.category.application.TagStore;
 import app.ziji.ledger.domain.CurrencyCode;
 import app.ziji.ledger.domain.LedgerAccountNature;
 import app.ziji.ledger.domain.LedgerAccountReference;
@@ -42,6 +44,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 	private final AccountPostingReferencePort accounts;
 	private final AccountPostingAccessPort accountAccess;
 	private final CategoryStore categories;
+	private final TagStore tags;
 	private final LedgerAccountStore ledgerAccounts;
 	private final LedgerTransactionStore ledgerTransactions;
 	private final AuditLogWritePort auditLogs;
@@ -55,6 +58,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		AccountPostingReferencePort accounts,
 		AccountPostingAccessPort accountAccess,
 		CategoryStore categories,
+		TagStore tags,
 		LedgerAccountStore ledgerAccounts,
 		LedgerTransactionStore ledgerTransactions,
 		AuditLogWritePort auditLogs,
@@ -62,7 +66,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		LedgerRequestIdProvider requestIds,
 		PostingService postingService,
 		Clock clock) {
-		if (transactions == null || accounts == null || accountAccess == null || categories == null
+		if (transactions == null || accounts == null || accountAccess == null || categories == null || tags == null
 			|| ledgerAccounts == null || ledgerTransactions == null || auditLogs == null || ledgerOutbox == null
 			|| requestIds == null || postingService == null || clock == null) {
 			throw new LedgerCommandValidationException("账务命令服务依赖不能为空。");
@@ -71,6 +75,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		this.accounts = accounts;
 		this.accountAccess = accountAccess;
 		this.categories = categories;
+		this.tags = tags;
 		this.ledgerAccounts = ledgerAccounts;
 		this.ledgerTransactions = ledgerTransactions;
 		this.auditLogs = auditLogs;
@@ -141,6 +146,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		LedgerAccountReference accountLedger = primary(account);
 		requireAssetAccount(account, "收入");
 		validateAmount(command.amount(), accountLedger.currency());
+		validateTags(command.userId(), command.tagIds());
 		requireCategory(command.categoryId(), command.userId(), command.accountId(), CategoryType.INCOME);
 		LedgerAccountReference incomeLedger = command.incomeLedgerAccountId() == null
 			? ensureCategoryCounter(command.userId(), command.categoryId(), LedgerAccountNature.INCOME, accountLedger.currency())
@@ -159,7 +165,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 				new LedgerEntrySpec(incomeLedger.id(), LedgerDirection.CREDIT, command.amount())));
 		completeInitialPosting(new PostedTransactionWrite(
 			transaction, command.userId(), command.counterparty(), null, command.note(),
-			command.categoryId(), new NoTransactionDetails()));
+			command.categoryId(), command.tagIds(), new NoTransactionDetails()));
 		return transaction;
 	}
 
@@ -187,6 +193,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 			requireAssetAccount(account, "支出");
 		}
 		validateAmount(command.amount(), accountLedger.currency());
+		validateTags(command.userId(), command.tagIds());
 		requireCategory(command.categoryId(), command.userId(), command.accountId(), CategoryType.EXPENSE);
 		LedgerAccountReference expenseLedger = command.expenseLedgerAccountId() == null
 			? ensureCategoryCounter(command.userId(), command.categoryId(), LedgerAccountNature.EXPENSE, accountLedger.currency())
@@ -205,7 +212,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 				new LedgerEntrySpec(accountLedger.id(), LedgerDirection.CREDIT, command.amount())));
 		completeInitialPosting(new PostedTransactionWrite(
 			transaction, command.userId(), null, command.merchant(), command.note(),
-			command.categoryId(), new NoTransactionDetails()));
+			command.categoryId(), command.tagIds(), new NoTransactionDetails()));
 		return transaction;
 	}
 
@@ -231,6 +238,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 				throw invalid("借款到账两账户必须使用同一币种。");
 			}
 			validateAmount(command.amount(), assetLedger.currency());
+			validateTags(command.userId(), command.tagIds());
 			Transaction transaction = transactionFactory.createPosted(
 				initialTransactionId(transactionId), TransactionType.TRANSFER, TransactionSource.MANUAL,
 				command.businessAt(), command.businessDate(), command.timezone(), clock.instant(),
@@ -240,6 +248,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 			// 复用既有 transfer_details 作为本金来源/去向事实，不制造第二张借款表。
 			completeInitialPosting(new PostedTransactionWrite(
 				transaction, command.userId(), null, null, command.note(), null,
+				command.tagIds(),
 				new LiabilityBorrowingWriteDetails(
 					command.assetAccountId(), command.liabilityAccountId(), command.amount())));
 			return transaction;
@@ -280,6 +289,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 			} else if (command.feeCategoryId() != null) {
 				throw invalid("手续费为零时不能提供手续费分类。");
 			}
+			validateTags(command.userId(), command.tagIds());
 
 			List<LedgerEntrySpec> entries = new ArrayList<>();
 			entries.add(new LedgerEntrySpec(liabilityLedger.id(), LedgerDirection.DEBIT, command.principalAmount()));
@@ -301,6 +311,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 				command.businessAt(), command.businessDate(), command.timezone(), clock.instant(), entries);
 			completeInitialPosting(new PostedTransactionWrite(
 				transaction, command.userId(), null, null, command.note(), null,
+				command.tagIds(),
 				new RepaymentWriteDetails(command.liabilityAccountId(), command.cashAccountId(),
 					command.principalAmount(), command.interestAmount(), command.feeAmount(),
 					command.interestCategoryId(), command.feeCategoryId())));
@@ -345,6 +356,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 			throw invalid("原支出缺少可继承的支出分类。");
 		}
 		requireCategory(original.categoryId(), command.userId(), original.originalAccountId(), CategoryType.EXPENSE);
+		validateTags(command.userId(), command.tagIds());
 		Transaction transaction = transactionFactory.createPosted(
 			transactionId,
 			TransactionType.REFUND,
@@ -358,7 +370,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 				new LedgerEntrySpec(original.expenseLedgerAccountId(), LedgerDirection.CREDIT, command.amount())));
 		completeInitialPosting(new PostedTransactionWrite(
 			transaction, command.userId(), null, null, command.note(), null,
-			new RefundWriteDetails(command.originalTransactionId(), original.categoryId())));
+			command.tagIds(), new RefundWriteDetails(command.originalTransactionId(), original.categoryId())));
 		return transaction;
 	}
 
@@ -387,6 +399,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 			throw invalid("本任务只允许同币种转账。");
 		}
 		validateAmount(command.amount(), fromLedger.currency());
+		validateTags(command.userId(), command.tagIds());
 		Money fee = command.feeAmount() == null
 			? new Money(BigDecimal.ZERO, fromLedger.currency()) : command.feeAmount();
 		validateFee(fee, fromLedger.currency());
@@ -416,6 +429,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 			entries);
 		completeInitialPosting(new PostedTransactionWrite(
 			transaction, command.userId(), null, null, command.note(), categoryId,
+			command.tagIds(),
 			new TransferWriteDetails(
 				command.fromAccountId(), command.toAccountId(), command.amount(), command.amount(), fee)));
 		return transaction;
@@ -569,6 +583,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		requireExpectedVersion(command.transactionId(), command.expectedEntityVersion(), snapshot.entityVersion());
 		// 先比较锁定快照的实体版本，再判断历史状态，陈旧的 SUPERSEDED/REVERSED 请求仍须返回 VERSION_CONFLICT。
 		requireIndependentOriginal(snapshot);
+		validateTags(command.userId(), command.tagIds());
 		RevisionBuild build = buildRevision(command, snapshot);
 
 		Transaction reversal = transactionFactory.createReversal(original, UUID.randomUUID(), clock.instant());
@@ -579,7 +594,7 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 		LedgerTransactionStore.TransactionRevisionWrite write = new LedgerTransactionStore.TransactionRevisionWrite(
 			original.transactionId(), snapshot.entityVersion(), command.reason(), reversal,
 			new PostedTransactionWrite(replacement, command.userId(), command.counterparty(), command.merchant(),
-				command.note(), build.categoryId(), build.details()));
+				command.note(), build.categoryId(), command.tagIds(), build.details()));
 		ledgerTransactions.persistRevision(write);
 		completeRevisionAuditAndOutbox(original, snapshot.entityVersion(), reversal, replacement, command.userId());
 		return new TransactionRevisionResult(original.transactionId(), reversal, replacement);
@@ -1229,6 +1244,21 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 			|| (category.ownerUserId() != null && !category.ownerUserId().equals(userId))
 			|| (category.accountId() != null && !category.accountId().equals(accountId))) {
 			throw invalid("分类与交易语义或归属不匹配。");
+		}
+	}
+
+	/** 标签只是交易描述事实；写入前必须验证归属当前用户且 ACTIVE，不改变任何分录。 */
+	private void validateTags(UUID userId, List<UUID> tagIds) {
+		if (tagIds == null || tagIds.size() > 20) {
+			throw invalid("交易标签数量无效。");
+		}
+		if (tagIds.isEmpty()) {
+			return;
+		}
+		Set<UUID> uniqueTagIds = new LinkedHashSet<>(tagIds);
+		if (uniqueTagIds.size() != tagIds.size()
+			|| tags.countActiveOwned(uniqueTagIds, userId) != uniqueTagIds.size()) {
+			throw invalid("标签与交易所有者不匹配或已停用。");
 		}
 	}
 

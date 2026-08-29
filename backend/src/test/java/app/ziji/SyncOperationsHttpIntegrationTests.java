@@ -20,6 +20,7 @@ import app.ziji.auth.application.DeviceSessionApplicationService;
 import app.ziji.auth.application.SessionTokenResult;
 import app.ziji.audit.application.AuditLogWritePort;
 import app.ziji.category.application.CategoryStore;
+import app.ziji.category.infrastructure.PostgresTagRepository;
 import app.ziji.ledger.application.LedgerAccountStore;
 import app.ziji.ledger.application.LedgerCommandApplicationService;
 import app.ziji.ledger.application.LedgerOutbox;
@@ -468,7 +469,8 @@ class SyncOperationsHttpIntegrationTests extends PostgresIntegrationTestSupport 
 	private LedgerCommandApplicationService ledgerService(
 		Fixture fixture, AuditLogWritePort audits, LedgerOutbox outbox) {
 		return new LedgerCommandApplicationService(
-			transactions, accounts, accountAccess, categories, ledgerAccounts, ledgerTransactions, audits, outbox,
+			transactions, accounts, accountAccess, categories, new PostgresTagRepository(jdbc), ledgerAccounts,
+			ledgerTransactions, audits, outbox,
 			() -> "sync-test-request", new PostingService(), Clock.fixed(Instant.parse("2026-08-16T04:00:00Z"), ZoneOffset.UTC));
 	}
 

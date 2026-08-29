@@ -982,7 +982,7 @@ V1 此接口只接受 `entityType=TRANSACTION`，且操作矩阵固定为：
 
 `ACCOUNT`、`CATEGORY`、`TAG`、`RECURRING_RULE` 和 `ARCHIVE` 不属于 V1 `applySyncOperations` 的机器契约。未来离线上传必须先具备对应 application port、账务/审计/outbox 事实链和独立任务，不得由 Sync 直接写表或构造分录。
 
-Sync CREATE 和 UPDATE replacement 的 `businessAt`、`businessDate`、`timezone` 均为必填非空：它们是客户端入队时已确认的历史业务归属，服务端仅校验时区和日期规则，不能在稍后上传时按用户当前时区重新划分。Sync 在 BE-CAT-003 闭合交易标签事实链前不接受 `tagIds`，避免静默丢弃。退款必须提交非空 `originalTransactionId`，不接受 `categoryId`；分类、原支出费用对方科目和可退款余额从原支出事实继承。B1 Sync 转账只接受同币种、同金额普通转账：`fromAmount.currency`、`toAmount.currency`、`fee.currency` 必须一致，`fromAmount.amount=toAmount.amount`，且不接受 `exchangeRate`；`fee=0` 时 `feeCategoryId=null`，`fee>0` 时必须提供费用分类。上述跨字段条件由运行时逐项 `REJECTED`，不得转换为 FX_TRANSFER。
+Sync CREATE 和 UPDATE replacement 的 `businessAt`、`businessDate`、`timezone` 均为必填非空：它们是客户端入队时已确认的历史业务归属，服务端仅校验时区和日期规则，不能在稍后上传时按用户当前时区重新划分。普通交易 HTTP 已闭合标签事实链；Sync 仍不接受 `tagIds`，避免客户端离线队列静默丢弃标签。退款必须提交非空 `originalTransactionId`，不接受 `categoryId`；分类、原支出费用对方科目和可退款余额从原支出事实继承。B1 Sync 转账只接受同币种、同金额普通转账：`fromAmount.currency`、`toAmount.currency`、`fee.currency` 必须一致，`fromAmount.amount=toAmount.amount`，且不接受 `exchangeRate`；`fee=0` 时 `feeCategoryId=null`，`fee>0` 时必须提供费用分类。上述跨字段条件由运行时逐项 `REJECTED`，不得转换为 FX_TRANSFER。
 
 ```json
 {

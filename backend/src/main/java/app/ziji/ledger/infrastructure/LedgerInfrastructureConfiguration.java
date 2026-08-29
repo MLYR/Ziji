@@ -9,6 +9,7 @@ import app.ziji.accountmember.application.AccountPostingAccessPort;
 import app.ziji.accountmember.application.AccountMembershipReadPort;
 import app.ziji.audit.application.AuditLogWritePort;
 import app.ziji.category.application.CategoryStore;
+import app.ziji.category.application.TagStore;
 import app.ziji.ledger.application.LedgerAccountStore;
 import app.ziji.ledger.application.BalanceProjectionService;
 import app.ziji.ledger.application.BalanceProjectionStore;
@@ -43,6 +44,7 @@ class LedgerInfrastructureConfiguration {
 		AccountPostingReferencePort accounts,
 		AccountPostingAccessPort accountAccess,
 		CategoryStore categories,
+		TagStore tags,
 		LedgerAccountStore ledgerAccounts,
 		LedgerTransactionStore ledgerTransactions,
 		AuditLogWritePort auditLogs,
@@ -55,6 +57,7 @@ class LedgerInfrastructureConfiguration {
 			accounts,
 			accountAccess,
 			categories,
+			tags,
 			ledgerAccounts,
 			ledgerTransactions,
 			auditLogs,

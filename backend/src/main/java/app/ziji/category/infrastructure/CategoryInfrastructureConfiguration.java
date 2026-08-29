@@ -9,6 +9,10 @@ import app.ziji.category.application.CategoryCommandStore;
 import app.ziji.category.application.CategoryCursorCodec;
 import app.ziji.category.application.CategoryQueryReadPort;
 import app.ziji.category.application.CategoryService;
+import app.ziji.category.application.TagCommandStore;
+import app.ziji.category.application.TagCursorCodec;
+import app.ziji.category.application.TagQueryReadPort;
+import app.ziji.category.application.TagService;
 import app.ziji.shared.application.TransactionRunner;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -33,6 +37,16 @@ class CategoryInfrastructureConfiguration {
 	}
 
 	@Bean
+	TagService tagService(
+		TagQueryReadPort queries,
+		TagCommandStore commands,
+		TagCursorCodec cursors,
+		TransactionRunner transactions,
+		Clock clock) {
+		return new TagService(queries, commands, cursors, transactions, clock, UUID::randomUUID);
+	}
+
+	@Bean
 	CategoryCursorCodec categoryCursorCodec(
 		@Value("${ziji.account.cursor-key-base64}") String cursorKeyBase64) {
 		try {
@@ -40,6 +54,17 @@ class CategoryInfrastructureConfiguration {
 			return new AesGcmCategoryCursorCodec(Base64.getDecoder().decode(cursorKeyBase64), new SecureRandom());
 		} catch (IllegalArgumentException exception) {
 			throw new IllegalStateException("分类游标密钥配置无效。", exception);
+		}
+	}
+
+	@Bean
+	TagCursorCodec tagCursorCodec(
+		@Value("${ziji.account.cursor-key-base64}") String cursorKeyBase64) {
+		try {
+			// 标签游标独立 domain AAD，避免与分类或其他列表游标跨资源复用。
+			return new AesGcmTagCursorCodec(Base64.getDecoder().decode(cursorKeyBase64), new SecureRandom());
+		} catch (IllegalArgumentException exception) {
+			throw new IllegalStateException("标签游标密钥配置无效。", exception);
 		}
 	}
 }

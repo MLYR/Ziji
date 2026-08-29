@@ -136,6 +136,7 @@ public class PostgresLedgerTransactionStore implements LedgerTransactionStore, L
 			}
 			insertDetails(write);
 			insertCategory(write);
+			insertTags(write);
 			jdbc.update("""
 				UPDATE transactions
 				SET status = 'POSTED', posted_at = ?, updated_by = ?, updated_at = ?
@@ -516,6 +517,19 @@ public class PostgresLedgerTransactionStore implements LedgerTransactionStore, L
 			return;
 		}
 		insertTransactionCategory(write.transaction().transactionId(), categoryId, role);
+	}
+
+	/** 标签是交易描述事实，必须与交易主事实同事务原子写入。 */
+	private void insertTags(PostedTransactionWrite write) {
+		if (write.tagIds().isEmpty()) {
+			return;
+		}
+		for (UUID tagId : write.tagIds()) {
+			jdbc.update("""
+				INSERT INTO transaction_tags (transaction_id, tag_id)
+				VALUES (?, ?)
+				""", write.transaction().transactionId(), tagId);
+		}
 	}
 
 	private void insertTransactionCategory(UUID transactionId, UUID categoryId, String role) {

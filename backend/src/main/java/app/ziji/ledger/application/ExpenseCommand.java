@@ -2,6 +2,7 @@ package app.ziji.ledger.application;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 import app.ziji.ledger.domain.Money;
@@ -17,7 +18,8 @@ public record ExpenseCommand(
 	LocalDate businessDate,
 	String timezone,
 	String merchant,
-	String note) {
+	String note,
+	List<UUID> tagIds) {
 
 	public ExpenseCommand {
 		require(userId, "用户");
@@ -29,6 +31,9 @@ public record ExpenseCommand(
 		requireText(timezone, "时区");
 		requireMax(timezone, 64, "时区");
 		requireMax(merchant, 200, "商户");
+		if (tagIds == null) {
+			throw new LedgerCommandValidationException("标签不能为空。");
+		}
 	}
 
 	/** 公开语义构造器不接收内部费用科目；Ledger 在事务内按分类惰性确保。 */
@@ -42,7 +47,24 @@ public record ExpenseCommand(
 		String timezone,
 		String merchant,
 		String note) {
-		this(userId, accountId, null, categoryId, amount, businessAt, businessDate, timezone, merchant, note);
+		this(userId, accountId, null, categoryId, amount, businessAt, businessDate, timezone, merchant,
+			note, List.of());
+	}
+
+	/** 现有内部调用继续使用无标签语义；HTTP 与修订入口可显式携带标签事实。 */
+	public ExpenseCommand(
+		UUID userId,
+		UUID accountId,
+		UUID expenseLedgerAccountId,
+		UUID categoryId,
+		Money amount,
+		Instant businessAt,
+		LocalDate businessDate,
+		String timezone,
+		String merchant,
+		String note) {
+		this(userId, accountId, expenseLedgerAccountId, categoryId, amount, businessAt, businessDate, timezone,
+			merchant, note, List.of());
 	}
 
 	private static void require(Object value, String field) {

@@ -965,9 +965,6 @@ public class TransactionCommandController {
 		}
 
 		void validateSupportedBusinessRules() {
-			if (!common.tagIds().isEmpty()) {
-				throw new LedgerCommandValidationException("交易标签事实链尚未开放。");
-			}
 			if (payload instanceof TransferPayload transfer) {
 				if (!transfer.fromAmount().equals(transfer.toAmount())
 					|| transfer.fee().currency() != transfer.fromAmount().currency()
@@ -992,25 +989,30 @@ public class TransactionCommandController {
 		Transaction post(LedgerCommandApplicationService service, UUID userId) {
 			return switch (payload) {
 				case IncomePayload value -> service.postIncome(new IncomeCommand(
-					userId, value.accountId(), value.categoryId(), value.amount(), common.businessAt(),
-					common.businessDate(), common.timezone(), value.counterparty(), common.note()), common.requestedId());
+					userId, value.accountId(), null, value.categoryId(), value.amount(), common.businessAt(),
+					common.businessDate(), common.timezone(), value.counterparty(), common.note(),
+					common.tagIds()), common.requestedId());
 				case ExpensePayload value -> service.postExpense(new ExpenseCommand(
-					userId, value.accountId(), value.categoryId(), value.amount(), common.businessAt(),
-					common.businessDate(), common.timezone(), value.merchant(), common.note()), common.requestedId());
+					userId, value.accountId(), null, value.categoryId(), value.amount(), common.businessAt(),
+					common.businessDate(), common.timezone(), value.merchant(), common.note(),
+					common.tagIds()), common.requestedId());
 				case RefundPayload value -> service.postRefund(new RefundCommand(
 					userId, value.accountId(), value.originalTransactionId(), value.amount(), common.businessAt(),
-					common.businessDate(), common.timezone(), common.note()), common.requestedId());
+					common.businessDate(), common.timezone(), common.note(), common.tagIds()),
+					common.requestedId());
 				case TransferPayload value -> service.postTransfer(new TransferCommand(
-					userId, value.fromAccountId(), value.toAccountId(), value.feeCategoryId(), value.fromAmount(),
-					value.fee(), common.businessAt(), common.businessDate(), common.timezone(), common.note()),
+					userId, value.fromAccountId(), value.toAccountId(), null, value.feeCategoryId(),
+					value.fromAmount(), value.fee(), common.businessAt(), common.businessDate(),
+					common.timezone(), common.note(), common.tagIds()),
 					common.requestedId());
 				case BorrowingPayload value -> service.postLiabilityBorrowing(new LiabilityBorrowingCommand(
 					userId, value.assetAccountId(), value.liabilityAccountId(), value.amount(), common.businessAt(),
-					common.businessDate(), common.timezone(), common.note()), common.requestedId());
+					common.businessDate(), common.timezone(), common.note(), common.tagIds()),
+					common.requestedId());
 				case RepaymentPayload value -> service.postLiabilityRepayment(new LiabilityRepaymentCommand(
 					userId, value.cashAccountId(), value.liabilityAccountId(), value.principal(), value.interest(),
 					value.fee(), value.interestCategoryId(), value.feeCategoryId(), common.businessAt(),
-					common.businessDate(), common.timezone(), common.note()), common.requestedId());
+					common.businessDate(), common.timezone(), common.note(), common.tagIds()), common.requestedId());
 			};
 		}
 
@@ -1051,6 +1053,7 @@ public class TransactionCommandController {
 				userId, transactionId, replacement.common().requestedId(), expectedVersion,
 				replacement.common().businessAt(), replacement.common().businessDate(), replacement.common().timezone(),
 				replacement.counterparty(), replacement.merchant(), replacement.common().note(), reason,
+				replacement.common().tagIds(),
 				replacement.revisionDetails());
 		}
 	}

@@ -67,12 +67,13 @@ class SecurityConfiguration {
 				"/api/v1/accounts/*/balance", "/api/v1/accounts/*/liquidity-holds",
 				"/api/v1/sync/changes", "/api/v1/transactions", "/api/v1/transactions/*",
 				"/api/v1/categories",
+				"/api/v1/tags",
 				"/api/v1/dashboard", "/api/v1/statistics/assets", "/api/v1/statistics/cash-flow",
 				"/api/v1/statistics/accounts").authenticated()
 			.requestMatchers(HttpMethod.PATCH, "/api/v1/users/me").authenticated()
 			.requestMatchers(HttpMethod.PATCH,
 				"/api/v1/accounts/*", "/api/v1/accounts/*/liability-details",
-				"/api/v1/categories/*").authenticated()
+				"/api/v1/categories/*", "/api/v1/tags/*").authenticated()
 			.requestMatchers(HttpMethod.PUT, "/api/v1/accounts/*/liability-details").authenticated()
 			.requestMatchers(HttpMethod.POST, "/api/v1/accounts").authenticated()
 			.requestMatchers(HttpMethod.POST, "/api/v1/users/me/password-change").authenticated()
@@ -81,6 +82,7 @@ class SecurityConfiguration {
 				"/api/v1/accounts/*/liquidity-holds/*/revisions",
 				"/api/v1/accounts/*/liquidity-holds/*/release",
 				"/api/v1/categories",
+				"/api/v1/tags",
 				"/api/v1/accounts/*/archive",
 				"/api/v1/categories/*/merge",
 				"/api/v1/transactions",
@@ -140,6 +142,7 @@ class SecurityConfiguration {
 			return "/api/v1/users/me".equals(path) || "/api/v1/users/me/sessions".equals(path)
 				|| "/api/v1/accounts".equals(path)
 				|| "/api/v1/categories".equals(path)
+				|| "/api/v1/tags".equals(path)
 				|| "/api/v1/sync/changes".equals(path)
 				|| "/api/v1/transactions".equals(path)
 				|| "/api/v1/dashboard".equals(path)
@@ -155,7 +158,8 @@ class SecurityConfiguration {
 		if ("PATCH".equals(method)) {
 			return "/api/v1/users/me".equals(path) || path.matches("/api/v1/accounts/[^/]+")
 				|| path.matches("/api/v1/accounts/[^/]+/liability-details")
-				|| path.matches("/api/v1/categories/[^/]+");
+				|| path.matches("/api/v1/categories/[^/]+")
+				|| path.matches("/api/v1/tags/[^/]+");
 		}
 		if ("PUT".equals(method)) {
 			return path.matches("/api/v1/accounts/[^/]+/liability-details");
@@ -163,6 +167,7 @@ class SecurityConfiguration {
 		if ("POST".equals(method)) {
 			return "/api/v1/accounts".equals(path)
 				|| "/api/v1/categories".equals(path)
+				|| "/api/v1/tags".equals(path)
 				|| path.matches("/api/v1/categories/[^/]+/merge")
 				|| "/api/v1/users/me/password-change".equals(path)
 				|| "/api/v1/sync/operations".equals(path)

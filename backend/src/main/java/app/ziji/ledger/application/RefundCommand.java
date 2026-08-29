@@ -2,6 +2,7 @@ package app.ziji.ledger.application;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 import app.ziji.ledger.domain.Money;
@@ -15,7 +16,8 @@ public record RefundCommand(
 	Instant businessAt,
 	LocalDate businessDate,
 	String timezone,
-	String note) {
+	String note,
+	List<UUID> tagIds) {
 
 	public RefundCommand {
 		require(userId, "用户");
@@ -26,6 +28,23 @@ public record RefundCommand(
 		require(businessDate, "业务日期");
 		requireText(timezone, "时区");
 		requireMax(timezone, 64, "时区");
+		if (tagIds == null) {
+			throw new LedgerCommandValidationException("标签不能为空。");
+		}
+	}
+
+	/** 现有内部调用继续使用无标签语义；HTTP 与修订入口可显式携带标签事实。 */
+	public RefundCommand(
+		UUID userId,
+		UUID accountId,
+		UUID originalTransactionId,
+		Money amount,
+		Instant businessAt,
+		LocalDate businessDate,
+		String timezone,
+		String note) {
+		this(userId, accountId, originalTransactionId, amount, businessAt, businessDate, timezone,
+			note, List.of());
 	}
 
 	private static void require(Object value, String field) {

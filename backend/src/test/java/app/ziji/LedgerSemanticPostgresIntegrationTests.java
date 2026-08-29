@@ -25,6 +25,7 @@ import app.ziji.account.application.AccountPostingReferencePort;
 import app.ziji.accountmember.application.AccountPostingAccessPort;
 import app.ziji.audit.application.AuditLogWritePort;
 import app.ziji.category.application.CategoryStore;
+import app.ziji.category.infrastructure.PostgresTagRepository;
 import app.ziji.ledger.application.NoTransactionDetails;
 import app.ziji.ledger.application.PostedTransactionWrite;
 import app.ziji.ledger.domain.CurrencyCode;
@@ -289,7 +290,8 @@ class LedgerSemanticPostgresIntegrationTests extends PostgresIntegrationTestSupp
 	private LedgerCommandApplicationService service(
 		Fixture fixture, LedgerTransactionStore store, AuditLogWritePort audits, LedgerOutbox outbox) {
 		return new LedgerCommandApplicationService(
-			transactionRunner, accounts, accountAccess, categories, ledgerAccounts, store, audits, outbox,
+			transactionRunner, accounts, accountAccess, categories, new PostgresTagRepository(jdbc), ledgerAccounts,
+			store, audits, outbox,
 			() -> "postgres-integration-request", new PostingService(), Clock.fixed(NOW, ZoneOffset.UTC));
 	}
 

@@ -2,6 +2,7 @@ package app.ziji.ledger.application;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 import app.ziji.ledger.domain.Money;
@@ -18,7 +19,8 @@ public record TransferCommand(
 	Instant businessAt,
 	LocalDate businessDate,
 	String timezone,
-	String note) {
+	String note,
+	List<UUID> tagIds) {
 
 	public TransferCommand {
 		require(userId, "用户");
@@ -29,6 +31,9 @@ public record TransferCommand(
 		require(businessDate, "业务日期");
 		requireText(timezone, "时区");
 		requireMax(timezone, 64, "时区");
+		if (tagIds == null) {
+			throw new LedgerCommandValidationException("标签不能为空。");
+		}
 		if (fromAccountId.equals(toAccountId)) {
 			throw new LedgerCommandValidationException("转出和转入账户不能相同。");
 		}
@@ -54,6 +59,23 @@ public record TransferCommand(
 		String note) {
 		this(userId, fromAccountId, toAccountId, null, feeCategoryId, amount, feeAmount,
 			businessAt, businessDate, timezone, note);
+	}
+
+	/** 现有内部调用继续使用无标签语义；HTTP 与修订入口可显式携带标签事实。 */
+	public TransferCommand(
+		UUID userId,
+		UUID fromAccountId,
+		UUID toAccountId,
+		UUID feeLedgerAccountId,
+		UUID feeCategoryId,
+		Money amount,
+		Money feeAmount,
+		Instant businessAt,
+		LocalDate businessDate,
+		String timezone,
+		String note) {
+		this(userId, fromAccountId, toAccountId, feeLedgerAccountId, feeCategoryId, amount, feeAmount,
+			businessAt, businessDate, timezone, note, List.of());
 	}
 
 	private static void require(Object value, String field) {

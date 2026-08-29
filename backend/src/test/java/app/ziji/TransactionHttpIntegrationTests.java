@@ -624,18 +624,6 @@ class TransactionHttpIntegrationTests extends PostgresIntegrationTestSupport {
 		assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM idempotency_records WHERE idempotency_key = ?",
 			Integer.class, "multi-account-hidden-key"));
 
-		// 非空 tagIds 是 schema 合法但当前事实链未开放的业务拒绝，不能被静默丢弃。
-		String unsupportedTags = """
-			{"type":"EXPENSE","businessAt":"2026-08-17T12:00:00Z","timezone":"Asia/Shanghai",
-			 "accountId":"%s","amount":"10.00","currency":"CNY","categoryId":"%s","tagIds":["%s"]}
-			""".formatted(account.id(), categoryId, UUID.randomUUID());
-		mvc.perform(post("/api/v1/transactions").header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
-				.header("Idempotency-Key", "unsupported-tags-key-01")
-				.contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(unsupportedTags))
-			.andExpect(status().isUnprocessableEntity()).andExpect(jsonPath("$.code").value("BUSINESS_RULE_VIOLATION"));
-		assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM idempotency_records WHERE idempotency_key = ?",
-			Integer.class, "unsupported-tags-key-01"));
-
 		String missingCategory = """
 			{"type":"EXPENSE","businessAt":"2026-08-17T12:00:00Z","timezone":"Asia/Shanghai",
 			 "accountId":"%s","amount":"10.00","currency":"CNY","categoryId":"%s"}

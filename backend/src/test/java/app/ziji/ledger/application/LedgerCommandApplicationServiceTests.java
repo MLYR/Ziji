@@ -553,6 +553,7 @@ class LedgerCommandApplicationServiceTests {
 			new CategoryReference(FEE_CATEGORY_ID, null, null, CategoryType.EXPENSE, true));
 		fixture.service = new LedgerCommandApplicationService(
 			fixture.transactions, fixture.accounts, fixture.access, fixture.categories,
+			(tagIds, ownerUserId) -> tagIds.size(),
 			fixture.ledgerAccounts, fixture.store, fixture.audits, fixture.outbox, () -> "ledger-unit-request",
 			new PostingService(), CLOCK);
 		return fixture;

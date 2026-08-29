@@ -2,6 +2,7 @@ package app.ziji.ledger.application;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 import app.ziji.ledger.domain.CurrencyCode;
@@ -16,7 +17,8 @@ public record LiabilityBorrowingCommand(
 	Instant businessAt,
 	LocalDate businessDate,
 	String timezone,
-	String note) {
+	String note,
+	List<UUID> tagIds) {
 
 	public LiabilityBorrowingCommand {
 		require(userId, "用户");
@@ -28,6 +30,9 @@ public record LiabilityBorrowingCommand(
 		requireText(timezone, "时区");
 		requireMax(timezone, 64, "时区");
 		requireMax(note, 2000, "备注");
+		if (tagIds == null) {
+			throw new LedgerCommandValidationException("标签不能为空。");
+		}
 		if (assetAccountId.equals(liabilityAccountId)) {
 			throw new LedgerCommandValidationException("收款资产账户和借款负债账户不能相同。");
 		}
@@ -36,6 +41,20 @@ public record LiabilityBorrowingCommand(
 	/** 请求层的 currency 语义由 Money 唯一携带，避免出现两份可不一致的币种来源。 */
 	public CurrencyCode currency() {
 		return amount.currency();
+	}
+
+	/** 现有内部调用继续使用无标签语义；HTTP 与修订入口可显式携带标签事实。 */
+	public LiabilityBorrowingCommand(
+		UUID userId,
+		UUID assetAccountId,
+		UUID liabilityAccountId,
+		Money amount,
+		Instant businessAt,
+		LocalDate businessDate,
+		String timezone,
+		String note) {
+		this(userId, assetAccountId, liabilityAccountId, amount, businessAt, businessDate, timezone,
+			note, List.of());
 	}
 
 	private static void require(Object value, String field) {

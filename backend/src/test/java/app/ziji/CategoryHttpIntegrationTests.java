@@ -64,6 +64,15 @@ class CategoryHttpIntegrationTests extends PostgresIntegrationTestSupport {
 					"""))
 			.andExpect(status().isUnauthorized())
 			.andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+		mvc.perform(get("/api/v1/tags"))
+			.andExpect(status().isUnauthorized())
+			.andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+		mvc.perform(post("/api/v1/tags")
+				.header("Idempotency-Key", "tag-unauthenticated-0001")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"name\":\"未认证标签\"}"))
+			.andExpect(status().isUnauthorized())
+			.andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
 	}
 
 	@Test
@@ -320,6 +329,107 @@ class CategoryHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			Integer.class, owner.userId()));
 	}
 
+	@Test
+	void createsTagsLinksMultipleTagsAndKeepsLedgerEntriesOnRevision() throws Exception {
+		User owner = insertUser("tag-ledger");
+		UUID accountId = accountCreationService.createAccount(new AccountCreationCommand(
+			AccountClass.ASSET, AccountType.BANK, "标签现金", null,
+			app.ziji.account.domain.AccountCurrency.CNY, null, owner.userId())).id();
+		String token = bearer(owner);
+		UUID categoryId = extractId(create(token, "category-tag-expense-001", """
+			{"name":"标签支出","categoryType":"EXPENSE","accountId":"%s"}
+			""".formatted(accountId)));
+		UUID firstTag = createTag(token, "tag-http-create-first-01", "出差");
+		assertEquals(firstTag, createTag(token, "tag-http-create-first-01", "出差"));
+		UUID secondTag = createTag(token, "tag-http-create-second", "报销");
+		JsonNode tags = objectMapper.readTree(mvc.perform(get("/api/v1/tags")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.meta.hasMore").value(false))
+			.andReturn().getResponse().getContentAsString()).get("data");
+		assertEquals(2, tags.size());
+		assertTrue(containsName(tags, "出差"));
+		assertTrue(containsName(tags, "报销"));
+
+		mvc.perform(post("/api/v1/tags")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "tag-http-duplicate-00001")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"name\":\" 出差 \"}"))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("TAG_NAME_ALREADY_EXISTS"));
+		assertEquals(1, jdbc.queryForObject(
+			"SELECT count(*) FROM tags WHERE owner_user_id = ? AND name_normalized = '出差'",
+			Integer.class, owner.userId()));
+
+		mvc.perform(patch("/api/v1/tags/{tagId}", secondTag)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("If-Match", "\"2\"")
+				.contentType("application/merge-patch+json")
+				.content("{\"name\":\"公司报销\"}"))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
+			.andExpect(jsonPath("$.versionConflict.currentVersion").value(1));
+		mvc.perform(patch("/api/v1/tags/{tagId}", secondTag)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("If-Match", "\"1\"")
+				.contentType("application/merge-patch+json")
+				.content("{\"name\":\"公司报销\",\"status\":\"INACTIVE\"}"))
+			.andExpect(status().isOk())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"2\""))
+			.andExpect(jsonPath("$.data.status").value("INACTIVE"));
+
+		String transactionBody = """
+			{"type":"EXPENSE","businessAt":"2026-08-29T12:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"18.00","currency":"CNY","categoryId":"%s",
+			 "tagIds":["%s","%s"]}
+			""".formatted(accountId, categoryId, firstTag, secondTag);
+		mvc.perform(post("/api/v1/transactions")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "tag-ledger-transaction-01")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(transactionBody))
+			.andExpect(status().isUnprocessableEntity())
+			.andExpect(jsonPath("$.code").value("BUSINESS_RULE_VIOLATION"));
+		assertEquals(0, jdbc.queryForObject(
+			"SELECT count(*) FROM transaction_tags WHERE tag_id = ?", Integer.class, secondTag));
+
+		UUID activeTag = createTag(token, "tag-http-create-active", "餐饮");
+		MvcResult created = mvc.perform(post("/api/v1/transactions")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "tag-ledger-transaction-02")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(transactionBody.replace(secondTag.toString(), activeTag.toString())))
+			.andExpect(status().isCreated())
+			.andReturn();
+		UUID transactionId = UUID.fromString(objectMapper.readTree(
+			created.getResponse().getContentAsString()).at("/data/id").asString());
+		assertEquals(2, jdbc.queryForObject(
+			"SELECT count(*) FROM transaction_tags WHERE transaction_id = ?", Integer.class, transactionId));
+		int originalEntries = jdbc.queryForObject(
+			"SELECT count(*) FROM ledger_entries WHERE transaction_id = ?", Integer.class, transactionId);
+
+		String replacementId = UUID.randomUUID().toString();
+		String revisionBody = """
+			{"reason":"减少标签","replacement":{"id":"%s","type":"EXPENSE",
+			 "businessAt":"2026-08-29T12:00:00Z","timezone":"Asia/Shanghai",
+			 "accountId":"%s","amount":"18.00","currency":"CNY","categoryId":"%s","tagIds":["%s"]}}
+			""".formatted(replacementId, accountId, categoryId, activeTag);
+		mvc.perform(post("/api/v1/transactions/{transactionId}/revisions", transactionId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "tag-ledger-revision-001")
+				.header("If-Match", "\"1\"")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(revisionBody))
+			.andExpect(status().isCreated());
+		assertEquals(1, jdbc.queryForObject(
+			"SELECT count(*) FROM transaction_tags WHERE transaction_id = ? AND tag_id = ?",
+			Integer.class, UUID.fromString(replacementId), activeTag));
+		assertEquals(originalEntries, jdbc.queryForObject(
+			"SELECT count(*) FROM ledger_entries WHERE transaction_id = ?",
+			Integer.class, UUID.fromString(replacementId)));
+	}
+
 	private MvcResult create(String token, String key, String body) throws Exception {
 		return mvc.perform(post("/api/v1/categories")
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
@@ -347,6 +457,18 @@ class CategoryHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			}
 		}
 		return false;
+	}
+
+	private UUID createTag(String token, String key, String name) throws Exception {
+		return UUID.fromString(objectMapper.readTree(mvc.perform(post("/api/v1/tags")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"name\":\"" + name + "\"}"))
+			.andExpect(status().isCreated())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"1\""))
+			.andReturn().getResponse().getContentAsString())
+			.get("data").get("id").textValue());
 	}
 
 	private MvcResult merge(String token, UUID sourceId, UUID targetId, String key, String ifMatch) throws Exception {
