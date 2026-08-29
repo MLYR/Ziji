@@ -4,6 +4,7 @@ import { Pressable, Text, TextInput, View } from 'react-native';
 import {
   buildQuickEntryPayload,
   payloadSignature,
+  quickEntryCommandSignature,
   validateQuickEntry,
   type PostTransactionRequest,
   type QuickEntryType,
@@ -30,34 +31,42 @@ export function QuickRecordScreen({ currency, timezone, keyFor, onSuccess, creat
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const keyBySignature = useRef(new Map<string, string>());
+  const commandContextByInputSignature = useRef(new Map<string, { businessAt: string; idempotencyKey: string }>());
 
   function buildPayload() {
-    const businessAt = new Date().toISOString();
-    const fields = { accountId, amount, categoryId, currency, timezone, businessAt, note };
-    const validation = validateQuickEntry(fields);
-    const payload = Object.keys(validation.errors).length === 0 ? buildQuickEntryPayload(type, fields) : null;
-    return { validation, payload };
+    const fields = { accountId, amount, categoryId, currency, timezone, note };
+    const validation = validateQuickEntry({ ...fields, businessAt: '' });
+    if (Object.keys(validation.errors).length > 0) return { validation, payload: null };
+
+    const inputSignature = quickEntryCommandSignature(type, fields);
+    let commandContext = commandContextByInputSignature.current.get(inputSignature);
+    if (!commandContext) {
+      // 首次提交固化业务时间和键；原样重试必须重放同一命令，不能生成第二笔账务事实。
+      const businessAt = new Date().toISOString();
+      const payload = buildQuickEntryPayload(type, { ...fields, businessAt });
+      commandContext = { businessAt, idempotencyKey: keyFor(payloadSignature(payload)) };
+      commandContextByInputSignature.current.set(inputSignature, commandContext);
+    }
+    return {
+      validation,
+      payload: buildQuickEntryPayload(type, { ...fields, businessAt: commandContext.businessAt }),
+      inputSignature,
+      idempotencyKey: commandContext.idempotencyKey,
+    };
   }
 
   async function submit() {
-    const { validation, payload } = buildPayload();
+    const { validation, payload, inputSignature, idempotencyKey } = buildPayload();
     const firstError = Object.values(validation.errors)[0];
-    if (!payload || firstError) {
+    if (!payload || !inputSignature || !idempotencyKey || firstError) {
       setMessage(firstError ?? '请检查输入。');
       return;
-    }
-    const signature = payloadSignature(payload);
-    let key = keyBySignature.current.get(signature);
-    if (!key) {
-      key = keyFor(signature);
-      keyBySignature.current.set(signature, key);
     }
     setSubmitting(true);
     setMessage(null);
     try {
-      const envelope = await createTransaction(key, payload);
-      keyBySignature.current.delete(signature);
+      const envelope = await createTransaction(idempotencyKey, payload);
+      commandContextByInputSignature.current.delete(inputSignature);
       onSuccess(envelope.data.id);
     } catch {
       // 同载荷可安全重试；失败信息在 UI 呈现，不伪造成功。

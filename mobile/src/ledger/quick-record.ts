@@ -7,14 +7,17 @@ export type QuickEntryType = 'EXPENSE' | 'INCOME';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export interface QuickEntryFields {
+export interface QuickEntryCommandFields {
   accountId: string;
   amount: string;
   categoryId: string;
   currency: Currency;
   timezone: string;
-  businessAt: string;
   note?: string;
+}
+
+export interface QuickEntryFields extends QuickEntryCommandFields {
+  businessAt: string;
 }
 
 export interface QuickEntryValidation {
@@ -60,6 +63,22 @@ export function buildQuickEntryPayload(
     note: fields.note?.trim() ? fields.note.trim() : null,
     timezone: fields.timezone,
   } as PostTransactionRequest;
+}
+
+/**
+ * 待提交命令的业务输入签名不包含 businessAt：该时间是首个请求固化的事实，
+ * 不能因用户原样重试时重新取时而把同一命令误判为另一笔交易。
+ */
+export function quickEntryCommandSignature(type: QuickEntryType, fields: QuickEntryCommandFields): string {
+  return JSON.stringify({
+    type,
+    accountId: fields.accountId,
+    amount: fields.amount.trim(),
+    categoryId: fields.categoryId,
+    currency: fields.currency,
+    timezone: fields.timezone,
+    note: fields.note?.trim() ? fields.note.trim() : null,
+  });
 }
 
 /** 幂等键语义：同载荷重试复用同一键；载荷变化由调用方重新生成。 */
