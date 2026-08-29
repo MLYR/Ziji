@@ -90,7 +90,10 @@ async function requestOnce<T>(
   const headers = new Headers(requestOptions.headers)
   const method = (requestOptions.method ?? 'GET').toUpperCase()
 
-  if (requestOptions.body !== undefined) headers.set('Content-Type', 'application/json')
+  if (requestOptions.body !== undefined && !headers.has('Content-Type')) {
+    // 调用方可按 OpenAPI 声明专用 Media Type；未声明时才使用通用 JSON 默认值。
+    headers.set('Content-Type', 'application/json')
+  }
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
     // 后端固定使用 ziji_csrf Cookie 与 X-CSRF-Token Header，避免登录后写请求被错误拒绝。
     const csrfToken = readCookie('ziji_csrf')

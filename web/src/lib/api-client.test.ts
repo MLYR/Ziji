@@ -32,6 +32,21 @@ describe('Web API client', () => {
     expect(new Headers(request?.headers).get('Authorization')).toBeNull()
   })
 
+  it('保留调用方指定的 PATCH Media Type', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ id: 'ok' }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    )
+
+    await apiRequest('/api/v1/example', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/merge-patch+json' },
+      body: { name: '新名称' },
+    })
+
+    const request = fetchMock.mock.calls[0]?.[1]
+    expect(new Headers(request?.headers).get('Content-Type')).toBe('application/merge-patch+json')
+  })
+
   it('把 Problem Details 映射为稳定错误类型', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ title: 'Conflict', status: 409, code: 'IDEMPOTENCY_CONFLICT' }), {

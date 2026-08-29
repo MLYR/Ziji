@@ -93,7 +93,8 @@ export async function createAccount(idempotencyKey: string, body: CreateAccountB
 export async function updateAccount(accountId: string, etag: string, body: { name?: string; institution?: string | null }): Promise<Account> {
   const response = await apiRequest<{ data: Account }>(`/api/v1/accounts/${accountId}`, {
     method: 'PATCH',
-    headers: { 'If-Match': etag },
+    // 后端账户更新只消费 JSON Merge Patch，不能退回通用 application/json。
+    headers: { 'If-Match': etag, 'Content-Type': 'application/merge-patch+json' },
     body,
   })
   return response.data
