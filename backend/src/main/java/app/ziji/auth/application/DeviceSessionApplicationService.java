@@ -15,11 +15,15 @@ import app.ziji.auth.domain.RefreshTokenHash;
 import app.ziji.auth.domain.SessionRevocationReason;
 import app.ziji.auth.domain.StoredRefreshToken;
 import app.ziji.shared.application.TransactionRunner;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 已认证用户的稳定设备会话、正常刷新轮换和传输无关的撤销用例；不包含 HTTP、Cookie、CSRF 或 Mobile 编排。
  */
 public final class DeviceSessionApplicationService {
+
+	private static final Logger LOG = LoggerFactory.getLogger(DeviceSessionApplicationService.class);
 
 	private final TransactionRunner transactionRunner;
 	private final DeviceSessionStore sessionStore;
@@ -84,37 +88,43 @@ public final class DeviceSessionApplicationService {
 	}
 
 	public SessionTokenResult rotate(RotateRefreshTokenCommand command) {
-		RefreshToken currentToken = validateRefreshToken(command);
-		RefreshTokenHash currentHash = RefreshTokenHash.from(currentToken);
-		Instant now = clock.instant();
+		try {
+			RefreshToken currentToken = validateRefreshToken(command);
+			RefreshTokenHash currentHash = RefreshTokenHash.from(currentToken);
+			Instant now = clock.instant();
 
-		return transactionRunner.required(() -> {
-			// 按摘要锁定 Token 和所属会话；同一原始 Token 的并发请求会串行，只有第一个可正常消费。
-			RefreshTokenSessionState state = sessionStore.findRefreshTokenForUpdate(currentHash.value())
-				.orElseThrow(() -> new RefreshTokenRejectedException(RefreshTokenRejectedException.Reason.INVALID));
-			requireCurrent(state, now);
+			return transactionRunner.required(() -> {
+				// 按摘要锁定 Token 和所属会话；同一原始 Token 的并发请求会串行，只有第一个可正常消费。
+				RefreshTokenSessionState state = sessionStore.findRefreshTokenForUpdate(currentHash.value())
+					.orElseThrow(() -> new RefreshTokenRejectedException(RefreshTokenRejectedException.Reason.INVALID));
+				requireCurrent(state, now);
 
-			DeviceSession session = state.session();
-			RefreshToken nextToken = RefreshToken.generate(secureRandom);
-			StoredRefreshToken nextStoredToken = StoredRefreshToken.issue(
-				nextUuid(), session.id(), RefreshTokenHash.from(nextToken), now, session.expiresAt());
-			Instant nextLastSeenAt = now.isAfter(session.lastSeenAt()) ? now : session.lastSeenAt();
+				DeviceSession session = state.session();
+				RefreshToken nextToken = RefreshToken.generate(secureRandom);
+				StoredRefreshToken nextStoredToken = StoredRefreshToken.issue(
+					nextUuid(), session.id(), RefreshTokenHash.from(nextToken), now, session.expiresAt());
+				Instant nextLastSeenAt = now.isAfter(session.lastSeenAt()) ? now : session.lastSeenAt();
 
-			// V011 延迟 replacement 约束允许此固定顺序原子提交，任一返回 false 均由异常触发整体回滚。
-			if (!sessionStore.consumeRefreshToken(state.refreshToken().id(), now)) {
-				throw new RefreshTokenRejectedException(RefreshTokenRejectedException.Reason.CONSUMED);
-			}
-			sessionStore.insertRefreshToken(nextStoredToken);
-			if (!sessionStore.linkReplacement(state.refreshToken().id(), nextStoredToken.id())) {
-				throw new RefreshTokenRejectedException(RefreshTokenRejectedException.Reason.INVALID);
-			}
-			if (!sessionStore.updateLastSeen(session.id(), nextLastSeenAt)) {
-				throw new RefreshTokenRejectedException(RefreshTokenRejectedException.Reason.SESSION_REVOKED);
-			}
-			IssuedAccessToken accessToken = accessTokenService.issue(
-				session.userId(), session.id(), now, session.expiresAt());
-			return result(session, nextLastSeenAt, accessToken, nextToken);
-		});
+				// V011 延迟 replacement 约束允许此固定顺序原子提交，任一返回 false 均由异常触发整体回滚。
+				if (!sessionStore.consumeRefreshToken(state.refreshToken().id(), now)) {
+					throw new RefreshTokenRejectedException(RefreshTokenRejectedException.Reason.CONSUMED);
+				}
+				sessionStore.insertRefreshToken(nextStoredToken);
+				if (!sessionStore.linkReplacement(state.refreshToken().id(), nextStoredToken.id())) {
+					throw new RefreshTokenRejectedException(RefreshTokenRejectedException.Reason.INVALID);
+				}
+				if (!sessionStore.updateLastSeen(session.id(), nextLastSeenAt)) {
+					throw new RefreshTokenRejectedException(RefreshTokenRejectedException.Reason.SESSION_REVOKED);
+				}
+				IssuedAccessToken accessToken = accessTokenService.issue(
+					session.userId(), session.id(), now, session.expiresAt());
+				return result(session, nextLastSeenAt, accessToken, nextToken);
+			});
+		} catch (RefreshTokenRejectedException exception) {
+			// 过期、无效、已消费或撤销后的刷新拒绝必须留下可审计的安全事件；绝不记录 Token、摘要或密码。
+			LOG.warn("AUTH_SECURITY_EVENT action=REFRESH_TOKEN_REJECTED reason={}", exception.reason());
+			throw exception;
+		}
 	}
 
 	/**
@@ -142,6 +152,10 @@ public final class DeviceSessionApplicationService {
 				return RefreshTokenReuseResult.alreadyRevoked();
 			}
 			sessionStore.revokeCurrentRefreshTokens(state.session().id(), now);
+			// 刷新凭据重用是最高优先级的凭据泄露信号，只记录主体与会话标识，不包含 Token 或摘要。
+			LOG.warn(
+				"AUTH_SECURITY_EVENT action=REFRESH_TOKEN_REUSE_REVOKED userId={} sessionId={}",
+				state.session().userId(), state.session().id());
 			return RefreshTokenReuseResult.revoked();
 		});
 	}

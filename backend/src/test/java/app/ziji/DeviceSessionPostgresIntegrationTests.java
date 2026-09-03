@@ -31,8 +31,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -45,6 +48,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @SpringBootTest
 @ActiveProfiles("test")
+@ExtendWith(OutputCaptureExtension.class)
 class DeviceSessionPostgresIntegrationTests extends PostgresIntegrationTestSupport {
 
 	private static final Instant NOW = Instant.parse("2026-08-14T00:00:00Z");
@@ -335,6 +339,36 @@ class DeviceSessionPostgresIntegrationTests extends PostgresIntegrationTestSuppo
 	}
 
 	@Test
+	void refreshTokenReuseWritesSecurityEventLog(CapturedOutput output) {
+		UUID userId = seedUser("security-event-reuse@example.test");
+		SessionTokenResult session = serviceAt(NOW).createForAuthenticatedUser(
+			new CreateDeviceSessionCommand(userId, "Phone", "log-reuse-device"));
+		serviceAt(NOW.plusSeconds(1)).rotate(new RotateRefreshTokenCommand(session.refreshToken()));
+		assertFalse(logs(output).contains("AUTH_SECURITY_EVENT action=REFRESH_TOKEN_REJECTED"));
+
+		RefreshTokenReuseResult result = serviceAt(NOW.plusSeconds(2)).handleConsumedRefreshTokenReuse(
+			new RotateRefreshTokenCommand(session.refreshToken()));
+
+		assertEquals(RefreshTokenReuseResult.Status.REVOKED, result.status());
+		assertTrue(logs(output).contains("AUTH_SECURITY_EVENT action=REFRESH_TOKEN_REUSE_REVOKED"));
+		assertFalse(logs(output).contains(session.accessToken()),
+			"安全事件日志不得包含任何凭据内容");
+	}
+
+	@Test
+	void revokedSessionRefreshWritesRejectionSecurityEventLog(CapturedOutput output) {
+		UUID userId = seedUser("security-event-reject@example.test");
+		SessionTokenResult session = serviceAt(NOW).createForAuthenticatedUser(
+			new CreateDeviceSessionCommand(userId, "Phone", "log-reject-device"));
+		serviceAt(NOW.plusSeconds(1)).revokeAllDevices(userId);
+
+		assertThrows(RefreshTokenRejectedException.class, () -> serviceAt(NOW.plusSeconds(2)).rotate(
+			new RotateRefreshTokenCommand(session.refreshToken())));
+		assertTrue(logs(output).contains(
+			"AUTH_SECURITY_EVENT action=REFRESH_TOKEN_REJECTED reason=REVOKED"));
+	}
+
+	@Test
 	void currentSelectedAndAllRevocationsUseExpectedReasons() {
 		UUID userId = seedUser("session-token-device-revoke@example.test");
 		SessionTokenResult current = serviceAt(NOW).createForAuthenticatedUser(
@@ -569,5 +603,9 @@ class DeviceSessionPostgresIntegrationTests extends PostgresIntegrationTestSuppo
 	private Instant instant(String sql, Object... parameters) {
 		OffsetDateTime value = jdbc.queryForObject(sql, OffsetDateTime.class, parameters);
 		return value.toInstant();
+	}
+
+	private String logs(CapturedOutput output) {
+		return output.getOut() + output.getErr();
 	}
 }
