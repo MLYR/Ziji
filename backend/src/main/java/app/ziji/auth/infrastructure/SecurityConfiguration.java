@@ -96,8 +96,11 @@ class SecurityConfiguration {
 			.anyRequest().denyAll());
 		// 只有携带 Web refresh Cookie 的不安全请求走 CSRF；Mobile Bearer 请求不会被错误拦截。
 		CsrfTokenRequestHandler csrfRequestHandler = new StrictCsrfTokenRequestHandler();
+		// Web 登录/刷新已由 WebSessionCookieService 成对轮换；无状态 Bearer 每请求认证
+		// 不能触发默认 CsrfAuthenticationStrategy 删除/替换 Cookie，否则刷新后无法读取 ziji_csrf。
 		http.csrf(csrf -> csrf.csrfTokenRepository(csrfTokenRepository)
 			.csrfTokenRequestHandler(csrfRequestHandler)
+			.sessionAuthenticationStrategy((authentication, request, response) -> { })
 			.requireCsrfProtectionMatcher(request -> unsafeWithRefreshCookie(request)));
 		http.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
 		http.addFilterBefore(accessTokenAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

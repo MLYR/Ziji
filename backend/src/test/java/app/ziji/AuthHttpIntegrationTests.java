@@ -193,6 +193,29 @@ class AuthHttpIntegrationTests extends PostgresIntegrationTestSupport {
 	}
 
 	@Test
+	void authenticatedGetMustNotOverwriteOrDeleteWebCsrfCookie() throws Exception {
+		UserFixture webUser = seedUser();
+		MvcResult login = mvc.perform(post("/api/v1/auth/web/sessions")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(loginBody(webUser.email(), "Web", "web-device")))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String webRefresh = cookieValue(login, "ziji_refresh");
+		String webCsrf = cookieValue(login, "ziji_csrf");
+		String accessToken = json(login).at("/data/accessToken").asString();
+		MvcResult profile = mvc.perform(get("/api/v1/users/me")
+				.cookie(new Cookie("ziji_refresh", webRefresh), new Cookie("ziji_csrf", webCsrf))
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken))
+			.andExpect(status().isOk())
+			.andReturn();
+
+		List<String> setCookies = profile.getResponse().getHeaders(HttpHeaders.SET_COOKIE);
+		// 已认证 GET 不得重写 CSRF Cookie；GET 中缺失或失效 Cookie 会在刷新请求上造成 403。
+		assertTrue(setCookies.stream().noneMatch(header -> header.startsWith("ziji_csrf=")),
+			"已认证 GET 不应重写或删除 ziji_csrf，实际 Set-Cookie: " + setCookies);
+	}
+
+	@Test
 	void publicChallengeOperationsAreRoutedWithoutLeakingEmail() throws Exception {
 		String email = uniqueEmail();
 		String body = "{\"email\":\"" + email + "\",\"deviceId\":\"challenge-device\"}";
