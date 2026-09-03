@@ -294,6 +294,7 @@ jobs:
       # 扫描走本地仓库，避免外部限流导致的间歇性失败（与 Backend job 的 mvn 缓存共用）。
       - name: Prefetch Maven dependencies for Trivy cache
         if: needs.changes.outputs.security_deep == 'true'
+        working-directory: backend
         run: ./mvnw --batch-mode --no-transfer-progress -q -DskipTests dependency:go-offline
       # 普通 PR 只执行密钥快检；依赖、许可证和跨语言漏洞扫描仅在供应链相关变更时执行。
       - name: Run security fast scan
