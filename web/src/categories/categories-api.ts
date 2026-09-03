@@ -19,7 +19,6 @@ export async function listCategories(scope: CategoryScope = 'PERSONAL'): Promise
 }
 
 export async function createCategory(body: {
-  scope: CategoryScope
   accountId?: string | null
   categoryType: CategoryType
   name: string

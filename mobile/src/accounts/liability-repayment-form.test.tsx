@@ -1,12 +1,17 @@
 import { render, userEvent, waitFor } from '@testing-library/react-native';
 
 import { LiabilityRepaymentForm } from '@/accounts/liability-repayment-form';
+import type { Category } from '@/api/api-client';
 import type { PostTransactionRequest } from '@/api/api-client';
 
 const liabilityAccountId = '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0a1';
 const cashAccountId = '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0a2';
 const interestCategoryId = '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0a3';
 const feeCategoryId = '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0a4';
+
+const categories: Category[] = [
+  { id: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0aa', categoryType: 'EXPENSE', name: '利息支出', parentId: null, status: 'ACTIVE', mergedIntoId: null, version: 1 },
+];
 
 async function renderForm(createTransaction: jest.Mock, user: ReturnType<typeof userEvent.setup>) {
   const keyFor = jest.fn((signature: string) => `key:${signature}`);
@@ -15,6 +20,7 @@ async function renderForm(createTransaction: jest.Mock, user: ReturnType<typeof 
       liabilityAccountId={liabilityAccountId}
       currency="CNY"
       timezone="Asia/Shanghai"
+      categories={categories}
       keyFor={keyFor}
       createTransaction={createTransaction}
       onSuccess={jest.fn()}
@@ -49,8 +55,10 @@ describe('Mobile 语义还款表单', () => {
     await user.type(view.getByTestId('repayment-principal'), '1000');
     await user.type(view.getByTestId('repayment-interest'), '50.5');
     await user.type(view.getByTestId('repayment-fee'), '10');
-    await user.type(view.getByTestId('repayment-interest-category'), interestCategoryId);
-    await user.type(view.getByTestId('repayment-fee-category'), feeCategoryId);
+    await user.press(view.getByTestId('repayment-interest-category'));
+    await user.press(view.getByTestId('repayment-interest-category-option-0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0aa'));
+    await user.press(view.getByTestId('repayment-fee-category'));
+    await user.press(view.getByTestId('repayment-fee-category-option-0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0aa'));
     await user.press(view.getByTestId('repayment-submit'));
     await waitFor(() => expect(createTransaction).toHaveBeenCalledTimes(1));
 
@@ -63,8 +71,8 @@ describe('Mobile 语义还款表单', () => {
       principalAmount: '1000.00',
       interestAmount: '50.50',
       feeAmount: '10.00',
-      interestCategoryId,
-      feeCategoryId,
+      interestCategoryId: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0aa',
+      feeCategoryId: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0aa',
       timezone: 'Asia/Shanghai',
     });
 

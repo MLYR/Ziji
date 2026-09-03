@@ -107,7 +107,7 @@ describe('分类与标签管理页', () => {
     fireEvent.click(screen.getByRole('button', { name: '创建分类' }))
     await waitFor(() => expect(apiRequestMock.mock.calls.some(([path, init]) => path === '/api/v1/categories' && init?.method === 'POST')).toBe(true))
     const postCall = apiRequestMock.mock.calls.find(([path, init]) => path === '/api/v1/categories' && init?.method === 'POST')!
-    expect(postCall[1]?.body).toMatchObject({ scope: 'PERSONAL', categoryType: 'EXPENSE', name: '零食', parentId: null, accountId: null })
+    expect(postCall[1]?.body).toMatchObject({ categoryType: 'EXPENSE', name: '零食', parentId: null, accountId: null })
   })
 
   it('停用分类提交 PATCH 且携带 If-Match', async () => {

@@ -26,6 +26,10 @@ export type AccountBalance = components['schemas']['AccountBalance'];
 export type LiabilityDetail = components['schemas']['LiabilityDetail'];
 export type LiabilityDetailEnvelope = components['schemas']['LiabilityDetailEnvelope'];
 export type PutLiabilityDetailRequest = components['schemas']['PutLiabilityDetailRequest'];
+export type Category = components['schemas']['Category'];
+export type CategoryListEnvelope = components['schemas']['CategoryListEnvelope'];
+export type Tag = components['schemas']['Tag'];
+export type TagListEnvelope = components['schemas']['TagListEnvelope'];
 export type StatisticsSeriesEnvelope = components['schemas']['StatisticsSeriesEnvelope'];
 export type RegistrationChallengeEnvelope = operations['createRegistrationChallenge']['responses'][202]['content']['application/json'];
 
@@ -91,6 +95,16 @@ export interface MobileAccountsApiClient {
 export interface MobileDashboardApiClient {
   getDashboard(): Promise<DashboardEnvelope>;
   getAssetStatistics(dateFrom: string, dateTo: string): Promise<StatisticsSeriesEnvelope>;
+}
+
+export interface MobileCategoryApiClient {
+  listCategories(scope: 'PERSONAL' | 'ACCOUNT'): Promise<CategoryListEnvelope>;
+  createCategory(idempotencyKey: string, body: components['schemas']['CreateCategoryRequest']): Promise<components['schemas']['CategoryEnvelope']>;
+  patchCategory(categoryId: string, etag: string, body: { name?: string; status?: 'ACTIVE' | 'INACTIVE' }): Promise<components['schemas']['CategoryEnvelope']>;
+  mergeCategory(categoryId: string, etag: string, idempotencyKey: string, targetCategoryId: string): Promise<components['schemas']['CategoryEnvelope']>;
+  listTags(): Promise<TagListEnvelope>;
+  createTag(idempotencyKey: string, body: { name: string }): Promise<components['schemas']['TagEnvelope']>;
+  patchTag(tagId: string, etag: string, body: { name?: string; status?: 'ACTIVE' | 'INACTIVE' }): Promise<components['schemas']['TagEnvelope']>;
 }
 
 export class ApiClientError extends Error {
@@ -267,6 +281,54 @@ export function createMobileDashboardApiClient(options: MobileApiClientOptions):
     getAssetStatistics(dateFrom, dateTo) {
       const query = new URLSearchParams({ dateFrom, dateTo, granularity: 'DAY' });
       return request<StatisticsSeriesEnvelope>(`/api/v1/statistics/assets?${query.toString()}`, { method: 'GET' });
+    },
+  };
+}
+
+export function createMobileCategoryApiClient(options: MobileApiClientOptions): MobileCategoryApiClient {
+  const request = createMobileApiClient(options);
+
+  return {
+    listCategories(scope) {
+      return request<CategoryListEnvelope>(`/api/v1/categories?scope=${scope}&limit=100`, { method: 'GET' });
+    },
+    createCategory(idempotencyKey, body) {
+      return request<components['schemas']['CategoryEnvelope']>('/api/v1/categories', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      });
+    },
+    patchCategory(categoryId, etag, body) {
+      return request<components['schemas']['CategoryEnvelope']>(`/api/v1/categories/${encodeURIComponent(categoryId)}`, {
+        method: 'PATCH',
+        headers: { 'If-Match': etag, 'Content-Type': 'application/merge-patch+json' },
+        body: JSON.stringify(body),
+      });
+    },
+    mergeCategory(categoryId, etag, idempotencyKey, targetCategoryId) {
+      return request<components['schemas']['CategoryEnvelope']>(`/api/v1/categories/${encodeURIComponent(categoryId)}/merge`, {
+        method: 'POST',
+        headers: { 'If-Match': etag, 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify({ targetCategoryId }),
+      });
+    },
+    listTags() {
+      return request<TagListEnvelope>('/api/v1/tags?limit=100', { method: 'GET' });
+    },
+    createTag(idempotencyKey, body) {
+      return request<components['schemas']['TagEnvelope']>('/api/v1/tags', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      });
+    },
+    patchTag(tagId, etag, body) {
+      return request<components['schemas']['TagEnvelope']>(`/api/v1/tags/${encodeURIComponent(tagId)}`, {
+        method: 'PATCH',
+        headers: { 'If-Match': etag, 'Content-Type': 'application/merge-patch+json' },
+        body: JSON.stringify(body),
+      });
     },
   };
 }

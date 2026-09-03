@@ -3,16 +3,21 @@ import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { mobileAuthApiClient, mobileTransactionApiClient } from '@/auth/default-auth-session';
+import { mobileAuthApiClient, mobileCategoryApiClient, mobileTransactionApiClient } from '@/auth/default-auth-session';
+import type { Category } from '@/api/api-client';
 import { QuickRecordScreen } from '@/ledger/quick-record-screen';
 
 /** 快速记账路由：币种与时区取自服务端用户资料；成功后可直接打开交易详情。 */
 export default function QuickRecordRoute() {
   const router = useRouter();
   const [profile, setProfile] = useState<{ baseCurrency: 'CNY' | 'USD' | 'HKD' | 'JPY' | 'EUR'; timezone: string } | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
 
   useEffect(() => {
     let cancelled = false;
+    mobileCategoryApiClient.listCategories('PERSONAL')
+      .then((envelope) => { if (!cancelled) setCategories(envelope.data); })
+      .catch(() => undefined);
     mobileAuthApiClient.getCurrentUser()
       .then((envelope) => {
         if (!cancelled) {
@@ -45,6 +50,7 @@ export default function QuickRecordRoute() {
           <QuickRecordScreen
             currency={profile.baseCurrency}
             timezone={profile.timezone}
+            categories={categories}
             keyFor={() => globalThis.crypto.randomUUID()}
             onSuccess={(transactionId) => {
               router.push({ pathname: '/transaction-detail', params: { id: transactionId } });

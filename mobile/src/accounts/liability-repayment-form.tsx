@@ -1,11 +1,13 @@
 import { useRef, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 
-import type { PostTransactionRequest } from '@/api/api-client';
+import type { Category, PostTransactionRequest } from '@/api/api-client';
+import { CategorySelect } from '@/categories/category-select';
 
 interface LiabilityRepaymentFormProps {
   liabilityAccountId: string;
   currency: string;
+  categories: Category[];
   timezone: string;
   keyFor: (signature: string) => string;
   createTransaction: (idempotencyKey: string, body: PostTransactionRequest) => Promise<{ data: { id: string } }>;
@@ -37,7 +39,7 @@ function formatAmount(value: string, decimals: number): string {
 
 /** 语义还款：本金不计支出；利息和手续费 >0 时必须提供对应费用分类，由服务端入账。 */
 export function LiabilityRepaymentForm({
-  liabilityAccountId, currency, timezone, keyFor, createTransaction, onSuccess,
+  liabilityAccountId, currency, timezone, categories, keyFor, createTransaction, onSuccess,
 }: LiabilityRepaymentFormProps) {
   const [cashAccountId, setCashAccountId] = useState('');
   const [principalAmount, setPrincipalAmount] = useState('');
@@ -114,8 +116,6 @@ export function LiabilityRepaymentForm({
     { key: 'principalAmount', label: `本金（${currency}）`, placeholder: '0.00', value: principalAmount, setter: setPrincipalAmount, testId: 'repayment-principal' },
     { key: 'interestAmount', label: `利息（${currency}，0 表示无）`, placeholder: '0.00', value: interestAmount, setter: setInterestAmount, testId: 'repayment-interest' },
     { key: 'feeAmount', label: `手续费（${currency}，0 表示无）`, placeholder: '0.00', value: feeAmount, setter: setFeeAmount, testId: 'repayment-fee' },
-    { key: 'interestCategoryId', label: '利息分类 ID', placeholder: '利息 >0 时必填', value: interestCategoryId, setter: setInterestCategoryId, testId: 'repayment-interest-category' },
-    { key: 'feeCategoryId', label: '手续费分类 ID', placeholder: '手续费 >0 时必填', value: feeCategoryId, setter: setFeeCategoryId, testId: 'repayment-fee-category' },
   ];
 
   return (
@@ -134,6 +134,22 @@ export function LiabilityRepaymentForm({
             />
           </View>
         ))}
+        <CategorySelect
+          categories={categories}
+          categoryType="EXPENSE"
+          value={interestCategoryId}
+          onChange={setInterestCategoryId}
+          testID="repayment-interest-category"
+          label="利息分类（利息 >0 时必填）"
+        />
+        <CategorySelect
+          categories={categories}
+          categoryType="EXPENSE"
+          value={feeCategoryId}
+          onChange={setFeeCategoryId}
+          testID="repayment-fee-category"
+          label="手续费分类（手续费 >0 时必填）"
+        />
         <View className="gap-1">
           <Text className="text-sm font-semibold text-ink-light dark:text-ink-dark">备注（可选）</Text>
           <TextInput

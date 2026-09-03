@@ -1,6 +1,9 @@
 import { useRef, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 
+import { CategorySelect } from '@/categories/category-select';
+import type { Category } from '@/api/api-client';
+
 import {
   buildQuickEntryPayload,
   payloadSignature,
@@ -13,6 +16,7 @@ import {
 interface QuickRecordScreenProps {
   currency: 'CNY' | 'USD' | 'HKD' | 'JPY' | 'EUR';
   timezone: string;
+  categories: Category[];
   keyFor: (signature: string) => string;
   onSuccess: (transactionId: string) => void;
   createTransaction: (idempotencyKey: string, body: PostTransactionRequest) => Promise<{ data: { id: string } }>;
@@ -23,7 +27,7 @@ interface QuickRecordScreenProps {
  * 幂等键与载荷内容绑定：同载荷重试复用同一键，载荷变化立即换新键。
  * 账户与分类以服务端 UUID 提交；分类管理接口（BE-CAT-001）未开放前由用户粘贴分类 ID。
  */
-export function QuickRecordScreen({ currency, timezone, keyFor, onSuccess, createTransaction }: QuickRecordScreenProps) {
+export function QuickRecordScreen({ currency, timezone, categories, keyFor, onSuccess, createTransaction }: QuickRecordScreenProps) {
   const [type, setType] = useState<QuickEntryType>('EXPENSE');
   const [accountId, setAccountId] = useState('');
   const [amount, setAmount] = useState('');
@@ -117,16 +121,14 @@ export function QuickRecordScreen({ currency, timezone, keyFor, onSuccess, creat
           className="min-h-11 rounded-lg border border-accent/30 px-3 text-ink-light dark:text-ink-dark"
         />
       </View>
-      <View className="gap-1">
-        <Text className="text-sm font-semibold text-ink-light dark:text-ink-dark">分类 ID</Text>
-        <TextInput
-          value={categoryId}
-          onChangeText={setCategoryId}
-          placeholder="分类 ID（分类管理接口开放后可直接选择）"
-          testID="quick-record-category"
-          className="min-h-11 rounded-lg border border-accent/30 px-3 text-ink-light dark:text-ink-dark"
-        />
-      </View>
+      <CategorySelect
+        categories={categories}
+        categoryType={type === 'INCOME' ? 'INCOME' : 'EXPENSE'}
+        value={categoryId}
+        onChange={setCategoryId}
+        testID="quick-record-category"
+        label={type === 'INCOME' ? '收入分类' : '支出分类'}
+      />
       <View className="gap-1">
         <Text className="text-sm font-semibold text-ink-light dark:text-ink-dark">备注（可选）</Text>
         <TextInput

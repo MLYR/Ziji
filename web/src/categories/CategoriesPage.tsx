@@ -80,7 +80,6 @@ function CategoryPanel({ categories, loading, onError }: {
 
   const createMutation = useMutation({
     mutationFn: () => createCategory({
-      scope,
       accountId: scope === 'ACCOUNT' ? accountId : null,
       categoryType,
       name: name.trim(),

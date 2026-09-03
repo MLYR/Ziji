@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { mobileAccountsApiClient, mobileAuthApiClient, mobileTransactionApiClient } from '@/auth/default-auth-session';
+import { mobileAccountsApiClient, mobileAuthApiClient, mobileCategoryApiClient, mobileTransactionApiClient } from '@/auth/default-auth-session';
+import type { Category } from '@/api/api-client';
 import type { Account, AccountBalance } from '@/api/api-client';
 import { LiabilityDetailsCard } from '@/accounts/liability-details-card';
 import { LiabilityRepaymentForm } from '@/accounts/liability-repayment-form';
@@ -30,6 +31,7 @@ export default function AccountDetailRoute() {
   const [submitting, setSubmitting] = useState(false);
   const archiveKeyRef = useRef<string | null>(null);
   const [profile, setProfile] = useState<{ baseCurrency: 'CNY' | 'USD' | 'HKD' | 'JPY' | 'EUR'; timezone: string } | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
 
   useEffect(() => {
     if (!accountId) {
@@ -59,6 +61,9 @@ export default function AccountDetailRoute() {
 
   useEffect(() => {
     let cancelled = false;
+    mobileCategoryApiClient.listCategories('PERSONAL')
+      .then((envelope) => { if (!cancelled) setCategories(envelope.data); })
+      .catch(() => undefined);
     mobileAuthApiClient.getCurrentUser()
       .then((envelope) => {
         if (!cancelled) {
@@ -183,6 +188,7 @@ export default function AccountDetailRoute() {
                 liabilityAccountId={account.id}
                 currency={account.currency}
                 timezone={profile.timezone}
+                categories={categories}
                 keyFor={() => globalThis.crypto.randomUUID()}
                 createTransaction={(key, body) => mobileTransactionApiClient.createTransaction(key, body)}
                 onSuccess={(transactionId) => {

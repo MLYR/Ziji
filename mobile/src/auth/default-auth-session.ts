@@ -1,4 +1,4 @@
-import { createMobileAccountsApiClient, createMobileAuthApiClient, createMobileDashboardApiClient, createMobileSyncApiClient, createMobileTransactionApiClient } from '@/api/api-client';
+import { createMobileAccountsApiClient, createMobileAuthApiClient, createMobileCategoryApiClient, createMobileDashboardApiClient, createMobileSyncApiClient, createMobileTransactionApiClient } from '@/api/api-client';
 import { createDeviceIdentityProvider, MobileAuthenticationSession, type MobileAuthenticationScopeLease } from '@/auth/auth-session';
 import { closeLocalDatabase } from '@/storage/local-database';
 import { secureCredentialStore } from '@/storage/secure-credentials';
@@ -50,6 +50,7 @@ export const mobileSyncApiClient = createMobileSyncApiClient({ baseUrl: apiBaseU
 export const mobileTransactionApiClient = createMobileTransactionApiClient({ baseUrl: apiBaseUrl, readAccessToken });
 export const mobileDashboardApiClient = createMobileDashboardApiClient({ baseUrl: apiBaseUrl, readAccessToken });
 export const mobileAccountsApiClient = createMobileAccountsApiClient({ baseUrl: apiBaseUrl, readAccessToken });
+export const mobileCategoryApiClient = createMobileCategoryApiClient({ baseUrl: apiBaseUrl, readAccessToken });
 export const mobileDeviceIdentity = createDeviceIdentityProvider(secureCredentialStore);
 
 export function createMobileSyncApiClientForLease(lease: MobileAuthenticationScopeLease) {

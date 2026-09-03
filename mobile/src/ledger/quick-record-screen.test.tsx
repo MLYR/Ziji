@@ -1,9 +1,14 @@
 import { render, userEvent, waitFor } from '@testing-library/react-native';
 
 import { QuickRecordScreen } from '@/ledger/quick-record-screen';
+import type { Category } from '@/api/api-client';
 
 const accountId = '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0a1';
 const categoryId = '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0a2';
+
+const categories: Category[] = [
+  { id: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0aa', categoryType: 'EXPENSE', name: '餐饮', parentId: null, status: 'ACTIVE', mergedIntoId: null, version: 1 },
+];
 
 async function renderQuickRecord(createTransaction: jest.Mock, user: ReturnType<typeof userEvent.setup>) {
   const keyFor = jest.fn((signature: string) => `key:${signature}`);
@@ -11,6 +16,7 @@ async function renderQuickRecord(createTransaction: jest.Mock, user: ReturnType<
     <QuickRecordScreen
       currency="CNY"
       timezone="Asia/Shanghai"
+      categories={categories}
       keyFor={keyFor}
       onSuccess={jest.fn()}
       createTransaction={createTransaction}
@@ -18,7 +24,8 @@ async function renderQuickRecord(createTransaction: jest.Mock, user: ReturnType<
   );
   await user.type(view.getByTestId('quick-record-account'), accountId);
   await user.type(view.getByTestId('quick-record-amount'), '12.50');
-  await user.type(view.getByTestId('quick-record-category'), categoryId);
+  await user.press(view.getByTestId('quick-record-category'));
+  await user.press(view.getByTestId('quick-record-category-option-0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0aa'));
   await user.type(view.getByTestId('quick-record-note'), ' 午餐 ');
   return { keyFor, view };
 }

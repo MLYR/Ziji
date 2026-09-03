@@ -110,6 +110,15 @@ export default function AccountsRoute() {
           <Text className="text-2xl font-bold text-ink-light dark:text-ink-dark" accessibilityRole="header">账户</Text>
           <Pressable
             accessibilityRole="button"
+            accessibilityLabel="分类与标签"
+            onPress={() => router.push('/categories')}
+            testID="accounts-open-categories"
+            className="mr-2 min-h-11 items-center justify-center rounded-lg border border-accent px-4"
+          >
+            <Text className="font-semibold text-ink-light dark:text-ink-dark">分类</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
             accessibilityLabel="创建账户"
             onPress={() => router.push('/account-create')}
             testID="accounts-open-create"
@@ -154,4 +163,3 @@ export default function AccountsRoute() {
     </SafeAreaView>
   );
 }
-
