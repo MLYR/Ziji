@@ -10,7 +10,7 @@ import app.ziji.category.application.CategoryReference;
 import app.ziji.category.application.CategoryStore;
 
 /** 交易读取编排：先收敛 ACTIVE membership，再把可见账户集合交给 Ledger 查询端口。 */
-public final class TransactionQueryService {
+public class TransactionQueryService {
 
 	private static final int DEFAULT_LIMIT = 50;
 	private static final int MAXIMUM_LIMIT = 200;

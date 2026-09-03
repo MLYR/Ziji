@@ -38,7 +38,7 @@ import app.ziji.ledger.domain.TransactionType;
 import app.ziji.shared.application.TransactionRunner;
 
 /** 账务语义命令的应用编排；不包含 HTTP、Spring、jOOQ 或余额投影。 */
-public final class LedgerCommandApplicationService implements LedgerSyncCommandPort {
+public class LedgerCommandApplicationService implements LedgerSyncCommandPort, InvestmentLedgerPort {
 
 	private final TransactionRunner transactions;
 	private final AccountPostingReferencePort accounts;
@@ -433,6 +433,83 @@ public final class LedgerCommandApplicationService implements LedgerSyncCommandP
 			new TransferWriteDetails(
 				command.fromAccountId(), command.toAccountId(), command.amount(), command.amount(), fee)));
 		return transaction;
+	}
+
+	@Override
+	public InvestmentLedgerResult postInvestmentTrade(InvestmentLedgerCommand command) {
+		require(command, "投资成交命令");
+		return transactions.nested(() -> {
+			lockAccounts(command.investmentAccountId());
+			AccountPostingReference account = editableAccount(command.userId(), command.investmentAccountId());
+			if (!"INVESTMENT".equals(account.accountClass())) {
+				throw invalid("投资成交只允许投资账户。");
+			}
+			CurrencyCode currency = CurrencyCode.fromCode(account.currency());
+			if (currency != command.currency()) {
+				throw invalid("投资成交币种与账户不一致。");
+			}
+			LedgerAccountReference cash = primary(account);
+			LedgerAccountReference positionCost = ledgerAccounts.findPositionCostForVisibleAccount(account.id())
+				.orElseThrow(() -> invalid("投资账户缺少 POSITION_COST 成本科目。"));
+			if (!positionCost.active() || positionCost.role() != LedgerAccountRole.POSITION_COST
+				|| positionCost.nature() != LedgerAccountNature.ASSET || positionCost.currency() != currency) {
+				throw invalid("投资账户 POSITION_COST 科目状态无效。");
+			}
+			Money gross = new Money(command.grossAmount(), currency);
+			Money fee = new Money(command.feeAmount(), currency);
+			Money tax = new Money(command.taxAmount(), currency);
+			validateAmount(gross, currency);
+			validateNonNegativeAmount(fee, currency, "投资手续费");
+			validateNonNegativeAmount(tax, currency, "投资税费");
+			List<LedgerEntrySpec> entries = new ArrayList<>();
+			switch (command.side()) {
+				case BUY -> {
+					entries.add(new LedgerEntrySpec(positionCost.id(), LedgerDirection.DEBIT, gross));
+					entries.add(new LedgerEntrySpec(cash.id(), LedgerDirection.CREDIT, gross));
+				}
+				case SELL -> {
+					entries.add(new LedgerEntrySpec(cash.id(), LedgerDirection.DEBIT, gross));
+					entries.add(new LedgerEntrySpec(positionCost.id(), LedgerDirection.CREDIT,
+						new Money(command.sellCostBasis(), currency)));
+					BigDecimal difference = command.grossAmount().subtract(command.sellCostBasis());
+					if (difference.signum() > 0) {
+						LedgerAccountReference income = ledgerAccounts.ensureInvestmentIncomeAccount(command.userId(), currency);
+						entries.add(new LedgerEntrySpec(income.id(), LedgerDirection.CREDIT,
+							new Money(difference, currency)));
+					} else if (difference.signum() < 0) {
+						LedgerAccountReference loss = ledgerAccounts.ensureInvestmentExpenseAccount(
+							command.userId(), currency, "REALIZED_LOSS");
+						entries.add(new LedgerEntrySpec(loss.id(), LedgerDirection.DEBIT,
+							new Money(difference.abs(), currency)));
+					}
+				}
+				case DIVIDEND -> {
+					entries.add(new LedgerEntrySpec(cash.id(), LedgerDirection.DEBIT, gross));
+					LedgerAccountReference income = ledgerAccounts.ensureInvestmentIncomeAccount(command.userId(), currency);
+					entries.add(new LedgerEntrySpec(income.id(), LedgerDirection.CREDIT, gross));
+				}
+			}
+			if (command.feeAmount().signum() > 0) {
+				LedgerAccountReference feeLedger = ledgerAccounts.ensureInvestmentExpenseAccount(command.userId(), currency, "FEE");
+				entries.add(new LedgerEntrySpec(feeLedger.id(), LedgerDirection.DEBIT, fee));
+				entries.add(new LedgerEntrySpec(cash.id(), LedgerDirection.CREDIT, fee));
+			}
+			if (command.taxAmount().signum() > 0) {
+				LedgerAccountReference taxLedger = ledgerAccounts.ensureInvestmentExpenseAccount(command.userId(), currency, "TAX");
+				entries.add(new LedgerEntrySpec(taxLedger.id(), LedgerDirection.DEBIT, tax));
+				entries.add(new LedgerEntrySpec(cash.id(), LedgerDirection.CREDIT, tax));
+			}
+			Transaction transaction = transactionFactory.createPosted(
+				command.tradeId(), TransactionType.INVESTMENT, TransactionSource.INVESTMENT,
+				command.tradeAt(), command.businessDate(), command.timezone(), clock.instant(), entries);
+			completeInitialPosting(new PostedTransactionWrite(
+				transaction, command.userId(), null, null, command.note(), null,
+				new InvestmentTradeWriteDetails(
+					command.tradeId(), command.investmentAccountId(), command.instrumentId(), command.side(),
+					command.quantity(), command.unitPrice(), command.currency(), command.grossAmount(),
+					command.feeAmount(), command.taxAmount(), command.tradeAt())));
+			return new InvestmentLedgerResult(transaction.transactionId());
+		});
 	}
 
 	/**

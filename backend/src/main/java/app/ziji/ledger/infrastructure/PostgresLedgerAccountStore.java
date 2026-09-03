@@ -182,6 +182,42 @@ public class PostgresLedgerAccountStore implements LedgerAccountStore {
 	}
 
 	@Override
+	public LedgerAccountReference ensureInvestmentIncomeAccount(UUID ownerUserId, CurrencyCode currency) {
+		return ensureInvestmentSystemAccount(ownerUserId, currency, "INCOME_INVESTMENT_REALIZED", LedgerAccountNature.INCOME);
+	}
+
+	@Override
+	public LedgerAccountReference ensureInvestmentExpenseAccount(
+		UUID ownerUserId, CurrencyCode currency, String kind) {
+		if (kind == null || !java.util.Set.of("FEE", "TAX", "REALIZED_LOSS").contains(kind)) {
+			throw new LedgerPersistenceException(new IllegalArgumentException("投资费用科目语义无效。"));
+		}
+		String code = switch (kind) {
+			case "FEE" -> "EXPENSE_INVESTMENT_FEE";
+			case "TAX" -> "EXPENSE_INVESTMENT_TAX";
+			case "REALIZED_LOSS" -> "EXPENSE_INVESTMENT_REALIZED_LOSS";
+			default -> throw new IllegalStateException("未知投资费用科目语义。");
+		};
+		return ensureInvestmentSystemAccount(ownerUserId, currency, code, LedgerAccountNature.EXPENSE);
+	}
+
+	@Override
+	public Optional<LedgerAccountReference> findPositionCostForVisibleAccount(UUID accountId) {
+		if (accountId == null) {
+			return Optional.empty();
+		}
+		try {
+			return jdbc.query("""
+				SELECT id, visible_account_id, owner_user_id, code, ledger_role, account_nature, currency, status
+				FROM ledger_accounts
+				WHERE visible_account_id = ? AND ledger_role = 'POSITION_COST'
+				""", result -> result.next() ? Optional.of(toReference(result)) : Optional.empty(), accountId);
+		} catch (RuntimeException exception) {
+			throw persistence(exception);
+		}
+	}
+
+	@Override
 	public Money currentBalance(UUID ledgerAccountId) {
 		if (ledgerAccountId == null) {
 			throw new LedgerPersistenceException(new IllegalArgumentException("账务科目不能为空。"));
@@ -221,6 +257,34 @@ public class PostgresLedgerAccountStore implements LedgerAccountStore {
 					return new Money(balance, currency);
 				},
 				ledgerAccountId);
+		} catch (RuntimeException exception) {
+			throw persistence(exception);
+		}
+	}
+
+	private LedgerAccountReference ensureInvestmentSystemAccount(
+		UUID ownerUserId, CurrencyCode currency, String code, LedgerAccountNature nature) {
+		if (ownerUserId == null || currency == null || code == null || nature == null) {
+			throw new LedgerPersistenceException(new IllegalArgumentException("投资系统科目参数无效。"));
+		}
+		try {
+			// 固定代码由 Ledger 语义选择，避免投资模块借助任意代码写入内部科目。
+			jdbc.update("""
+				INSERT INTO ledger_accounts (
+					id, visible_account_id, owner_user_id, code, ledger_role, account_nature, currency, status, created_at)
+				VALUES (?, NULL, ?, ?, 'SYSTEM', ?, ?, 'ACTIVE', CURRENT_TIMESTAMP)
+				ON CONFLICT (owner_user_id, code, currency) WHERE visible_account_id IS NULL DO NOTHING
+				""", UUID.randomUUID(), ownerUserId, code, nature.name(), currency.name());
+			return jdbc.query("""
+				SELECT id, visible_account_id, owner_user_id, code, ledger_role, account_nature, currency, status
+				FROM ledger_accounts
+				WHERE owner_user_id = ? AND code = ? AND currency = ? AND ledger_role = 'SYSTEM'
+				""", result -> {
+				if (!result.next()) {
+					throw new LedgerPersistenceException(new IllegalStateException("投资系统科目未创建。"));
+				}
+				return toReference(result);
+			}, ownerUserId, code, currency.name());
 		} catch (RuntimeException exception) {
 			throw persistence(exception);
 		}

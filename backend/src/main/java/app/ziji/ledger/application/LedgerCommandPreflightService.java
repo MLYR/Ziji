@@ -18,7 +18,7 @@ import app.ziji.ledger.domain.LedgerAccountRole;
 import app.ziji.ledger.domain.Transaction;
 
 /** HTTP 幂等取得前的对象级账务写权限检查；不写入任何业务或幂等事实。 */
-public final class LedgerCommandPreflightService {
+public class LedgerCommandPreflightService {
 
 	private final AccountPostingReferencePort accounts;
 	private final AccountMembershipReadPort memberships;

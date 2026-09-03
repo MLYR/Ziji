@@ -180,8 +180,8 @@ describe('应用壳', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse({ data: [session], meta: { requestId: 'request-1', nextCursor: 'next-page', hasMore: true } }))
       .mockResolvedValueOnce(jsonResponse({ data: [nextSession], meta: { requestId: 'request-2', nextCursor: null, hasMore: false } }))
-    // 新流水页会读取业务数据；这些壳层用例只验证应用外壳和会话，改用无请求占位路由。
-    renderApp(['/investments'])
+    // 壳层用例只验证设备会话；使用不自动读取业务数据的账户创建表单，避免干扰会话请求断言。
+    renderApp(['/accounts/new'])
 
     fireEvent.click(screen.getByRole('button', { name: '设备与会话' }))
     await waitFor(() => expect(screen.getByText('这是当前设备')).toBeInTheDocument())
@@ -197,7 +197,7 @@ describe('应用壳', () => {
     setWebSession({ session, accessToken: 'access-test', expiresIn: 1800 })
     setWebUser(user)
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status: 204 }))
-    const { client } = renderApp(['/investments'])
+    const { client } = renderApp(['/accounts/new'])
     client.setQueryData(['private-data', user.id], { userId: user.id })
 
     fireEvent.click(screen.getByRole('button', { name: '退出登录' }))
@@ -215,7 +215,7 @@ describe('应用壳', () => {
       .mockResolvedValueOnce(jsonResponse({ data: [session, other], meta: { requestId: 'request-1', nextCursor: null, hasMore: false } }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(jsonResponse({ data: [session], meta: { requestId: 'request-2', nextCursor: null, hasMore: false } }))
-    renderApp(['/investments'])
+    renderApp(['/accounts/new'])
 
     fireEvent.click(screen.getByRole('button', { name: '设备与会话' }))
     await waitFor(() => expect(screen.getByText('其他设备')).toBeInTheDocument())
@@ -254,7 +254,7 @@ describe('应用壳', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse({ data: [session], meta: { requestId: 'request-1', nextCursor: null, hasMore: false } }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
-    renderApp(['/investments'])
+    renderApp(['/accounts/new'])
 
     fireEvent.click(screen.getByRole('button', { name: '设备与会话' }))
     await waitFor(() => expect(screen.getByRole('button', { name: '退出全部设备' })).toBeInTheDocument())

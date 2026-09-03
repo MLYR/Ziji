@@ -66,11 +66,16 @@ class SecurityConfiguration {
 			.requestMatchers(HttpMethod.GET,
 				"/api/v1/accounts", "/api/v1/accounts/*", "/api/v1/accounts/*/liability-details",
 				"/api/v1/accounts/*/balance", "/api/v1/accounts/*/liquidity-holds",
-				"/api/v1/sync/changes", "/api/v1/transactions", "/api/v1/transactions/*",
-				"/api/v1/categories",
-				"/api/v1/tags",
-				"/api/v1/dashboard", "/api/v1/statistics/assets", "/api/v1/statistics/cash-flow",
-				"/api/v1/statistics/accounts").authenticated()
+					"/api/v1/sync/changes", "/api/v1/transactions", "/api/v1/transactions/*",
+					"/api/v1/categories",
+					"/api/v1/tags",
+					"/api/v1/dashboard", "/api/v1/statistics/assets", "/api/v1/statistics/cash-flow",
+					"/api/v1/statistics/accounts",
+					"/api/v1/instruments/search", "/api/v1/instruments/*", "/api/v1/instruments/*/prices",
+					"/api/v1/market-data/status", "/api/v1/investment-trades",
+					"/api/v1/investment-accounts/*/positions", "/api/v1/investment-accounts/*/performance",
+					"/api/v1/investments/overview", "/api/v1/investment-returns/calendar",
+					"/api/v1/investment-returns/calendar/*/details").authenticated()
 			.requestMatchers(HttpMethod.PATCH, "/api/v1/users/me").authenticated()
 			.requestMatchers(HttpMethod.PATCH,
 				"/api/v1/accounts/*", "/api/v1/accounts/*/liability-details",
@@ -88,9 +93,11 @@ class SecurityConfiguration {
 				"/api/v1/categories/*/merge",
 				"/api/v1/transactions",
 				"/api/v1/transactions/*/revisions",
-				"/api/v1/transactions/*/reversal",
-				"/api/v1/accounts/*/balance-adjustments",
-				"/api/v1/sync/operations").authenticated()
+					"/api/v1/transactions/*/reversal",
+					"/api/v1/accounts/*/balance-adjustments",
+					"/api/v1/sync/operations", "/api/v1/instruments",
+					"/api/v1/instruments/*/manual-prices", "/api/v1/instruments/*/price-corrections",
+					"/api/v1/investment-trades").authenticated()
 			.requestMatchers(HttpMethod.DELETE,
 				"/api/v1/auth/sessions/current", "/api/v1/users/me/sessions", "/api/v1/users/me/sessions/*").authenticated()
 			.anyRequest().denyAll());
@@ -150,14 +157,24 @@ class SecurityConfiguration {
 				|| "/api/v1/sync/changes".equals(path)
 				|| "/api/v1/transactions".equals(path)
 				|| "/api/v1/dashboard".equals(path)
-				|| "/api/v1/statistics/assets".equals(path)
-				|| "/api/v1/statistics/cash-flow".equals(path)
-				|| "/api/v1/statistics/accounts".equals(path)
-				|| path.matches("/api/v1/transactions/[^/]+")
-				|| path.matches("/api/v1/accounts/[^/]+")
-				|| path.matches("/api/v1/accounts/[^/]+/balance")
-				|| path.matches("/api/v1/accounts/[^/]+/liability-details")
-				|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds");
+			|| "/api/v1/statistics/assets".equals(path)
+			|| "/api/v1/statistics/cash-flow".equals(path)
+			|| "/api/v1/statistics/accounts".equals(path)
+			|| "/api/v1/instruments/search".equals(path)
+			|| "/api/v1/market-data/status".equals(path)
+			|| "/api/v1/investment-trades".equals(path)
+			|| "/api/v1/investments/overview".equals(path)
+			|| "/api/v1/investment-returns/calendar".equals(path)
+			|| path.matches("/api/v1/transactions/[^/]+")
+			|| path.matches("/api/v1/accounts/[^/]+")
+			|| path.matches("/api/v1/accounts/[^/]+/balance")
+			|| path.matches("/api/v1/accounts/[^/]+/liability-details")
+			|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds")
+			|| path.matches("/api/v1/instruments/[^/]+")
+			|| path.matches("/api/v1/instruments/[^/]+/prices")
+			|| path.matches("/api/v1/investment-accounts/[^/]+/positions")
+			|| path.matches("/api/v1/investment-accounts/[^/]+/performance")
+			|| path.matches("/api/v1/investment-returns/calendar/[^/]+/details");
 		}
 		if ("PATCH".equals(method)) {
 			return "/api/v1/users/me".equals(path) || path.matches("/api/v1/accounts/[^/]+")
@@ -176,11 +193,14 @@ class SecurityConfiguration {
 				|| "/api/v1/users/me/password-change".equals(path)
 				|| "/api/v1/sync/operations".equals(path)
 				|| "/api/v1/transactions".equals(path)
+				|| "/api/v1/instruments".equals(path)
+				|| "/api/v1/investment-trades".equals(path)
 				|| path.matches("/api/v1/accounts/[^/]+/archive")
 				|| path.matches("/api/v1/transactions/[^/]+/(revisions|reversal)")
 				|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds")
 				|| path.matches("/api/v1/accounts/[^/]+/liquidity-holds/[^/]+/(revisions|release)")
-				|| path.matches("/api/v1/accounts/[^/]+/balance-adjustments");
+				|| path.matches("/api/v1/accounts/[^/]+/balance-adjustments")
+				|| path.matches("/api/v1/instruments/[^/]+/(manual-prices|price-corrections)");
 		}
 		if (!"DELETE".equals(method)) {
 			return false;

@@ -7,6 +7,7 @@ import app.ziji.account.application.AccountBalanceSnapshotTransaction;
 import app.ziji.account.application.AccountQueryReadPort;
 import app.ziji.account.application.LiquidityHoldBalanceReadPort;
 import app.ziji.accountmember.application.AccountMembershipReadPort;
+import app.ziji.investment.application.InvestmentDashboardPort;
 import app.ziji.statistics.application.ChangeSequenceReadPort;
 import app.ziji.statistics.application.DashboardApplicationService;
 import app.ziji.statistics.application.StatisticsApplicationService;
@@ -28,10 +29,11 @@ class StatisticsInfrastructureConfiguration {
 		CurrentUserBaseCurrencyPort baseCurrencies,
 		ChangeSequenceReadPort changeSequences,
 		AccountBalanceSnapshotTransaction snapshots,
+		InvestmentDashboardPort investmentDashboard,
 		Clock clock) {
 		return new DashboardApplicationService(
 			memberships, accounts::listClassSummariesByIds, ledgerBalances, holdBalances,
-			baseCurrencies, changeSequences, snapshots, clock);
+			baseCurrencies, changeSequences, snapshots, investmentDashboard, clock);
 	}
 
 	@Bean

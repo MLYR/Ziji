@@ -1,4 +1,4 @@
-import { createMobileAccountsApiClient, createMobileAuthApiClient, createMobileCategoryApiClient, createMobileDashboardApiClient, createMobileSyncApiClient, createMobileTransactionApiClient } from '@/api/api-client';
+import { createMobileAccountsApiClient, createMobileAuthApiClient, createMobileCategoryApiClient, createMobileDashboardApiClient, createMobileInvestmentApiClient, createMobileSyncApiClient, createMobileTransactionApiClient } from '@/api/api-client';
 import { createDeviceIdentityProvider, MobileAuthenticationSession, type MobileAuthenticationScopeLease } from '@/auth/auth-session';
 import { closeLocalDatabase } from '@/storage/local-database';
 import { secureCredentialStore } from '@/storage/secure-credentials';
@@ -51,6 +51,8 @@ export const mobileTransactionApiClient = createMobileTransactionApiClient({ bas
 export const mobileDashboardApiClient = createMobileDashboardApiClient({ baseUrl: apiBaseUrl, readAccessToken });
 export const mobileAccountsApiClient = createMobileAccountsApiClient({ baseUrl: apiBaseUrl, readAccessToken });
 export const mobileCategoryApiClient = createMobileCategoryApiClient({ baseUrl: apiBaseUrl, readAccessToken });
+// 投资页面复用当前认证主体的进程内 Bearer，不把投资事实复制到客户端状态或 SQLite。
+export const mobileInvestmentApiClient = createMobileInvestmentApiClient({ baseUrl: apiBaseUrl, readAccessToken });
 export const mobileDeviceIdentity = createDeviceIdentityProvider(secureCredentialStore);
 
 export function createMobileSyncApiClientForLease(lease: MobileAuthenticationScopeLease) {

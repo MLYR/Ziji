@@ -16,6 +16,7 @@ import app.ziji.accountmember.application.AccountMembershipReadPort;
 import app.ziji.account.application.AccountQueryReadPort;
 import app.ziji.accountmember.application.AccountMembershipReadPort;
 import app.ziji.accountmember.application.AccountMembershipReadPort.ActiveMembership;
+import app.ziji.investment.application.InvestmentDashboardPort;
 import app.ziji.ledger.domain.CurrencyCode;
 import app.ziji.user.application.CurrentUserBaseCurrencyPort;
 
@@ -36,6 +37,7 @@ public class DashboardApplicationService implements DashboardQueryUseCase {
 	private final CurrentUserBaseCurrencyPort baseCurrencies;
 	private final ChangeSequenceReadPort changeSequences;
 	private final AccountBalanceSnapshotTransaction snapshots;
+	private final InvestmentDashboardPort investmentDashboard;
 	private final Clock clock;
 
 	/** 账户摘要直接复用 account 公开端口的 ClassSummary，不引入 account 领域类型。 */
@@ -53,6 +55,19 @@ public class DashboardApplicationService implements DashboardQueryUseCase {
 		ChangeSequenceReadPort changeSequences,
 		AccountBalanceSnapshotTransaction snapshots,
 		Clock clock) {
+		this(memberships, accounts, ledgerBalances, holdBalances, baseCurrencies, changeSequences, snapshots, null, clock);
+	}
+
+	public DashboardApplicationService(
+		AccountMembershipReadPort memberships,
+		AccountQueryPort accounts,
+		AccountBalanceFactReadPort ledgerBalances,
+		LiquidityHoldBalanceReadPort holdBalances,
+		CurrentUserBaseCurrencyPort baseCurrencies,
+		ChangeSequenceReadPort changeSequences,
+		AccountBalanceSnapshotTransaction snapshots,
+		InvestmentDashboardPort investmentDashboard,
+		Clock clock) {
 		if (memberships == null || accounts == null || ledgerBalances == null || holdBalances == null
 			|| baseCurrencies == null || changeSequences == null || snapshots == null || clock == null) {
 			throw new IllegalArgumentException("Dashboard 读取依赖不能为空。");
@@ -64,6 +79,7 @@ public class DashboardApplicationService implements DashboardQueryUseCase {
 		this.baseCurrencies = baseCurrencies;
 		this.changeSequences = changeSequences;
 		this.snapshots = snapshots;
+		this.investmentDashboard = investmentDashboard;
 		this.clock = clock;
 	}
 
@@ -96,6 +112,11 @@ public class DashboardApplicationService implements DashboardQueryUseCase {
 			BigDecimal totalLiabilities = BigDecimal.ZERO;
 			BigDecimal brokerCash = BigDecimal.ZERO;
 			int missingRateCount = 0;
+			InvestmentDashboardPort.InvestmentDashboardSnapshot investment = investmentDashboard == null
+				? null : investmentDashboard.getDashboard(userId, asOf);
+			if (investment != null && !baseCurrency.equals(investment.baseCurrency())) {
+				throw new IllegalStateException("投资 Dashboard 基准币种不一致。");
+			}
 
 			for (AccountQueryReadPort.ClassSummary account : accounts) {
 				// 非基准币种在 B1 无汇率事实：显式排除并告警，不按 0 或 1 静默折算。
@@ -112,9 +133,11 @@ public class DashboardApplicationService implements DashboardQueryUseCase {
 					.orElseThrow(() -> new IllegalStateException("账户 PRIMARY 余额事实缺失。"));
 				switch (account.accountClass()) {
 					case "INVESTMENT" -> {
-						totalAssets = totalAssets.add(balance);
-						investmentAssets = investmentAssets.add(balance);
-						brokerCash = brokerCash.add(balance);
+						if (investment == null) {
+							totalAssets = totalAssets.add(balance);
+							investmentAssets = investmentAssets.add(balance);
+							brokerCash = brokerCash.add(balance);
+						}
 					}
 					case "LIABILITY" -> totalLiabilities = totalLiabilities.add(balance);
 					default -> {
@@ -130,6 +153,12 @@ public class DashboardApplicationService implements DashboardQueryUseCase {
 					}
 				}
 			}
+			if (investment != null) {
+				// 投资模块同时提供券商现金和已估值持仓，避免 Dashboard 复制估值算法或纳入 POSITION_COST。
+				brokerCash = investment.brokerCash();
+				totalAssets = totalAssets.add(investment.brokerCash()).add(investment.valuedPositionMarketValue());
+				investmentAssets = investmentAssets.add(investment.brokerCash()).add(investment.valuedPositionMarketValue());
+			}
 
 			BigDecimal netAssets = totalAssets.subtract(totalLiabilities);
 			int scale = base.minorUnits();
@@ -140,11 +169,18 @@ public class DashboardApplicationService implements DashboardQueryUseCase {
 				BigDecimal.ZERO.setScale(scale), BigDecimal.ZERO.setScale(scale), BigDecimal.ZERO.setScale(scale),
 				BigDecimal.ZERO.setScale(scale), BigDecimal.ZERO.setScale(scale), BigDecimal.ZERO.setScale(scale));
 			DashboardResult.InvestmentOverview investmentOverview = new DashboardResult.InvestmentOverview(
-				baseCurrency, scale(brokerCash, scale), BigDecimal.ZERO.setScale(scale),
-				scale(investmentAssets, scale), 0);
+				baseCurrency, scale(brokerCash, scale),
+				investment == null ? BigDecimal.ZERO.setScale(scale) : scale(investment.valuedPositionMarketValue(), scale),
+				scale(investmentAssets, scale), investment == null ? 0 : investment.unpricedInstrumentCount());
 			List<DashboardResult.QualityWarning> warnings = new ArrayList<>();
 			if (missingRateCount > 0) {
 				warnings.add(new DashboardResult.QualityWarning(WARNING_MISSING_EXCHANGE_RATES, missingRateCount));
+			}
+			if (investment != null && investment.unpricedInstrumentCount() > 0) {
+				warnings.add(new DashboardResult.QualityWarning("UNPRICED_INSTRUMENTS", investment.unpricedInstrumentCount()));
+			}
+			if (investment != null && investment.staleMarketDataCount() > 0) {
+				warnings.add(new DashboardResult.QualityWarning("STALE_MARKET_DATA", investment.staleMarketDataCount()));
 			}
 			return new DashboardResult(
 				baseCurrency, asOf, changeSequences.latestSequence(userId, asOf), 1, asOf, "CURRENT",

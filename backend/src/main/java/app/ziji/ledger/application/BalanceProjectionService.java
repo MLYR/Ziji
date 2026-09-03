@@ -12,7 +12,7 @@ import app.ziji.ledger.domain.Money;
 import app.ziji.shared.application.TransactionRunner;
 
 /** 从不可变 LedgerEntry 事实全量重建账户余额快照。 */
-public final class BalanceProjectionService {
+public class BalanceProjectionService {
 
 	private final TransactionRunner transactions;
 	private final BalanceProjectionStore snapshots;

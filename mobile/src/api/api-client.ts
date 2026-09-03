@@ -31,6 +31,28 @@ export type CategoryListEnvelope = components['schemas']['CategoryListEnvelope']
 export type Tag = components['schemas']['Tag'];
 export type TagListEnvelope = components['schemas']['TagListEnvelope'];
 export type StatisticsSeriesEnvelope = components['schemas']['StatisticsSeriesEnvelope'];
+export type Currency = components['schemas']['Currency'];
+export type Instrument = components['schemas']['Instrument'];
+export type InstrumentEnvelope = components['schemas']['InstrumentEnvelope'];
+export type InstrumentListEnvelope = components['schemas']['InstrumentListEnvelope'];
+export type PriceListEnvelope = components['schemas']['PriceListEnvelope'];
+export type MarketDataStatusEnvelope = components['schemas']['MarketDataStatusEnvelope'];
+export type InvestmentTrade = components['schemas']['InvestmentTrade'];
+export type InvestmentTradeEnvelope = components['schemas']['InvestmentTradeEnvelope'];
+export type InvestmentTradeListEnvelope = components['schemas']['InvestmentTradeListEnvelope'];
+export type Position = components['schemas']['Position'];
+export type PositionListEnvelope = components['schemas']['PositionListEnvelope'];
+export type InvestmentPerformance = components['schemas']['InvestmentPerformance'];
+export type InvestmentPerformanceEnvelope = components['schemas']['InvestmentPerformanceEnvelope'];
+export type InvestmentOverview = components['schemas']['InvestmentOverview'];
+export type InvestmentOverviewEnvelope = components['schemas']['InvestmentOverviewEnvelope'];
+export type InvestmentReturnCalendar = components['schemas']['InvestmentReturnCalendar'];
+export type InvestmentReturnCalendarEnvelope = components['schemas']['InvestmentReturnCalendarEnvelope'];
+export type InvestmentReturnDay = components['schemas']['InvestmentReturnDay'];
+export type InvestmentReturnDayDetails = components['schemas']['InvestmentReturnDayDetails'];
+export type InvestmentReturnDayDetailsEnvelope = components['schemas']['InvestmentReturnDayDetailsEnvelope'];
+export type CreateInstrumentRequest = components['schemas']['CreateInstrumentRequest'];
+export type CreateInvestmentTradeRequest = components['schemas']['CreateInvestmentTradeRequest'];
 export type RegistrationChallengeEnvelope = operations['createRegistrationChallenge']['responses'][202]['content']['application/json'];
 
 export interface MobileSyncApiClient {
@@ -95,6 +117,54 @@ export interface MobileAccountsApiClient {
 export interface MobileDashboardApiClient {
   getDashboard(): Promise<DashboardEnvelope>;
   getAssetStatistics(dateFrom: string, dateTo: string): Promise<StatisticsSeriesEnvelope>;
+}
+
+export interface InstrumentPriceListFilters {
+  dateFrom?: string;
+  dateTo?: string;
+  limit?: number;
+  cursor?: string | null;
+}
+
+export interface InvestmentTradeListFilters {
+  accountId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  cursor?: string | null;
+}
+
+export interface InvestmentPositionListOptions {
+  asOf?: string;
+  limit?: number;
+  cursor?: string | null;
+}
+
+export interface InvestmentPerformanceFilters {
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+export interface MobileInvestmentApiClient {
+  searchInstruments(query: string, limit?: number, cursor?: string | null): Promise<InstrumentListEnvelope>;
+  createInstrument(idempotencyKey: string, body: CreateInstrumentRequest): Promise<InstrumentEnvelope>;
+  getInstrument(instrumentId: string): Promise<InstrumentEnvelope>;
+  listInstrumentPrices(instrumentId: string, filters?: InstrumentPriceListFilters): Promise<PriceListEnvelope>;
+  getMarketDataStatus(): Promise<MarketDataStatusEnvelope>;
+  listInvestmentTrades(limit?: number, filters?: InvestmentTradeListFilters): Promise<InvestmentTradeListEnvelope>;
+  createInvestmentTrade(idempotencyKey: string, body: CreateInvestmentTradeRequest): Promise<InvestmentTradeEnvelope>;
+  listInvestmentPositions(accountId: string, options?: InvestmentPositionListOptions): Promise<PositionListEnvelope>;
+  getInvestmentPerformance(accountId: string, filters?: InvestmentPerformanceFilters): Promise<InvestmentPerformanceEnvelope>;
+  getInvestmentOverview(asOf?: string): Promise<InvestmentOverviewEnvelope>;
+  getInvestmentReturnCalendar(
+    month: string,
+    scopeType: 'PORTFOLIO' | 'INSTRUMENT',
+    instrumentId?: string,
+  ): Promise<InvestmentReturnCalendarEnvelope>;
+  getInvestmentReturnDayDetails(
+    businessDate: string,
+    scopeType: 'PORTFOLIO' | 'INSTRUMENT',
+    instrumentId?: string,
+  ): Promise<InvestmentReturnDayDetailsEnvelope>;
 }
 
 export interface MobileCategoryApiClient {
@@ -281,6 +351,87 @@ export function createMobileDashboardApiClient(options: MobileApiClientOptions):
     getAssetStatistics(dateFrom, dateTo) {
       const query = new URLSearchParams({ dateFrom, dateTo, granularity: 'DAY' });
       return request<StatisticsSeriesEnvelope>(`/api/v1/statistics/assets?${query.toString()}`, { method: 'GET' });
+    },
+  };
+}
+
+export function createMobileInvestmentApiClient(options: MobileApiClientOptions): MobileInvestmentApiClient {
+  const request = createMobileApiClient(options);
+
+  return {
+    searchInstruments(query, limit = 20, cursor = null) {
+      const params = new URLSearchParams({ q: query });
+      params.set('limit', String(limit));
+      if (cursor) params.set('cursor', cursor);
+      return request<InstrumentListEnvelope>(`/api/v1/instruments/search?${params.toString()}`, { method: 'GET' });
+    },
+    createInstrument(idempotencyKey, body) {
+      return request<InstrumentEnvelope>('/api/v1/instruments', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      });
+    },
+    getInstrument(instrumentId) {
+      return request<InstrumentEnvelope>(`/api/v1/instruments/${encodeURIComponent(instrumentId)}`, { method: 'GET' });
+    },
+    listInstrumentPrices(instrumentId, filters = {}) {
+      const query = new URLSearchParams();
+      if (filters.dateFrom?.trim()) query.set('dateFrom', filters.dateFrom.trim());
+      if (filters.dateTo?.trim()) query.set('dateTo', filters.dateTo.trim());
+      if (filters.limit !== undefined) query.set('limit', String(filters.limit));
+      if (filters.cursor) query.set('cursor', filters.cursor);
+      const suffix = query.toString();
+      return request<PriceListEnvelope>(`/api/v1/instruments/${encodeURIComponent(instrumentId)}/prices${suffix ? `?${suffix}` : ''}`, { method: 'GET' });
+    },
+    getMarketDataStatus() {
+      return request<MarketDataStatusEnvelope>('/api/v1/market-data/status', { method: 'GET' });
+    },
+    listInvestmentTrades(limit = 50, filters = {}) {
+      const query = new URLSearchParams({ limit: String(limit) });
+      if (filters.accountId?.trim()) query.set('accountId', filters.accountId.trim());
+      if (filters.dateFrom?.trim()) query.set('dateFrom', filters.dateFrom.trim());
+      if (filters.dateTo?.trim()) query.set('dateTo', filters.dateTo.trim());
+      if (filters.cursor) query.set('cursor', filters.cursor);
+      return request<InvestmentTradeListEnvelope>(`/api/v1/investment-trades?${query.toString()}`, { method: 'GET' });
+    },
+    createInvestmentTrade(idempotencyKey, body) {
+      return request<InvestmentTradeEnvelope>('/api/v1/investment-trades', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      });
+    },
+    listInvestmentPositions(accountId, options = {}) {
+      const query = new URLSearchParams();
+      if (options.asOf?.trim()) query.set('asOf', options.asOf.trim());
+      if (options.limit !== undefined) query.set('limit', String(options.limit));
+      if (options.cursor) query.set('cursor', options.cursor);
+      const suffix = query.toString();
+      return request<PositionListEnvelope>(`/api/v1/investment-accounts/${encodeURIComponent(accountId)}/positions${suffix ? `?${suffix}` : ''}`, { method: 'GET' });
+    },
+    getInvestmentPerformance(accountId, filters = {}) {
+      const query = new URLSearchParams();
+      if (filters.dateFrom?.trim()) query.set('dateFrom', filters.dateFrom.trim());
+      if (filters.dateTo?.trim()) query.set('dateTo', filters.dateTo.trim());
+      const suffix = query.toString();
+      return request<InvestmentPerformanceEnvelope>(`/api/v1/investment-accounts/${encodeURIComponent(accountId)}/performance${suffix ? `?${suffix}` : ''}`, { method: 'GET' });
+    },
+    getInvestmentOverview(asOf) {
+      const query = new URLSearchParams();
+      if (asOf?.trim()) query.set('asOf', asOf.trim());
+      const suffix = query.toString();
+      return request<InvestmentOverviewEnvelope>(`/api/v1/investments/overview${suffix ? `?${suffix}` : ''}`, { method: 'GET' });
+    },
+    getInvestmentReturnCalendar(month, scopeType, instrumentId) {
+      const query = new URLSearchParams({ month, scopeType });
+      if (instrumentId) query.set('instrumentId', instrumentId);
+      return request<InvestmentReturnCalendarEnvelope>(`/api/v1/investment-returns/calendar?${query.toString()}`, { method: 'GET' });
+    },
+    getInvestmentReturnDayDetails(businessDate, scopeType, instrumentId) {
+      const query = new URLSearchParams({ scopeType });
+      if (instrumentId) query.set('instrumentId', instrumentId);
+      return request<InvestmentReturnDayDetailsEnvelope>(`/api/v1/investment-returns/calendar/${encodeURIComponent(businessDate)}/details?${query.toString()}`, { method: 'GET' });
     },
   };
 }

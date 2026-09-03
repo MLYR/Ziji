@@ -13,6 +13,8 @@ import app.ziji.ledger.application.LedgerPersistenceException;
 import app.ziji.ledger.application.LedgerTransactionStore;
 import app.ziji.ledger.application.LedgerTransactionSyncReadPort;
 import app.ziji.ledger.application.LiabilityBorrowingWriteDetails;
+import app.ziji.ledger.application.InvestmentTradeWriteDetails;
+import app.ziji.ledger.application.InvestmentLedgerCommand;
 import app.ziji.ledger.application.NoTransactionDetails;
 import app.ziji.ledger.application.PostedTransactionWrite;
 import app.ziji.ledger.application.RepaymentWriteDetails;
@@ -412,10 +414,28 @@ public class PostgresLedgerTransactionStore implements LedgerTransactionStore, L
 					? categoryIds.get(index++) : null;
 				UUID feeCategoryId = row.feeAmount().amount().signum() > 0 && index < categoryIds.size()
 					? categoryIds.get(index) : null;
-				yield new RepaymentWriteDetails(
-					row.liabilityAccountId(), row.cashAccountId(), row.principalAmount(), row.interestAmount(),
-					row.feeAmount(), interestCategoryId, feeCategoryId);
-			}
+					yield new RepaymentWriteDetails(
+						row.liabilityAccountId(), row.cashAccountId(), row.principalAmount(), row.interestAmount(),
+						row.feeAmount(), interestCategoryId, feeCategoryId);
+				}
+				case INVESTMENT -> jdbc.query("""
+					SELECT id, investment_account_id, instrument_id, side, quantity, unit_price,
+						currency, gross_amount, fee_amount, tax_amount, trade_at
+					FROM trades WHERE transaction_id = ?
+					""", (org.springframework.jdbc.core.ResultSetExtractor<TransactionWriteDetails>) result -> {
+					if (!result.next()) {
+						return new NoTransactionDetails();
+					}
+					return new InvestmentTradeWriteDetails(
+						result.getObject("id", UUID.class),
+						result.getObject("investment_account_id", UUID.class),
+						result.getObject("instrument_id", UUID.class),
+						InvestmentLedgerCommand.Side.valueOf(result.getString("side")),
+						result.getBigDecimal("quantity"), result.getBigDecimal("unit_price"),
+						CurrencyCode.fromCode(result.getString("currency")), result.getBigDecimal("gross_amount"),
+						result.getBigDecimal("fee_amount"), result.getBigDecimal("tax_amount"),
+						result.getTimestamp("trade_at").toInstant());
+				}, transactionId);
 			default -> new NoTransactionDetails();
 		};
 	}
@@ -501,8 +521,18 @@ public class PostgresLedgerTransactionStore implements LedgerTransactionStore, L
 				details.liabilityAccountId(),
 				details.cashAccountId(),
 				details.principalAmount().amount(),
-				details.interestAmount().amount(),
-				details.feeAmount().amount());
+					details.interestAmount().amount(),
+					details.feeAmount().amount());
+			case InvestmentTradeWriteDetails details -> jdbc.update("""
+				INSERT INTO trades (
+					id, transaction_id, investment_account_id, instrument_id, side, quantity, unit_price,
+					currency, gross_amount, fee_amount, tax_amount, trade_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				""",
+				details.tradeId(), write.transaction().transactionId(), details.investmentAccountId(),
+				details.instrumentId(), details.side().name(), details.quantity(), details.unitPrice(),
+				details.currency().name(), details.grossAmount(), details.feeAmount(), details.taxAmount(),
+				timestamp(details.tradeAt()));
 		}
 	}
 

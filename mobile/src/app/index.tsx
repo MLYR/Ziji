@@ -399,6 +399,16 @@ export default function AuthenticationScreen() {
               >
                 <Text className="font-semibold text-ink-light dark:text-ink-dark">账户</Text>
               </Pressable>
+              <Pressable
+                accessibilityLabel="查看投资"
+                accessibilityRole="button"
+                className="min-h-11 flex-1 items-center justify-center rounded-lg border border-accent active:opacity-70"
+                // 新增文件路由的本地 typed-routes 缓存尚未包含该路径，运行时仍由 Expo Router 按文件路由解析。
+                onPress={() => router.push('/investments' as never)}
+                testID="open-investments"
+              >
+                <Text className="font-semibold text-ink-light dark:text-ink-dark">投资</Text>
+              </Pressable>
             </View>
             <HomeDashboardPanel onOpenQuickRecord={() => router.push('/quick-record')} />
             {authentication.userId ? <SyncStatusPanel userId={authentication.userId} /> : null}

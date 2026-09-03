@@ -20,6 +20,7 @@ import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupConte
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useUiStore } from '@/stores/ui-store'
 import { CategoriesPage } from '@/categories/CategoriesPage'
+import { InvestmentsPage } from '@/investments/InvestmentsPage'
 
 const navigation = [
   { label: '概览', href: '/dashboard', icon: HomeIcon },
@@ -65,10 +66,6 @@ function AppSidebar() {
       </SidebarFooter>
     </Sidebar>
   )
-}
-
-function PlaceholderPage({ title }: { title: string }) {
-  return <main id="main-content" className="p-8"><h1 className="text-2xl font-semibold">{title}</h1><p className="mt-2 text-muted-foreground">页面将在对应业务任务开始时实现。</p></main>
 }
 
 function ProtectedShell() {
@@ -146,7 +143,8 @@ function App() {
           <Route path="/transactions/new" element={<RecordTransactionPage />} />
           <Route path="/transactions/:transactionId" element={<TransactionDetailPage />} />
           <Route path="/categories" element={<CategoriesPage />} />
-          <Route path="/investments" element={<PlaceholderPage title="投资" />} />
+          {/* 投资页只展示服务端事实与投影，保持与其他受保护业务页相同的会话边界。 */}
+          <Route path="/investments" element={<InvestmentsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
