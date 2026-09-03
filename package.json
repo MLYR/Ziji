@@ -24,7 +24,8 @@
   },
   "pnpm": {
     "overrides": {
-      "image-size": "npm:image-size-next@1.2.2"
+      "image-size": "npm:image-size-next@1.2.2",
+      "fast-uri": "3.1.7"
     }
   },
   "devDependencies": {
