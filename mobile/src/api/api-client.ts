@@ -23,6 +23,9 @@ export type AccountBalanceEnvelope = components['schemas']['AccountBalanceEnvelo
 export type CreateAccountRequest = components['schemas']['CreateAccountRequest'];
 export type Account = components['schemas']['Account'];
 export type AccountBalance = components['schemas']['AccountBalance'];
+export type LiabilityDetail = components['schemas']['LiabilityDetail'];
+export type LiabilityDetailEnvelope = components['schemas']['LiabilityDetailEnvelope'];
+export type PutLiabilityDetailRequest = components['schemas']['PutLiabilityDetailRequest'];
 export type StatisticsSeriesEnvelope = components['schemas']['StatisticsSeriesEnvelope'];
 export type RegistrationChallengeEnvelope = operations['createRegistrationChallenge']['responses'][202]['content']['application/json'];
 
@@ -73,6 +76,13 @@ export interface MobileAccountsApiClient {
   listAccounts(limit: number): Promise<AccountListEnvelope>;
   getAccount(accountId: string): Promise<AccountEnvelope>;
   getAccountBalance(accountId: string): Promise<AccountBalanceEnvelope>;
+  getLiabilityDetails(accountId: string): Promise<LiabilityDetailEnvelope>;
+  putLiabilityDetails(
+    accountId: string,
+    precondition: { ifNoneMatch?: boolean; ifMatch?: string },
+    idempotencyKey: string,
+    body: PutLiabilityDetailRequest,
+  ): Promise<LiabilityDetailEnvelope>;
   createAccount(idempotencyKey: string, body: CreateAccountRequest): Promise<components['schemas']['AccountCreatedEnvelope']>;
   updateAccount(accountId: string, etag: string, body: { name?: string; institution?: string | null }): Promise<AccountEnvelope>;
   archiveAccount(accountId: string, etag: string, idempotencyKey: string, body: { reason: string; confirmNonZeroBalance?: boolean }): Promise<AccountEnvelope>;
@@ -207,6 +217,20 @@ export function createMobileAccountsApiClient(options: MobileApiClientOptions): 
     },
     getAccountBalance(accountId) {
       return request<AccountBalanceEnvelope>(`/api/v1/accounts/${encodeURIComponent(accountId)}/balance`, { method: 'GET' });
+    },
+    getLiabilityDetails(accountId) {
+      return request<LiabilityDetailEnvelope>(`/api/v1/accounts/${encodeURIComponent(accountId)}/liability-details`, { method: 'GET' });
+    },
+    putLiabilityDetails(accountId, precondition, idempotencyKey, body) {
+      // version=0 只代表稳定空详情：首次持久化必须用 If-None-Match:*，已有行必须用强 If-Match。
+      const headers: Record<string, string> = { 'Idempotency-Key': idempotencyKey };
+      if (precondition.ifNoneMatch) headers['If-None-Match'] = '*';
+      if (precondition.ifMatch) headers['If-Match'] = precondition.ifMatch;
+      return request<LiabilityDetailEnvelope>(`/api/v1/accounts/${encodeURIComponent(accountId)}/liability-details`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(body),
+      });
     },
     createAccount(idempotencyKey, body) {
       return request<components['schemas']['AccountCreatedEnvelope']>('/api/v1/accounts', {

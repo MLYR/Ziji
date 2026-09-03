@@ -33,6 +33,35 @@ describe('Mobile API client', () => {
     expect(fetchMock.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({ deviceId: 'device-a', operations: [] }));
   });
 
+
+  it('封装负债详情读取与写入（If-None-Match/If-Match 前置条件）', async () => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ data: { accountId: 'a-1', interestRate: null, loanDate: null, dueDate: null, billingDay: null, repaymentDay: null, currentAmountDue: null, version: 0 }, meta: { requestId: 'request-1' } }), { status: 200 }),
+    );
+    const client = createMobileAccountsApiClient({ baseUrl: 'https://api.ziji.test/', readAccessToken: async () => 'access-test' });
+
+    await client.getLiabilityDetails('a-1');
+    expect(fetchMock.mock.calls[0]?.[0].toString()).toBe('https://api.ziji.test/api/v1/accounts/a-1/liability-details');
+
+    fetchMock.mockImplementation(async () =>
+      new Response(JSON.stringify({ data: { accountId: 'a-1', interestRate: '0.045', loanDate: null, dueDate: null, billingDay: 10, repaymentDay: 10, currentAmountDue: '32.00', version: 1 } }), { status: 200 }),
+    );
+    await client.putLiabilityDetails('a-1', { ifMatch: '"1"' }, 'key-1', {
+      interestRate: '0.045', loanDate: null, dueDate: null, billingDay: 10, repaymentDay: 10, currentAmountDue: '32.00',
+    });
+    const putInit = fetchMock.mock.calls[1]?.[1];
+    expect(putInit?.method).toBe('PUT');
+    expect(new Headers(putInit?.headers).get('If-Match')).toBe('"1"');
+    expect(new Headers(putInit?.headers).get('Idempotency-Key')).toBe('key-1');
+    expect(new Headers(putInit?.headers).get('If-None-Match')).toBeNull();
+
+    await client.putLiabilityDetails('a-1', { ifNoneMatch: true }, 'key-2', {
+      interestRate: null, loanDate: null, dueDate: null, billingDay: null, repaymentDay: null, currentAmountDue: null,
+    });
+    expect(new Headers(fetchMock.mock.calls[2]?.[1]?.headers).get('If-None-Match')).toBe('*');
+    expect(new Headers(fetchMock.mock.calls[2]?.[1]?.headers).get('If-Match')).toBeNull();
+  });
+
   it('使用生成类型封装 Mobile 注册、登录、刷新和当前设备退出', async () => {
     const fetchMock = jest.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: { expiresIn: 600 }, meta: { requestId: 'request-1' } }), { status: 202 }))

@@ -3,8 +3,10 @@ import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { mobileAccountsApiClient } from '@/auth/default-auth-session';
+import { mobileAccountsApiClient, mobileAuthApiClient, mobileTransactionApiClient } from '@/auth/default-auth-session';
 import type { Account, AccountBalance } from '@/api/api-client';
+import { LiabilityDetailsCard } from '@/accounts/liability-details-card';
+import { LiabilityRepaymentForm } from '@/accounts/liability-repayment-form';
 
 function accountEtag(version: number): string {
   return `"${version}"`;
@@ -27,6 +29,7 @@ export default function AccountDetailRoute() {
   const [confirmNonZero, setConfirmNonZero] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const archiveKeyRef = useRef<string | null>(null);
+  const [profile, setProfile] = useState<{ baseCurrency: 'CNY' | 'USD' | 'HKD' | 'JPY' | 'EUR'; timezone: string } | null>(null);
 
   useEffect(() => {
     if (!accountId) {
@@ -53,6 +56,25 @@ export default function AccountDetailRoute() {
       cancelled = true;
     };
   }, [accountId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    mobileAuthApiClient.getCurrentUser()
+      .then((envelope) => {
+        if (!cancelled) {
+          setProfile({
+            baseCurrency: envelope.data.baseCurrency as 'CNY' | 'USD' | 'HKD' | 'JPY' | 'EUR',
+            timezone: envelope.data.timezone,
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setProfile(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function reload() {
     if (!accountId) return;
@@ -143,6 +165,30 @@ export default function AccountDetailRoute() {
                   <Text accessibilityRole="alert" className="text-xs text-amber-600 dark:text-amber-400">可用余额为负：透支或冻结超过账面余额</Text>
                 ) : null}
               </View>
+            ) : null}
+
+            {account.accountClass === 'LIABILITY' ? (
+              <LiabilityDetailsCard
+                accountId={account.id}
+                accountType={account.accountType}
+                currency={account.currency}
+                getDetails={(id) => mobileAccountsApiClient.getLiabilityDetails(id)}
+                putDetails={(id, precondition, key, body) => mobileAccountsApiClient.putLiabilityDetails(id, precondition, key, body)}
+                keyFor={() => globalThis.crypto.randomUUID()}
+              />
+            ) : null}
+
+            {account.status === 'ACTIVE' && account.accountClass === 'LIABILITY' && profile ? (
+              <LiabilityRepaymentForm
+                liabilityAccountId={account.id}
+                currency={account.currency}
+                timezone={profile.timezone}
+                keyFor={() => globalThis.crypto.randomUUID()}
+                createTransaction={(key, body) => mobileTransactionApiClient.createTransaction(key, body)}
+                onSuccess={(transactionId) => {
+                  router.push({ pathname: '/transaction-detail', params: { id: transactionId } });
+                }}
+              />
             ) : null}
 
             {account.status === 'ACTIVE' && !editing ? (
