@@ -118,11 +118,14 @@ public class StatisticsApplicationService implements StatisticsQueryUseCase {
 			.filter(summary -> range.baseCurrency().equals(summary.currency()))
 			.map(AccountQueryReadPort.ClassSummary::accountId)
 			.toList();
+		if (baseCurrencyIds.isEmpty()) {
+			// OpenAPI values.minProperties=1：无基准币种账户时不能产出空 values 点，返回空序列。
+			return new StatisticsSeriesResult(range.baseCurrency(), 1, List.of());
+		}
 		Map<LocalDate, Map<UUID, BigDecimal>> balances = balanceIndex(
 			facts.accountEndBalances(baseCurrencyIds, range.bucketEnds()));
 
 		// 超过 30 个账户时按最后一个桶的余额降序保留前 29 个，其余聚合进 others，保证契约键数上限。
-		UUID latestBucketEnd = null;
 		List<UUID> ordered = baseCurrencyIds.stream()
 			.sorted(Comparator.comparing((UUID id) -> latestBalance(balances, range, id)).reversed())
 			.toList();

@@ -181,6 +181,26 @@ class StatisticsHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			.andExpect(jsonPath("$.data.points[0].values.netCashFlow").value("-330.00"));
 	}
 
+	@Test
+	void accountStatisticsWithoutAccountsReturnsEmptyPointsInsteadOfInternalError() throws Exception {
+		User owner = user("stat-empty-owner");
+		String token = bearer(owner);
+		// 新用户无账户时 values 不能为空对象（OpenAPI minProperties=1），应返回空序列而不是 500。
+		mvc.perform(get("/api/v1/statistics/accounts")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.param("dateFrom", "2026-07-31").param("dateTo", "2026-08-29").param("granularity", "DAY"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.data.baseCurrency").value("CNY"))
+			.andExpect(jsonPath("$.data.valuationRevision").value(1))
+			.andExpect(jsonPath("$.data.points").isArray())
+			.andExpect(jsonPath("$.data.points.length()").value(0));
+		mvc.perform(get("/api/v1/statistics/assets")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.param("dateFrom", "2026-07-31").param("dateTo", "2026-08-29").param("granularity", "DAY"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.data.points[0].values.totalAssets").value("0.00"));
+	}
+
 	private User user(String suffix) {
 		UUID id = UUID.randomUUID();
 		String email = suffix + "-" + id + "@example.test";
