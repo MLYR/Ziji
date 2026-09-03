@@ -61,8 +61,8 @@ const user = {
   timezone: 'Asia/Shanghai',
   baseCurrency: 'CNY',
   locale: 'zh-CN',
-  amountFormat: 'STANDARD',
-  status: 'ACTIVE',
+  amountFormat: 'STANDARD' as const,
+  status: 'ACTIVE' as const,
   version: 1,
 }
 
