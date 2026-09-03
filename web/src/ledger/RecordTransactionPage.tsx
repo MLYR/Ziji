@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircleIcon, CheckCircle2Icon, LoaderCircleIcon } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import type { components } from '@ziji/api-types'
@@ -18,6 +18,7 @@ import {
   listAccounts,
   type Account,
 } from '@/ledger/transaction-api'
+import { listCategories, listTags, type Tag } from '@/categories/categories-api'
 
 type TransactionType = 'EXPENSE' | 'INCOME' | 'REFUND' | 'TRANSFER' | 'LIABILITY_REPAYMENT' | 'ADJUSTMENT'
 
@@ -124,6 +125,7 @@ export function RecordTransactionPage() {
   const [interestCategoryId, setInterestCategoryId] = useState('')
   const [feeAmount, setFeeAmount] = useState('0')
   const [repaymentFeeCategoryId, setRepaymentFeeCategoryId] = useState('')
+  const [tagIds, setTagIds] = useState<string[]>([])
   const [actualBalance, setActualBalance] = useState('')
   const [reason, setReason] = useState('')
   const [businessAt, setBusinessAt] = useState(nowLocalInput)
@@ -135,6 +137,8 @@ export function RecordTransactionPage() {
     queryFn: listAccounts,
     staleTime: 60_000,
   })
+  const categoriesQuery = useQuery({ queryKey: ['categories', 'PERSONAL'], queryFn: () => listCategories('PERSONAL') })
+  const tagsQuery = useQuery({ queryKey: ['tags'], queryFn: listTags })
   const accounts = accountsQuery.data?.accounts ?? []
   const activeAccounts = accounts.filter((account) => account.status === 'ACTIVE')
   const accountById = useMemo(() => {
@@ -176,7 +180,12 @@ export function RecordTransactionPage() {
           reason,
         })
       }
-      const base = { businessAt: businessAtInstant, timezone, note: note.trim() === '' ? null : note.trim() }
+      const base = {
+        businessAt: businessAtInstant,
+        timezone,
+        note: note.trim() === '' ? null : note.trim(),
+        tagIds: tagIds.length > 0 ? tagIds : undefined,
+      }
       if (type === 'EXPENSE') {
         return createTransaction(idempotencyKey, {
           type: 'EXPENSE',
@@ -282,7 +291,7 @@ export function RecordTransactionPage() {
         }
         if (fee.trim() !== '') {
           checkAmount('fee', fee)
-          if (isPositiveAmount(fee) && !UUID_PATTERN.test(feeCategoryId)) fields.feeCategoryId = '手续费大于 0 时必须填写手续费分类 ID'
+          if (isPositiveAmount(fee) && feeCategoryId === '') fields.feeCategoryId = '手续费大于 0 时必须选择手续费分类'
           if (!isPositiveAmount(fee) && feeCategoryId !== '') fields.feeCategoryId = '手续费为 0 时不能填写分类'
         } else if (feeCategoryId !== '') {
           fields.feeCategoryId = '手续费为 0 时不能填写分类'
@@ -298,19 +307,20 @@ export function RecordTransactionPage() {
         checkNonNegativeAmount('interestAmount', interestAmount)
         checkNonNegativeAmount('feeAmount', feeAmount)
         if (interestAmount.trim() !== '' && isPositiveAmount(interestAmount)) {
-          if (!UUID_PATTERN.test(interestCategoryId)) fields.interestCategoryId = '利息大于 0 时必须填写利息分类 ID'
+          if (interestCategoryId === '') fields.interestCategoryId = '利息大于 0 时必须选择利息分类'
         } else if (interestCategoryId !== '') {
           fields.interestCategoryId = '利息为 0 时不能填写分类'
         }
         if (feeAmount.trim() !== '' && isPositiveAmount(feeAmount)) {
-          if (!UUID_PATTERN.test(repaymentFeeCategoryId)) fields.feeCategoryId = '手续费大于 0 时必须填写手续费分类 ID'
+          if (repaymentFeeCategoryId === '') fields.feeCategoryId = '手续费大于 0 时必须选择手续费分类'
         } else if (repaymentFeeCategoryId !== '') {
           fields.feeCategoryId = '手续费为 0 时不能填写分类'
         }
       } else {
         checkAccount('accountId', accountId)
         checkAmount('amount', amount)
-        if (!UUID_PATTERN.test(categoryId)) fields.categoryId = '请填写有效的分类 ID'
+        // 分类只来自服务端查询结果，客户端只需校验必填。
+        if (categoryId === '') fields.categoryId = '请选择分类'
       }
       if (type === 'REFUND' && !UUID_PATTERN.test(originalTransactionId)) {
         fields.originalTransactionId = '请填写原支出交易 ID'
@@ -380,12 +390,27 @@ export function RecordTransactionPage() {
     </div>
   )
 
-  const categoryField = (id: string, errorKey: string, label: string, value: string, onChange: (next: string) => void) => (
+  const availableCategories = (categoriesQuery.data ?? []).filter((category) =>
+    category.status === 'ACTIVE' && category.parentId === null)
+  const childCategories = (categoriesQuery.data ?? []).filter((category) =>
+    category.status === 'ACTIVE' && category.parentId !== null)
+
+  const categorySelect = (id: string, errorKey: string, label: string, value: string, onChange: (next: string) => void, categoryType: 'EXPENSE' | 'INCOME' = 'EXPENSE') => (
     <div className="flex flex-col gap-2">
       <label htmlFor={id}>{label}</label>
-      <Input id={id} value={value} onChange={(event) => onChange(event.target.value)}
-        aria-invalid={errors.fields[errorKey] ? true : undefined} placeholder="分类 ID" />
-      <p className="text-xs text-muted-foreground">分类管理接口尚未开放，当前请粘贴分类 ID。</p>
+      <select id={id} value={value} onChange={(event) => onChange(event.target.value)}
+        aria-invalid={errors.fields[errorKey] ? true : undefined}
+        className="h-9 rounded-md border bg-transparent px-3 text-sm">
+        <option value="">未选择</option>
+        {availableCategories.filter((category) => category.categoryType === categoryType).map((category) => (
+          <Fragment key={category.id}>
+            <option value={category.id}>{category.name}</option>
+            {childCategories.filter((child) => child.parentId === category.id && child.categoryType === categoryType).map((child) => (
+              <option key={child.id} value={child.id}>{category.name} / {child.name}</option>
+            ))}
+          </Fragment>
+        ))}
+      </select>
       {errors.fields[errorKey] ? <p className="text-sm text-destructive">{errors.fields[errorKey]}</p> : null}
     </div>
   )
@@ -474,7 +499,7 @@ export function RecordTransactionPage() {
                 {accountSelect('record-to-account', toAccountId, setToAccountId, '转入账户')}
                 {amountField('record-from-amount', 'amount', '转出金额', fromAmount, setFromAmount, fromAccount?.currency ?? selectedCurrency)}
                 {amountField('record-fee', 'fee', '手续费（可选）', fee, setFee, selectedCurrency)}
-                {fee.trim() !== '' ? categoryField('record-fee-category', 'feeCategoryId', '手续费分类 ID', feeCategoryId, setFeeCategoryId) : null}
+                {fee.trim() !== '' ? categorySelect('record-fee-category', 'feeCategoryId', '手续费分类', feeCategoryId, setFeeCategoryId) : null}
                 {businessAtField}
                 {noteField}
               </>
@@ -485,11 +510,11 @@ export function RecordTransactionPage() {
                 {amountField('repayment-principal-amount', 'principalAmount', '本金', principalAmount, setPrincipalAmount, selectedCurrency)}
                 {amountField('repayment-interest-amount', 'interestAmount', '利息', interestAmount, setInterestAmount, selectedCurrency)}
                 {interestAmount.trim() !== '' && isPositiveAmount(interestAmount)
-                  ? categoryField('repayment-interest-category', 'interestCategoryId', '利息分类 ID', interestCategoryId, setInterestCategoryId)
+                  ? categorySelect('repayment-interest-category', 'interestCategoryId', '利息分类', interestCategoryId, setInterestCategoryId)
                   : null}
                 {amountField('repayment-fee-amount', 'feeAmount', '手续费', feeAmount, setFeeAmount, selectedCurrency)}
                 {feeAmount.trim() !== '' && isPositiveAmount(feeAmount)
-                  ? categoryField('repayment-fee-category', 'feeCategoryId', '手续费分类 ID', repaymentFeeCategoryId, setRepaymentFeeCategoryId)
+                  ? categorySelect('repayment-fee-category', 'feeCategoryId', '手续费分类', repaymentFeeCategoryId, setRepaymentFeeCategoryId)
                   : null}
                 {businessAtField}
                 {noteField}
@@ -509,7 +534,7 @@ export function RecordTransactionPage() {
                       {errors.fields.originalTransactionId ? <p className="text-sm text-destructive">{errors.fields.originalTransactionId}</p> : null}
                     </div>
                   )
-                  : categoryField('record-category', 'categoryId', '分类 ID', categoryId, setCategoryId)}
+                  : categorySelect('record-category', 'categoryId', '分类', categoryId, setCategoryId, type === 'INCOME' ? 'INCOME' : 'EXPENSE')}
                 {type === 'EXPENSE' ? (
                   <div className="flex flex-col gap-2">
                     <label htmlFor="record-merchant">商户</label>
@@ -520,6 +545,28 @@ export function RecordTransactionPage() {
                 {noteField}
               </>
             )}
+
+            {type !== 'ADJUSTMENT' ? (
+              <div className="flex flex-col gap-2 md:col-span-2">
+                <span className="text-sm font-medium">标签（可选）</span>
+                <div className="flex flex-wrap gap-3">
+                  {(tagsQuery.data ?? []).filter((tag: Tag) => tag.status === 'ACTIVE').map((tag) => (
+                    <label key={tag.id} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={tagIds.includes(tag.id)}
+                        onChange={(event) => setTagIds((previous) =>
+                          event.target.checked ? [...previous, tag.id] : previous.filter((id) => id !== tag.id))}
+                      />
+                      {tag.name}
+                    </label>
+                  ))}
+                  {tagsQuery.data && tagsQuery.data.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">暂无标签，可在「分类」管理页创建。</p>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
 
             <div className="flex items-center gap-3 md:col-span-2">
               <Button type="submit" disabled={mutation.isPending}>

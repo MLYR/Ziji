@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { BarChart3Icon, DatabaseIcon, HomeIcon, LoaderCircleIcon, MoonIcon, ReceiptTextIcon, SunIcon, WalletCardsIcon } from 'lucide-react'
+import { BarChart3Icon, DatabaseIcon, HomeIcon, LoaderCircleIcon, MoonIcon, ReceiptTextIcon, SunIcon, TagsIcon, WalletCardsIcon } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { Link, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 
@@ -19,11 +19,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useUiStore } from '@/stores/ui-store'
+import { CategoriesPage } from '@/categories/CategoriesPage'
 
 const navigation = [
   { label: '概览', href: '/dashboard', icon: HomeIcon },
   { label: '账户', href: '/accounts', icon: WalletCardsIcon },
   { label: '流水', href: '/transactions', icon: ReceiptTextIcon },
+  { label: '分类', href: '/categories', icon: TagsIcon },
   { label: '投资', href: '/investments', icon: BarChart3Icon },
 ]
 
@@ -143,6 +145,7 @@ function App() {
           <Route path="/transactions" element={<TransactionsPage />} />
           <Route path="/transactions/new" element={<RecordTransactionPage />} />
           <Route path="/transactions/:transactionId" element={<TransactionDetailPage />} />
+          <Route path="/categories" element={<CategoriesPage />} />
           <Route path="/investments" element={<PlaceholderPage title="投资" />} />
         </Route>
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

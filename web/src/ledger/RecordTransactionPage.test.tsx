@@ -31,6 +31,16 @@ const user = {
   version: 1,
 }
 
+const categories = [
+  { id: 'cat-food', categoryType: 'EXPENSE', name: '餐饮', parentId: null, status: 'ACTIVE', mergedIntoId: null, version: 1 },
+  { id: 'cat-transport', categoryType: 'EXPENSE', name: '交通', parentId: null, status: 'ACTIVE', mergedIntoId: null, version: 1 },
+  { id: 'cat-salary', categoryType: 'INCOME', name: '工资', parentId: null, status: 'ACTIVE', mergedIntoId: null, version: 1 },
+]
+
+const tags = [
+  { id: 'tag-work', name: '工作', status: 'ACTIVE', version: 1 },
+]
+
 const accounts = [
   { id: 'account-bank', accountClass: 'ASSET', accountType: 'BANK', name: '工资卡', currency: 'CNY', status: 'ACTIVE', currentUserRole: 'OWNER', inclusionRatio: '1.000000', version: 1 },
   { id: 'card', accountClass: 'LIABILITY', accountType: 'CREDIT_CARD', name: '信用卡', currency: 'CNY', status: 'ACTIVE', currentUserRole: 'OWNER', inclusionRatio: '1.000000', version: 1 },
@@ -65,14 +75,22 @@ function mockAccounts() {
     if (path.startsWith('/api/v1/accounts')) {
       return { data: accounts, meta: { requestId: 'req-accounts', nextCursor: null, hasMore: false } }
     }
+    if (path.startsWith('/api/v1/categories')) {
+      return { data: categories, meta: { requestId: 'req-categories', nextCursor: null, hasMore: false } }
+    }
+    if (path.startsWith('/api/v1/tags')) {
+      return { data: tags, meta: { requestId: 'req-tags', nextCursor: null, hasMore: false } }
+    }
     throw new Error(`unexpected path ${path}`)
   })
 }
 
-function fillExpenseForm() {
+async function fillExpenseForm() {
   fireEvent.change(screen.getByLabelText('账户（资产或信用卡）'), { target: { value: 'account-bank' } })
   fireEvent.change(screen.getByLabelText('支出金额'), { target: { value: '12.50' } })
-  fireEvent.change(screen.getByLabelText('分类 ID'), { target: { value: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0aa' } })
+  // 分类选项来自异步查询，先等选项渲染再选择。
+  await screen.findByText('餐饮')
+  fireEvent.change(screen.getByLabelText('分类'), { target: { value: 'cat-food' } })
 }
 
 describe('记一笔表单', () => {
@@ -104,13 +122,15 @@ describe('记一笔表单', () => {
       if (path.startsWith('/api/v1/accounts')) {
         return { data: accounts, meta: { requestId: 'req-accounts', nextCursor: null, hasMore: false } }
       }
+      if (path.startsWith('/api/v1/categories')) return { data: categories, meta: { requestId: 'req-categories', nextCursor: null, hasMore: false } }
+      if (path.startsWith('/api/v1/tags')) return { data: tags, meta: { requestId: 'req-tags', nextCursor: null, hasMore: false } }
       if (path === '/api/v1/transactions') return { data: { id: 'tx-1', type: 'EXPENSE' } }
       throw new Error(`unexpected path ${path}`)
     })
 
     renderPage()
     await screen.findByText(/工资卡/)
-    fillExpenseForm()
+    await fillExpenseForm()
     fireEvent.click(screen.getByRole('button', { name: '保存交易' }))
 
     await screen.findByText('交易已保存')
@@ -130,12 +150,14 @@ describe('记一笔表单', () => {
       if (path.startsWith('/api/v1/accounts')) {
         return { data: accounts, meta: { requestId: 'req-accounts', nextCursor: null, hasMore: false } }
       }
+      if (path.startsWith('/api/v1/categories')) return { data: categories, meta: { requestId: 'req-categories', nextCursor: null, hasMore: false } }
+      if (path.startsWith('/api/v1/tags')) return { data: tags, meta: { requestId: 'req-tags', nextCursor: null, hasMore: false } }
       throw new ApiClientError(problem('INTERNAL_ERROR', 500, '服务器处理请求失败'))
     })
 
     renderPage()
     await screen.findByText(/工资卡/)
-    fillExpenseForm()
+    await fillExpenseForm()
 
     fireEvent.click(screen.getByRole('button', { name: '保存交易' }))
     await screen.findByText(/服务器处理请求失败/)
@@ -165,13 +187,15 @@ describe('记一笔表单', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存交易' }))
 
     await screen.findByText('金额格式需符合 CNY 记账精度')
-    expect(screen.getByText('请填写有效的分类 ID')).toBeTruthy()
-    expect(apiRequestMock.mock.calls.every(([path]) => path.startsWith('/api/v1/accounts'))).toBe(true)
+    expect(screen.getByText('请选择分类')).toBeTruthy()
+    expect(apiRequestMock.mock.calls.some(([path]) => path.startsWith('/api/v1/transactions'))).toBe(false)
   })
 
   it('信用卡消费仍提交公共 EXPENSE 语义命令，不提交分录', async () => {
     apiRequestMock.mockImplementation(async (path: string) => {
       if (path.startsWith('/api/v1/accounts')) return { data: accounts, meta: { requestId: 'req-accounts', nextCursor: null, hasMore: false } }
+      if (path.startsWith('/api/v1/categories')) return { data: categories, meta: { requestId: 'req-categories', nextCursor: null, hasMore: false } }
+      if (path.startsWith('/api/v1/tags')) return { data: tags, meta: { requestId: 'req-tags', nextCursor: null, hasMore: false } }
       if (path === '/api/v1/transactions') return { data: { id: 'tx-card-expense' } }
       throw new Error(`unexpected path ${path}`)
     })
@@ -180,7 +204,7 @@ describe('记一笔表单', () => {
     await screen.findByRole('option', { name: '信用卡 · CNY' })
     fireEvent.change(screen.getByLabelText('账户（资产或信用卡）'), { target: { value: 'card' } })
     fireEvent.change(screen.getByLabelText('支出金额'), { target: { value: '300' } })
-    fireEvent.change(screen.getByLabelText('分类 ID'), { target: { value: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0aa' } })
+    fireEvent.change(screen.getByLabelText('分类'), { target: { value: 'cat-food' } })
     fireEvent.click(screen.getByRole('button', { name: '保存交易' }))
 
     await screen.findByText('交易已保存')
@@ -194,6 +218,8 @@ describe('记一笔表单', () => {
   it('负债还款分开提交本金、利息和手续费及对应费用分类', async () => {
     apiRequestMock.mockImplementation(async (path: string) => {
       if (path.startsWith('/api/v1/accounts')) return { data: accounts, meta: { requestId: 'req-accounts', nextCursor: null, hasMore: false } }
+      if (path.startsWith('/api/v1/categories')) return { data: categories, meta: { requestId: 'req-categories', nextCursor: null, hasMore: false } }
+      if (path.startsWith('/api/v1/tags')) return { data: tags, meta: { requestId: 'req-tags', nextCursor: null, hasMore: false } }
       if (path === '/api/v1/transactions') return { data: { id: 'tx-repayment' } }
       throw new Error(`unexpected path ${path}`)
     })
@@ -205,9 +231,9 @@ describe('记一笔表单', () => {
     fireEvent.change(screen.getByLabelText('负债账户'), { target: { value: 'card' } })
     fireEvent.change(screen.getByLabelText('本金'), { target: { value: '1000' } })
     fireEvent.change(screen.getByLabelText('利息'), { target: { value: '50' } })
-    fireEvent.change(screen.getByLabelText('利息分类 ID'), { target: { value: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0aa' } })
+    fireEvent.change(screen.getByLabelText('利息分类'), { target: { value: 'cat-food' } })
     fireEvent.change(screen.getByLabelText('手续费'), { target: { value: '10' } })
-    fireEvent.change(screen.getByLabelText('手续费分类 ID'), { target: { value: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0ab' } })
+    fireEvent.change(screen.getByLabelText('手续费分类'), { target: { value: 'cat-food' } })
     fireEvent.click(screen.getByRole('button', { name: '保存交易' }))
 
     await screen.findByText('交易已保存')
@@ -216,7 +242,7 @@ describe('记一笔表单', () => {
     expect(body).toMatchObject({
       type: 'LIABILITY_REPAYMENT', cashAccountId: 'account-bank', liabilityAccountId: 'card', currency: 'CNY',
       principalAmount: '1000.00', interestAmount: '50.00', feeAmount: '10.00',
-      interestCategoryId: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0aa', feeCategoryId: '0191c1a1-7c2a-7f21-b5ad-6a4c8f19f0ab',
+      interestCategoryId: 'cat-food', feeCategoryId: 'cat-food',
     })
     expect(body).not.toHaveProperty('entries')
   })
