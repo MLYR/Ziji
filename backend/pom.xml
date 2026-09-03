@@ -31,6 +31,8 @@
 		<java.version>25</java.version>
 		<!-- 覆盖 Spring Boot BOM 的 pgjdbc 属性，修复 CVE-2026-54291，并同步插件依赖。 -->
 		<postgresql.version>42.7.12</postgresql.version>
+		<!-- 覆盖 Boot 4.0.7 BOM 的嵌入式 Tomcat，修复 tomcat-embed-core CVE-2026-65182/65905 等 CRITICAL。 -->
+		<tomcat.version>11.0.25</tomcat.version>
 		<bouncycastle.version>1.85.2</bouncycastle.version>
 		<spring-modulith.version>2.0.7</spring-modulith.version>
 		<!-- 本地生成默认连接 compose 中的开发库，可通过 -Dziji.db.* 覆盖。 -->
