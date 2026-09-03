@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { BarChart3Icon, DatabaseIcon, HomeIcon, LoaderCircleIcon, MoonIcon, ReceiptTextIcon, SunIcon, WalletCardsIcon } from 'lucide-react'
 import { useEffect, useRef } from 'react'
-import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
+import { Link, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 
 import { AuthPage } from '@/auth/AuthPage'
 import { AccountDetailPage } from '@/accounts/AccountDetailPage'
@@ -49,7 +49,8 @@ function AppSidebar() {
               {navigation.map(({ label, href, icon: Icon }) => (
                 <SidebarMenuItem key={href}>
                   <SidebarMenuButton asChild isActive={pathname === href} tooltip={label}>
-                    <a href={href}><Icon /><span>{label}</span></a>
+                    {/* Access Token 只在内存；原生 a 会整页刷新并丢掉会话，必须走 React Router。 */}
+                    <Link to={href}><Icon /><span>{label}</span></Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}

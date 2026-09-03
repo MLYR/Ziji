@@ -123,6 +123,28 @@ test('有效 Web 会话在浏览器硬刷新后恢复，并可从壳退出', asy
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible()
 })
 
+test('登录后点击侧栏保持会话，不会回到登录页', async ({ page }) => {
+  await stubLogin(page)
+  await page.route('**/api/v1/transactions?**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: responseBody({ data: [], meta: { requestId: 'request-tx-list', nextCursor: null, hasMore: false } }) })
+  })
+  await page.route('**/api/v1/accounts?limit=100', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: responseBody({ data: [], meta: { requestId: 'request-account-list', nextCursor: null, hasMore: false } }) })
+  })
+
+  await page.goto('/login')
+  await fillLogin(page)
+  await expect(page.getByRole('heading', { name: '总览' })).toBeVisible()
+  await page.getByRole('link', { name: '流水' }).click()
+  await expect(page).toHaveURL(/\/transactions/)
+  await expect(page.getByRole('heading', { name: '流水' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '欢迎回来' })).toHaveCount(0)
+  await page.getByRole('link', { name: '账户' }).click()
+  await expect(page).toHaveURL(/\/accounts/)
+  await expect(page.getByText('还没有账户')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '欢迎回来' })).toHaveCount(0)
+})
+
 test('设备会话管理入口可加载并标记当前设备', async ({ page }) => {
   await stubLogin(page)
   await page.route('**/api/v1/users/me/sessions?limit=20', async (route) => {

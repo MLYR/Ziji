@@ -230,6 +230,24 @@ describe('应用壳', () => {
     ])
   })
 
+  it('登录后点击侧栏走 SPA 导航，不会回到登录页', async () => {
+    setWebSession({ session, accessToken: 'access-test', expiresIn: 1800 })
+    setWebUser(user)
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    mockBusinessEndpoints(fetchMock)
+    renderApp(['/dashboard'])
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: '总览' })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('link', { name: '投资' }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: '投资' })).toBeInTheDocument())
+    expect(screen.queryByRole('heading', { name: '欢迎回来' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('link', { name: '流水' }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: '流水' })).toBeInTheDocument())
+    expect(screen.queryByRole('heading', { name: '欢迎回来' })).not.toBeInTheDocument()
+    expect(getWebAuthSnapshot().status).toBe('authenticated')
+    expect(getWebAuthSnapshot().accessToken).toBe('access-test')
+  })
+
   it('退出全部设备后清理认证态并返回登录页', async () => {
     setWebSession({ session, accessToken: 'access-test', expiresIn: 1800 })
     setWebUser(user)
