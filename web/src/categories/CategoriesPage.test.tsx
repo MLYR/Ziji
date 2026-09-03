@@ -123,7 +123,7 @@ describe('分类与标签管理页', () => {
     await screen.findByText('工资')
     fireEvent.click(screen.getByRole('button', { name: '启用' }))
     await waitFor(() => expect(apiRequestMock.mock.calls.some(([path, init]) => path === '/api/v1/categories/cat-salary' && init?.method === 'PATCH')).toBe(true))
-    const patchCall = apiRequestMock.mock.calls.find(([path, init]) => path === '/api/v1/categories/cat-salary')!
+    const patchCall = apiRequestMock.mock.calls.find(([path]) => path === '/api/v1/categories/cat-salary')!
     expect((patchCall[1] as RequestInit).headers).toMatchObject({ 'If-Match': '"1"' })
   })
 
