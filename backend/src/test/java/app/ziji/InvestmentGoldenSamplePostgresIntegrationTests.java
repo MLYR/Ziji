@@ -21,6 +21,9 @@ import app.ziji.investment.application.InvestmentPositionResult;
 import app.ziji.investment.application.InvestmentTradeCommand;
 import app.ziji.investment.application.InvestmentTradeResult;
 import app.ziji.investment.domain.InvestmentSide;
+import app.ziji.investment.domain.InvestmentTrade;
+import app.ziji.investment.domain.Position;
+import app.ziji.investment.domain.PositionCalculator;
 import app.ziji.ledger.application.LedgerAccountStore;
 import app.ziji.ledger.application.LedgerCommandApplicationService;
 import app.ziji.ledger.domain.CurrencyCode;
@@ -33,6 +36,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -122,6 +126,29 @@ class InvestmentGoldenSamplePostgresIntegrationTests extends PostgresIntegration
 		assertEquals(0, positions.getFirst().costBasis().compareTo(new BigDecimal("600.00")));
 		assertEquals(0, positions.getFirst().averageCost().compareTo(new BigDecimal("10.000000000000")));
 		assertEquals(0, positions.getFirst().marketValue().compareTo(new BigDecimal("900.00")));
+
+		// 持仓事实重建比对断言（QA-INV-002）：
+		// 验证从已入账 trades 事实表重放得到的 Position 与查询持仓/概览结果完全一致（差异为 0）
+		List<InvestmentTrade> tradeFacts = jdbc.query("""
+			SELECT tr.id, tr.transaction_id, tr.investment_account_id, tr.instrument_id, tr.side,
+				tr.quantity, tr.unit_price, tr.currency, tr.gross_amount, tr.fee_amount, tr.tax_amount, tr.trade_at
+			FROM trades tr
+			JOIN transactions t ON t.id = tr.transaction_id
+			WHERE tr.investment_account_id = ? AND t.status = 'POSTED' AND tr.trade_at <= ?
+			ORDER BY tr.trade_at, tr.id
+			""", (rs, rowNum) -> new InvestmentTrade(
+				UUID.fromString(rs.getString("id")), UUID.fromString(rs.getString("transaction_id")),
+				UUID.fromString(rs.getString("investment_account_id")), UUID.fromString(rs.getString("instrument_id")),
+				InvestmentSide.valueOf(rs.getString("side")), rs.getBigDecimal("quantity"), rs.getBigDecimal("unit_price"),
+				rs.getString("currency"), rs.getBigDecimal("gross_amount"), rs.getBigDecimal("fee_amount"),
+				rs.getBigDecimal("tax_amount"), rs.getTimestamp("trade_at").toInstant()),
+			account.account().id(), timestamp(AS_OF));
+		Map<UUID, Position> rebuiltFromFacts = new PositionCalculator().rebuild(tradeFacts);
+		Position rebuiltPosition = rebuiltFromFacts.get(instrument.id());
+		assertNotNull(rebuiltPosition, "从事实表重建持仓必须非空。");
+		assertEquals(0, rebuiltPosition.quantity().compareTo(positions.getFirst().quantity()), "重建持仓数量与 API 返回差异必须为 0。");
+		assertEquals(0, rebuiltPosition.costBasis().compareTo(positions.getFirst().costBasis()), "重建持仓成本基础与 API 返回差异必须为 0。");
+		assertEquals(0, rebuiltPosition.averageCost().compareTo(positions.getFirst().averageCost()), "重建持仓平均成本与 API 返回差异必须为 0。");
 
 		assertEquals(4, count("""
 			SELECT count(*) FROM audit_logs

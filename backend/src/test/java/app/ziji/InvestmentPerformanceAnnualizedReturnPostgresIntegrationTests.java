@@ -128,15 +128,27 @@ class InvestmentPerformanceAnnualizedReturnPostgresIntegrationTests extends Post
 	}
 
 	private AccountCreationResult createInvestmentAccount(UUID userId, String openingAmount) {
-		return accountCreation.createAccountWithOpening(new AccountCreationCommand(
+		AccountCreationResult result = accountCreation.createAccountWithOpening(new AccountCreationCommand(
 			AccountClass.INVESTMENT, AccountType.FUND, "B3 投资账户", "测试券商", AccountCurrency.CNY, null, userId,
 			new AccountOpeningBalance(new BigDecimal(openingAmount), ACCOUNT_OPENED_AT, "投资期初"), ZONE));
+		// 回拨 membership 保证历史时间点交易与估值具备有效权限
+		backdateMembership(result.account().id());
+		return result;
 	}
 
 	private AccountCreationResult createCashAccount(UUID userId, String openingAmount) {
 		return accountCreation.createAccountWithOpening(new AccountCreationCommand(
 			AccountClass.ASSET, AccountType.CASH, "B3 现金账户", "测试银行", AccountCurrency.CNY, null, userId,
 			new AccountOpeningBalance(new BigDecimal(openingAmount), ACCOUNT_OPENED_AT, "现金期初"), ZONE));
+	}
+
+	private void backdateMembership(UUID accountId) {
+		jdbc.update("UPDATE account_members SET joined_at = ? WHERE account_id = ?",
+			timestamp(ACCOUNT_OPENED_AT), accountId);
+		jdbc.update("""
+			UPDATE account_inclusion_settings SET valid_from = ?
+			WHERE membership_id IN (SELECT id FROM account_members WHERE account_id = ?)
+			""", timestamp(ACCOUNT_OPENED_AT), accountId);
 	}
 
 	private UUID insertUser() {
