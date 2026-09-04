@@ -67,6 +67,7 @@ class InvestmentGoldenSamplePostgresIntegrationTests extends PostgresIntegration
 	void buyPartialSellDividendAndFeesKeepCashCostProfitAndEntryBalanceConsistent() {
 		UUID userId = insertUser();
 		AccountCreationResult account = createInvestmentAccount(userId, "10000.00");
+		backdateMembership(account.account().id());
 		MarketDataApplicationService.InstrumentView instrument = marketData.createInstrument(
 			userId, "STOCK", "B3 测试股票", "CN", "CNY", "investment-golden-sample");
 		marketData.createManualPrice(userId, instrument.id(), "CLOSE", AS_OF.atZone(ZoneId.of("Asia/Shanghai")).toLocalDate(),
@@ -147,6 +148,15 @@ class InvestmentGoldenSamplePostgresIntegrationTests extends PostgresIntegration
 			userId, account.account().id(), instrument.id(), InvestmentSide.SELL, "11", "10", null, "0.00", "0.00", SELL_AT)));
 		assertEquals(transactionsBefore, count("SELECT count(*) FROM transactions WHERE created_by = ?", userId));
 		assertEquals(tradesBefore, count("SELECT count(*) FROM trades WHERE investment_account_id = ?", account.account().id()));
+	}
+
+	private void backdateMembership(UUID accountId) {
+		jdbc.update("UPDATE account_members SET joined_at = ? WHERE account_id = ?",
+			timestamp(ACCOUNT_OPENED_AT), accountId);
+		jdbc.update("""
+			UPDATE account_inclusion_settings SET valid_from = ?
+			WHERE membership_id IN (SELECT id FROM account_members WHERE account_id = ?)
+			""", timestamp(ACCOUNT_OPENED_AT), accountId);
 	}
 
 	private InvestmentTradeCommand command(
