@@ -1187,6 +1187,7 @@ paths:
         - { $ref: '#/components/parameters/DateTo' }
       responses:
         '200': { $ref: '#/components/responses/InvestmentPerformanceOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /investments/overview:
@@ -2906,6 +2907,7 @@ components:
         dividends: { $ref: '#/components/schemas/Money' }
         fees: { $ref: '#/components/schemas/NonNegativeMoney' }
         taxes: { $ref: '#/components/schemas/NonNegativeMoney' }
+        annualizedReturn: { type: [string, 'null'], pattern: '^-?(0|[1-9][0-9]{0,2})(\.[0-9]{1,6})?$' }
         xirr: { type: [string, 'null'], pattern: '^-?(0|[1-9][0-9]{0,2})(\.[0-9]{1,6})?$' }
         xirrStatus: { type: string, enum: [AVAILABLE, INSUFFICIENT_CASH_FLOWS, UNPRICED] }
     InvestmentOverview:

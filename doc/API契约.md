@@ -756,6 +756,12 @@ CNY、USD、HKD、EUR 使用 2 位，JPY 使用 0 位。V1 不接受与该结果
 
 `valuationStatus=UNPRICED` 时 `marketPrice`、`marketValue` 和 `unrealizedProfit` 为 null。
 
+投资收益及 XIRR 查询（`/investment-accounts/{accountId}/performance`）：
+
+- 查询参数：`dateFrom` 与 `dateTo`（可选），格式为 `YYYY-MM-DD`。若传入 `dateFrom` 晚于 `dateTo`，服务端返回 400 校验错误。
+- 响应包含 `currency`、`realizedProfit`、`unrealizedProfit`、`dividends`、`fees`、`taxes`、`annualizedReturn`、`xirr` 以及 `xirrStatus`（`AVAILABLE | INSUFFICIENT_CASH_FLOWS | UNPRICED`）。
+- `annualizedReturn` 与 `xirr` 在无有效现金流或无法定价时为 null，其状态由 `xirrStatus` 精确反映。
+
 收益日历查询参数：
 
 ```text

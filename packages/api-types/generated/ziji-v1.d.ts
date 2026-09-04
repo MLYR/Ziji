@@ -2615,6 +2615,7 @@ export interface components {
             dividends: components["schemas"]["Money"];
             fees: components["schemas"]["NonNegativeMoney"];
             taxes: components["schemas"]["NonNegativeMoney"];
+            annualizedReturn?: string | null;
             xirr?: string | null;
             /** @enum {string} */
             xirrStatus: "AVAILABLE" | "INSUFFICIENT_CASH_FLOWS" | "UNPRICED";
@@ -5751,6 +5752,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["InvestmentPerformanceOk"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
         };

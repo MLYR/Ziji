@@ -149,6 +149,9 @@ public class InvestmentController {
 		Principal principal,
 		HttpServletResponse response) {
 		UUID userId = currentUserIdResolver.resolve(principal);
+		if (dateFrom != null && dateTo != null && parseDate(dateFrom).isAfter(parseDate(dateTo))) {
+			throw new InvestmentRequestValidationException("dateFrom 不能晚于 dateTo。");
+		}
 		ZoneId zone = timezones.currentTimezone(userId);
 		Instant from = dateFrom == null ? null : parseDate(dateFrom).atStartOfDay(zone).toInstant();
 		Instant to = dateTo == null ? null : parseDate(dateTo).plusDays(1).atStartOfDay(zone).toInstant().minusNanos(1);
@@ -348,7 +351,8 @@ public class InvestmentController {
 
 	private static InvestmentPerformanceView performanceView(InvestmentPerformanceResult result) {
 		return new InvestmentPerformanceView(result.currency(), plain(result.realizedProfit()), plain(result.unrealizedProfit()),
-			plain(result.dividends()), plain(result.fees()), plain(result.taxes()), plain(result.xirr()), xirrStatus(result.xirrStatus()));
+			plain(result.dividends()), plain(result.fees()), plain(result.taxes()), plain(result.annualizedReturn()),
+			plain(result.xirr()), xirrStatus(result.xirrStatus()));
 	}
 
 	private static InvestmentOverviewView overviewView(InvestmentApplicationService.InvestmentOverviewResult result) {
@@ -451,8 +455,8 @@ public class InvestmentController {
 	}
 
 	public record InvestmentPerformanceView(
-		String currency, String realizedProfit, String unrealizedProfit, String dividends, String fees, String taxes, String xirr,
-		String xirrStatus) {
+		String currency, String realizedProfit, String unrealizedProfit, String dividends, String fees, String taxes,
+		String annualizedReturn, String xirr, String xirrStatus) {
 	}
 
 	public record InvestmentOverviewView(
