@@ -191,9 +191,11 @@ public class InvestmentApplicationService implements InvestmentDashboardPort {
 			.subtract(parts.nonSellFees()).subtract(parts.nonSellTaxes());
 		BigDecimal returnRate = parts.investedCapital().signum() <= 0
 			? null : cumulative.divide(parts.investedCapital(), 24, RoundingMode.HALF_UP);
+		// 年化收益率即资金加权年化收益率（XIRR）；XIRR 不可用时返回 null，不伪造 0。
+		BigDecimal annualizedReturn = xirrStatus == XirrStatus.AVAILABLE ? xirrResult.rate() : null;
 		return new InvestmentPerformanceResult(
 			account.currency(), parts.realizedProfit(), parts.unrealizedProfit(), parts.dividends(), parts.fees(), parts.taxes(),
-			cumulative, returnRate, null, xirrResult.rate(), xirrStatus);
+			cumulative, returnRate, annualizedReturn, xirrResult.rate(), xirrStatus);
 	}
 
 	public InvestmentOverviewResult overview(UUID userId, Instant asOf) {
