@@ -164,9 +164,18 @@ class InvestmentTradeIdempotencyPostgresIntegrationTests extends PostgresIntegra
 	}
 
 	private AccountCreationResult createInvestmentAccount(UUID userId, String openingAmount) {
-		return accountCreation.createAccountWithOpening(new AccountCreationCommand(
+		AccountCreationResult result = accountCreation.createAccountWithOpening(new AccountCreationCommand(
 			AccountClass.INVESTMENT, AccountType.FUND, "B3 幂等账户", "测试券商", AccountCurrency.CNY, null, userId,
 			new AccountOpeningBalance(new BigDecimal(openingAmount), ACCOUNT_OPENED_AT, "投资期初"), ZONE));
+		UUID accountId = result.account().id();
+		// 回拨 membership 及计入设置生效时间，保证历史时间点的交易具备写入权限
+		jdbc.update("UPDATE account_members SET joined_at = ? WHERE account_id = ?",
+			timestamp(ACCOUNT_OPENED_AT), accountId);
+		jdbc.update("""
+			UPDATE account_inclusion_settings SET valid_from = ?
+			WHERE membership_id IN (SELECT id FROM account_members WHERE account_id = ?)
+			""", timestamp(ACCOUNT_OPENED_AT), accountId);
+		return result;
 	}
 
 	private UUID insertUser() {

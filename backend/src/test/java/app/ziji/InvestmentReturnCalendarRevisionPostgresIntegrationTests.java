@@ -8,6 +8,12 @@ import java.time.YearMonth;
 import java.time.ZoneId;
 import java.util.Map;
 import java.util.UUID;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import app.ziji.account.application.AccountCreationCommand;
 import app.ziji.account.application.AccountCreationResult;
@@ -21,6 +27,7 @@ import app.ziji.investment.application.InvestmentReturnDayDetailsResult;
 import app.ziji.investment.application.InvestmentTradeCommand;
 import app.ziji.investment.application.InvestmentValuationRevisionPort;
 import app.ziji.investment.domain.InvestmentSide;
+import app.ziji.investment.domain.ReturnStatus;
 import app.ziji.marketdata.application.MarketDataApplicationService;
 import app.ziji.marketdata.application.MarketDataValidationException;
 import org.junit.jupiter.api.Test;
@@ -187,6 +194,193 @@ class InvestmentReturnCalendarRevisionPostgresIntegrationTests extends PostgresI
 			Instant.parse("2026-09-03T00:00:00Z")));
 
 		assertEquals(0, count("SELECT count(*) FROM investment_daily_return_snapshots WHERE user_id = ?", userId));
+	}
+
+	@Test
+	void projectionDeletionAllowsDeterministicReconstructionFromFacts() {
+		UUID userId = insertUser();
+		AccountCreationResult account = createInvestmentAccount(userId);
+		MarketDataApplicationService.InstrumentView instrument = marketData.createInstrument(
+			userId, "STOCK", "B3 投影重建测试", "CN", "CNY", "projection-rebuild-inst");
+		marketData.createManualPrice(
+			userId, instrument.id(), "CLOSE", PRICE_DATE, new BigDecimal("10.00"), "CNY", "重建价格", "projection-price-01");
+		investments.createTrade(new InvestmentTradeCommand(
+			userId, UUID.randomUUID(), account.account().id(), instrument.id(), InvestmentSide.BUY,
+			new BigDecimal("100"), new BigDecimal("10.00"), null, "CNY", BigDecimal.ZERO, BigDecimal.ZERO,
+			BUY_AT, "Asia/Shanghai", "投影重建买入"));
+
+		InvestmentReturnCalendarResult original = investments.returnCalendar(userId, MONTH, "PORTFOLIO", null);
+		assertEquals(1, original.valuationRevision());
+		assertEquals(31, original.days().size());
+
+		List<Map<String, Object>> originalSnapshots = jdbc.queryForList("""
+			SELECT business_date, status, begin_value, end_value, net_cash_flow, daily_profit, daily_return_rate, missing_instrument_count
+			FROM investment_daily_return_snapshots
+			WHERE user_id = ? AND scope_type = 'PORTFOLIO' AND instrument_id IS NULL
+			  AND base_currency = 'CNY' AND is_current
+			ORDER BY business_date
+			""", userId);
+		assertEquals(31, originalSnapshots.size());
+
+		// 物理删除快照投影
+		int deleted = jdbc.update("DELETE FROM investment_daily_return_snapshots WHERE user_id = ?", userId);
+		assertEquals(31, deleted);
+		assertEquals(0, count("SELECT count(*) FROM investment_daily_return_snapshots WHERE user_id = ?", userId));
+
+		// 从底层事实重新触发计算与发布
+		InvestmentReturnCalendarResult rebuilt = investments.returnCalendar(userId, MONTH, "PORTFOLIO", null);
+		assertEquals(1, rebuilt.valuationRevision());
+		assertEquals(31, rebuilt.days().size());
+
+		List<Map<String, Object>> rebuiltSnapshots = jdbc.queryForList("""
+			SELECT business_date, status, begin_value, end_value, net_cash_flow, daily_profit, daily_return_rate, missing_instrument_count
+			FROM investment_daily_return_snapshots
+			WHERE user_id = ? AND scope_type = 'PORTFOLIO' AND instrument_id IS NULL
+			  AND base_currency = 'CNY' AND is_current
+			ORDER BY business_date
+			""", userId);
+		assertEquals(31, rebuiltSnapshots.size());
+
+		// 严格逐日比对，验证投影完全可重现且差异为 0
+		for (int i = 0; i < 31; i++) {
+			Map<String, Object> before = originalSnapshots.get(i);
+			Map<String, Object> after = rebuiltSnapshots.get(i);
+			assertEquals(before.get("business_date"), after.get("business_date"));
+			assertEquals(before.get("status"), after.get("status"));
+			assertBigDecimalEquals((BigDecimal) before.get("begin_value"), (BigDecimal) after.get("begin_value"));
+			assertBigDecimalEquals((BigDecimal) before.get("end_value"), (BigDecimal) after.get("end_value"));
+			assertBigDecimalEquals((BigDecimal) before.get("net_cash_flow"), (BigDecimal) after.get("net_cash_flow"));
+			assertBigDecimalEquals((BigDecimal) before.get("daily_profit"), (BigDecimal) after.get("daily_profit"));
+			assertBigDecimalEquals((BigDecimal) before.get("daily_return_rate"), (BigDecimal) after.get("daily_return_rate"));
+			assertEquals(before.get("missing_instrument_count"), after.get("missing_instrument_count"));
+		}
+	}
+
+	@Test
+	void returnCalendarCoversDayStatusMatrixForNonTradingDayNoPositionCalculatedPartialAndUnpriced() {
+		UUID userId = insertUser();
+		// 开立无期初现金的投资账户
+		var createdAccount = accountCreation.createAccount(new AccountCreationCommand(
+			AccountClass.INVESTMENT, AccountType.FUND, "状态矩阵账户", "测试券商", AccountCurrency.CNY, null, userId,
+			null, ZoneId.of("Asia/Shanghai")));
+		UUID membershipId = jdbc.queryForObject(
+			"SELECT id FROM account_members WHERE account_id = ? AND user_id = ? AND status = 'ACTIVE'",
+			UUID.class, createdAccount.id(), userId);
+		jdbc.update("UPDATE account_members SET joined_at = ? WHERE id = ?", Timestamp.from(ACCOUNT_OPENED_AT), membershipId);
+		jdbc.update("UPDATE account_inclusion_settings SET valid_from = ?, created_at = ? WHERE membership_id = ? AND valid_to IS NULL",
+			Timestamp.from(ACCOUNT_OPENED_AT), Timestamp.from(ACCOUNT_OPENED_AT), membershipId);
+
+		MarketDataApplicationService.InstrumentView stockA = marketData.createInstrument(
+			userId, "STOCK", "标的A有价格", "CN", "CNY", "inst-status-a");
+		MarketDataApplicationService.InstrumentView stockB = marketData.createInstrument(
+			userId, "STOCK", "标的B无价格", "CN", "CNY", "inst-status-b");
+
+		// 2026-08-12：stockA 发生日内买入并全额卖出（日初日末持仓为 0，但有交易事件）
+		investments.createTrade(new InvestmentTradeCommand(
+			userId, UUID.randomUUID(), createdAccount.id(), stockA.id(), InvestmentSide.BUY,
+			new BigDecimal("50"), new BigDecimal("10.00"), null, "CNY", BigDecimal.ZERO, BigDecimal.ZERO,
+			Instant.parse("2026-08-12T01:30:00Z"), "Asia/Shanghai", "日内买入"));
+		investments.createTrade(new InvestmentTradeCommand(
+			userId, UUID.randomUUID(), createdAccount.id(), stockA.id(), InvestmentSide.SELL,
+			new BigDecimal("50"), new BigDecimal("10.00"), null, "CNY", BigDecimal.ZERO, BigDecimal.ZERO,
+			Instant.parse("2026-08-12T06:00:00Z"), "Asia/Shanghai", "日内卖出"));
+
+		// 2026-08-15：分别买入 stockA 与 stockB 各 100 股
+		investments.createTrade(new InvestmentTradeCommand(
+			userId, UUID.randomUUID(), createdAccount.id(), stockA.id(), InvestmentSide.BUY,
+			new BigDecimal("100"), new BigDecimal("10.00"), null, "CNY", BigDecimal.ZERO, BigDecimal.ZERO,
+			Instant.parse("2026-08-15T02:00:00Z"), "Asia/Shanghai", "买入标的A"));
+		investments.createTrade(new InvestmentTradeCommand(
+			userId, UUID.randomUUID(), createdAccount.id(), stockB.id(), InvestmentSide.BUY,
+			new BigDecimal("100"), new BigDecimal("20.00"), null, "CNY", BigDecimal.ZERO, BigDecimal.ZERO,
+			Instant.parse("2026-08-15T02:30:00Z"), "Asia/Shanghai", "买入标的B"));
+
+		// 仅提供 stockA 在 08-15 的收盘价；stockB 不录入价格（模拟缺价格）
+		marketData.createManualPrice(
+			userId, stockA.id(), "CLOSE", LocalDate.of(2026, 8, 15), new BigDecimal("10.00"), "CNY", "A收盘价", "price-a-15");
+
+		// 1. NON_TRADING_DAY：08-02 针对 stockA，无持仓且无交易事件
+		InvestmentReturnDayDetailsResult dayNonTrading = investments.returnDayDetails(
+			userId, LocalDate.of(2026, 8, 2), "INSTRUMENT", stockA.id());
+		assertEquals(ReturnStatus.NON_TRADING_DAY, dayNonTrading.status());
+
+		// 2. NO_POSITION：08-12 针对 stockA，日初日末持仓为 0 但有成交事件
+		InvestmentReturnDayDetailsResult dayNoPosition = investments.returnDayDetails(
+			userId, LocalDate.of(2026, 8, 12), "INSTRUMENT", stockA.id());
+		assertEquals(ReturnStatus.NO_POSITION, dayNoPosition.status());
+
+		// 3. CALCULATED：08-15 针对 stockA，有持仓且估值价格完整
+		InvestmentReturnDayDetailsResult dayCalculated = investments.returnDayDetails(
+			userId, LocalDate.of(2026, 8, 15), "INSTRUMENT", stockA.id());
+		assertEquals(ReturnStatus.CALCULATED, dayCalculated.status());
+
+		// 4. PARTIAL：08-15 组合统计，同时持有 stockA（有价）与 stockB（无价），组合部分缺估值
+		InvestmentReturnDayDetailsResult dayPartial = investments.returnDayDetails(
+			userId, LocalDate.of(2026, 8, 15), "PORTFOLIO", null);
+		assertEquals(ReturnStatus.PARTIAL, dayPartial.status());
+
+		// 5. UNPRICED：08-15 针对 stockB，单一标的无法估值
+		InvestmentReturnDayDetailsResult dayUnpriced = investments.returnDayDetails(
+			userId, LocalDate.of(2026, 8, 15), "INSTRUMENT", stockB.id());
+		assertEquals(ReturnStatus.UNPRICED, dayUnpriced.status());
+	}
+
+	@Test
+	void concurrentCalendarPublicationsAreThreadSafeAndIdempotent() throws Exception {
+		UUID userId = insertUser();
+		AccountCreationResult account = createInvestmentAccount(userId);
+		MarketDataApplicationService.InstrumentView instrument = marketData.createInstrument(
+			userId, "STOCK", "B3 并发日历测试", "CN", "CNY", "concurrent-cal-inst");
+		marketData.createManualPrice(
+			userId, instrument.id(), "CLOSE", PRICE_DATE, new BigDecimal("10.00"), "CNY", "并发价格", "concurrent-price-01");
+		investments.createTrade(new InvestmentTradeCommand(
+			userId, UUID.randomUUID(), account.account().id(), instrument.id(), InvestmentSide.BUY,
+			new BigDecimal("100"), new BigDecimal("10.00"), null, "CNY", BigDecimal.ZERO, BigDecimal.ZERO,
+			BUY_AT, "Asia/Shanghai", "并发买入"));
+
+		int threads = 4;
+		ExecutorService executor = Executors.newFixedThreadPool(threads);
+		CountDownLatch ready = new CountDownLatch(threads);
+		CountDownLatch start = new CountDownLatch(1);
+		List<Future<InvestmentReturnCalendarResult>> futures = new ArrayList<>();
+
+		for (int i = 0; i < threads; i++) {
+			futures.add(executor.submit(() -> {
+				ready.countDown();
+				start.await();
+				return investments.returnCalendar(userId, MONTH, "PORTFOLIO", null);
+			}));
+		}
+
+		ready.await();
+		start.countDown();
+
+		for (Future<InvestmentReturnCalendarResult> future : futures) {
+			InvestmentReturnCalendarResult res = future.get();
+			assertEquals(1, res.valuationRevision());
+			assertEquals(31, res.days().size());
+		}
+		executor.shutdown();
+
+		assertEquals(31, count("""
+			SELECT count(*) FROM investment_daily_return_snapshots
+			WHERE user_id = ? AND scope_type = 'PORTFOLIO' AND instrument_id IS NULL
+			  AND base_currency = 'CNY' AND is_current
+			""", userId));
+		assertEquals(1, count("""
+			SELECT max(valuation_revision) FROM investment_daily_return_snapshots
+			WHERE user_id = ? AND scope_type = 'PORTFOLIO' AND instrument_id IS NULL
+			  AND base_currency = 'CNY'
+			""", userId));
+	}
+
+	private static void assertBigDecimalEquals(BigDecimal expected, BigDecimal actual) {
+		if (expected == null) {
+			org.junit.jupiter.api.Assertions.assertNull(actual);
+		} else {
+			assertNotNull(actual);
+			assertEquals(0, expected.compareTo(actual), () -> "Expected: " + expected + ", actual: " + actual);
+		}
 	}
 
 	private AccountCreationResult createInvestmentAccount(UUID userId) {
