@@ -671,7 +671,7 @@ V1 只在账单导入使用文件上传。客户端以 `multipart/form-data` 将
 
 | 方法 | 路径 | 说明 | 需求 |
 | --- | --- | --- | --- |
-| GET | `/instruments/search` | 搜索已缓存的 Tushare/手工产品 | INV-001～003 |
+| GET | `/instruments/search` | 搜索已缓存的同花顺/手工产品 | INV-001～003 |
 | POST | `/instruments` | 创建手工金融产品 | INV-005 |
 | GET | `/instruments/{instrumentId}` | 查询产品和外部映射 | INV-006 |
 | GET | `/instruments/{instrumentId}/prices` | 查询收盘价或净值历史 | INV-003、010 |
@@ -679,7 +679,7 @@ V1 只在账单导入使用文件上传。客户端以 `multipart/form-data` 将
 | POST | `/instruments/{instrumentId}/price-corrections` | 修正指定业务日期价格 | INV-010 |
 | GET | `/market-data/status` | 查询数据新鲜度和同步状态 | INV-003～005 |
 
-普通客户端不提供“立即拉取全市场”接口。产品搜索未命中时，服务端可以按限流策略触发单产品 Tushare 查询，或提示用户手工创建。
+普通客户端不提供“立即拉取全市场”接口。同花顺没有公开产品搜索接口，搜索未命中时提示用户手工创建产品；手工创建可携带可选 `sourceCode`（同花顺 6 位代码），服务端据此建立 THS 映射并参与盘后增量同步。
 
 价格响应必须包含：
 
@@ -690,7 +690,7 @@ V1 只在账单导入使用文件上传。客户端以 `multipart/form-data` 将
   "price": "12.340000000000",
   "currency": "CNY",
   "businessDate": "2026-08-12",
-  "source": "TUSHARE",
+  "source": "THS",
   "revision": 2,
   "sourceUpdatedAt": "2026-08-12T09:00:00Z",
   "fetchedAt": "2026-08-12T09:05:00Z",
@@ -1074,7 +1074,7 @@ QUEUED | RUNNING | SUCCEEDED | FAILED | CANCELED
 | 普通 API | 用户 + 会话 |
 | 文件导入 | 用户 + 并发任务数 + 文件大小 |
 | 手工行情/汇率 | 用户 + 产品/币对 |
-| Tushare 调用 | 服务端供应商账户 + 接口权限 |
+| 同花顺调用 | 服务端进程内闸门 + 数据库每日配额 |
 
 发送邮箱验证码的固定窗口配额按 `purpose=REGISTER` 与 `purpose=RESET_PASSWORD` 分开计算：
 
