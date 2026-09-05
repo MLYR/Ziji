@@ -73,7 +73,7 @@ class InvestmentPerformanceAnnualizedReturnPostgresIntegrationTests extends Post
 		UUID accountId = account.account().id();
 		AccountCreationResult cash = createCashAccount(userId, "10000.00");
 		MarketDataApplicationService.InstrumentView instrument = marketData.createInstrument(
-			userId, "STOCK", "B3 年化收益率股票", "CN", "CNY", "investment-annualized-return");
+			userId, "STOCK", "B3 年化收益率股票", "CN", "CNY", null, "investment-annualized-return");
 		marketData.createManualPrice(userId, instrument.id(), "CLOSE", AS_OF.atZone(ZONE).toLocalDate(),
 			new BigDecimal("15.00"), "CNY", "年化收益率估值", "investment-annualized-price");
 
@@ -96,7 +96,7 @@ class InvestmentPerformanceAnnualizedReturnPostgresIntegrationTests extends Post
 		AccountCreationResult account = createInvestmentAccount(userId, "10000.00");
 		UUID accountId = account.account().id();
 		MarketDataApplicationService.InstrumentView instrument = marketData.createInstrument(
-			userId, "STOCK", "B3 年化收益率失败股票", "CN", "CNY", "investment-annualized-fail");
+			userId, "STOCK", "B3 年化收益率失败股票", "CN", "CNY", null, "investment-annualized-fail");
 		marketData.createManualPrice(userId, instrument.id(), "CLOSE", AS_OF.atZone(ZONE).toLocalDate(),
 			new BigDecimal("15.00"), "CNY", "年化收益率失败估值", "investment-annualized-fail-price");
 

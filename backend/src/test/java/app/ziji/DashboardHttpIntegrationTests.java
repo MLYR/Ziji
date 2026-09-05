@@ -42,6 +42,7 @@ class DashboardHttpIntegrationTests extends PostgresIntegrationTestSupport {
 	@Autowired private DeviceSessionApplicationService sessions;
 	@Autowired private SyncOutboxConsumer outboxConsumer;
 	@Autowired private tools.jackson.databind.ObjectMapper objectMapper;
+	@Autowired private app.ziji.investment.application.InvestmentApplicationService investments;
 
 	@Test
 	void dashboardRebuildsCoreMetricsFromPostedFactsAndWarnsOnMissingRates() throws Exception {
@@ -132,6 +133,96 @@ class DashboardHttpIntegrationTests extends PostgresIntegrationTestSupport {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.data.summary.totalAssets").value("70000.00"))
 			.andExpect(jsonPath("$.data.dataQualityWarnings").isEmpty());
+	}
+
+	/** BE-DASH-004：券商现金、持仓市值、投资收益与行情质量完整纳入 Dashboard 且与投资 API 一致。 */
+	@Test
+	void dashboardIntegratesInvestmentPositionsAndMarketDataQualityWarnings() throws Exception {
+		User owner = user("dash-inv-owner");
+		String token = bearer(owner);
+		UUID account = createAccount(token, "dash-inv-account-0001", "INVESTMENT", "FUND", "券商现金", "CNY", "50000.00");
+		String instrumentId = createInstrument(token, "dash-inv-inst-0001", "STOCK", "投资整合股票");
+		createManualPrice(token, instrumentId, "CLOSE", "15.00");
+		String unpricedId = createInstrument(token, "dash-inv-inst-0002", "STOCK", "无价格股票");
+		postInvestmentTrade(token, "dash-inv-buy-0001", """
+			{"side":"BUY","investmentAccountId":"%s","instrumentId":"%s","quantity":"60",
+			 "unitPrice":"10.00","currency":"CNY","feeAmount":"0.00","taxAmount":"0.00",
+			 "tradeAt":"2026-08-18T02:00:00Z"}
+			""".formatted(account, instrumentId));
+		postInvestmentTrade(token, "dash-inv-buy-0002", """
+			{"side":"BUY","investmentAccountId":"%s","instrumentId":"%s","quantity":"10",
+			 "unitPrice":"5.00","currency":"CNY","feeAmount":"0.00","taxAmount":"0.00",
+			 "tradeAt":"2026-08-18T03:00:00Z"}
+			""".formatted(account, unpricedId));
+		drainOutbox();
+
+		MvcResult result = mvc.perform(get("/api/v1/dashboard")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+			.andExpect(status().isOk())
+			// 券商现金 49,350（50,000 - 600 - 50）+ 已估值持仓市值 900（60×15）；无价格持仓不计 0。
+			.andExpect(jsonPath("$.data.summary.investmentAssets").value("50250.00"))
+			.andExpect(jsonPath("$.data.summary.totalAssets").value("50250.00"))
+			.andExpect(jsonPath("$.data.summary.availableFunds").value("0.00"))
+			.andExpect(jsonPath("$.data.investmentOverview.brokerCash").value("49350.00"))
+			.andExpect(jsonPath("$.data.investmentOverview.positionMarketValue").value("900.00"))
+			.andExpect(jsonPath("$.data.investmentOverview.totalInvestmentAssets").value("50250.00"))
+			.andExpect(jsonPath("$.data.investmentOverview.unpricedInstrumentCount").value(1))
+			.andReturn();
+		assertTrue(hasWarning(json(result), "UNPRICED_INSTRUMENTS", 1), "无价格持仓必须提示 UNPRICED_INSTRUMENTS。");
+		assertTrue(!hasWarning(json(result), "STALE_MARKET_DATA", 1), "新建价格初始必须为 FRESH。");
+
+		// 将已估值产品的行情获取时间回拨到 10 天前：估值使用旧快照并提示 STALE_MARKET_DATA。
+		jdbc.update("UPDATE price_snapshots SET fetched_at = ? WHERE instrument_id = ?",
+			java.sql.Timestamp.from(Instant.now().minusSeconds(10L * 24 * 3600)), UUID.fromString(instrumentId));
+		MvcResult stale = mvc.perform(get("/api/v1/dashboard")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.data.summary.investmentAssets").value("50250.00"))
+			.andReturn();
+		assertTrue(hasWarning(json(stale), "STALE_MARKET_DATA", 1), "过期行情必须提示 STALE_MARKET_DATA。");
+	}
+
+	private String createInstrument(String token, String key, String type, String name) throws Exception {
+		MvcResult result = mvc.perform(post("/api/v1/instruments")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"instrumentType\":\"%s\",\"name\":\"%s\",\"market\":\"CN\",\"currency\":\"CNY\"}".formatted(type, name)))
+			.andExpect(status().isCreated()).andReturn();
+		return json(result).at("/data/id").asString();
+	}
+
+	private void createManualPrice(String token, String instrumentId, String priceType, String price) throws Exception {
+		mvc.perform(post("/api/v1/instruments/" + instrumentId + "/manual-prices")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+				.header("Idempotency-Key", "dash-inv-price-" + UUID.randomUUID())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"priceType\":\"%s\",\"businessDate\":\"%s\",\"price\":\"%s\",\"currency\":\"CNY\",\"reason\":\"投资整合估值\"}".formatted(priceType, java.time.LocalDate.now(), price)))
+			.andExpect(status().isCreated());
+	}
+
+	private void postInvestmentTrade(String token, String key, String body) throws Exception {
+		MvcResult tradeResult = mvc.perform(post("/api/v1/investment-trades")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + token).header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON).content(body))
+			.andReturn();
+		if (tradeResult.getResponse().getStatus() != 201) {
+			throw new AssertionError("trade 失败：" + tradeResult.getResponse().getStatus() + " "
+				+ tradeResult.getResponse().getContentAsString());
+		}
+	}
+
+	private boolean hasWarning(tools.jackson.databind.JsonNode result, String code, int affectedCount) {
+		var warnings = result.at("/data/dataQualityWarnings");
+		if (!warnings.isArray()) {
+			return false;
+		}
+		for (var warning : warnings) {
+			if (code.equals(warning.at("/code").asString())
+				&& affectedCount == warning.at("/affectedCount").asInt()) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private void drainOutbox() {

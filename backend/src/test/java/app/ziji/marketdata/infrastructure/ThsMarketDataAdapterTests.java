@@ -1,15 +1,11 @@
 package app.ziji.marketdata.infrastructure;
 
-import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
 import java.util.UUID;
 
@@ -26,136 +22,140 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** T-INV-002/003/005：Tushare 响应只转换为内部价格，失败不伪造价格并遵守重试边界。 */
-class TushareMarketDataAdapterTests {
+/** CHG-MD-001：同花顺 K 线/基金净值响应只转换为内部价格，失败不伪造价格并遵守重试边界。 */
+class ThsMarketDataAdapterTests {
 
-	private static final Instant NOW = Instant.parse("2026-09-03T00:00:00Z");
+	private static final Instant NOW = Instant.parse("2026-09-04T00:00:00Z");
 	private static final Instrument STOCK = instrument(InstrumentType.STOCK, "A 股测试");
 	private static final Instrument ETF = instrument(InstrumentType.ETF, "场内 ETF 测试");
 	private static final Instrument FUND = instrument(InstrumentType.FUND, "公募基金测试");
 
 	@Test
-	void mapsDailyStockResponseToClosePriceWithoutLeakingSupplierFields() {
-		FakeTransport transport = new FakeTransport(new TushareTransportResponse(200, """
-			{"code":0,"msg":"","data":{"fields":["ts_code","trade_date","close"],"items":[
-			["000001.SZ","20260901","10.50"],["000001.SZ","20260902","10.75"]]}}
+	void mapsKlineResponseToClosePricesWithinWindow() {
+		FakeTransport transport = new FakeTransport(new ThsTransportResponse(200, """
+			quotebridge_v6_line_hs_000001_01_last1800({"name":"平安银行","today":"20260905","data":
+			"20260901,11.68,11.96,11.65,11.92,152316450,1807254400.00,0.785;20260902,11.92,11.99,11.85,11.91,89224752,1063261810.00,0.460;20260903,11.88,12.08,11.83,11.88,110513439,1324230290.00,0.570"})
 			"""));
-		TushareMarketDataAdapter adapter = adapter(transport, "server-secret", 0);
+		ThsMarketDataAdapter adapter = adapter(transport);
 
-		var result = adapter.fetchPrices(STOCK, mapping("000001.SZ"), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 2));
+		var result = adapter.fetchPrices(STOCK, mapping("000001"), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 3));
 
 		assertEquals(SourceOutcome.SUCCESS, result.outcome());
-		assertEquals(1, result.attempts());
-		assertEquals(2, result.prices().size());
+		assertEquals(3, result.prices().size());
 		assertEquals("CLOSE", result.prices().getFirst().priceType().name());
 		assertEquals(LocalDate.of(2026, 9, 1), result.prices().getFirst().businessDate());
-		assertEquals(0, new BigDecimal("10.50").compareTo(result.prices().getFirst().price()));
-		assertTrue(transport.bodies.getFirst().contains("\"api_name\":\"daily\""));
-		assertTrue(transport.bodies.getFirst().contains("server-secret"));
-		assertFalse(result.prices().getFirst().rawPayloadHash().isBlank());
+		assertEquals(0, new BigDecimal("11.92").compareTo(result.prices().getFirst().price()));
+		assertTrue(result.prices().getFirst().rawPayloadHash().matches("[0-9a-f]{64}"));
+		assertTrue(transport.urls.getFirst().contains("v6/line/hs_000001/01/last1800.js"));
 	}
 
 	@Test
-	void mapsFundResponseToUnitNav() {
-		FakeTransport transport = new FakeTransport(new TushareTransportResponse(200, """
-			{"code":0,"data":{"fields":["ts_code","ann_date","nav_date","unit_nav"],"items":[
-			["000001.OF","20260902","20260901","1.2345"]]}}
+	void mapsEtfKlineToClosePriceAndSkipsRowsOutsideWindow() {
+		FakeTransport transport = new FakeTransport(new ThsTransportResponse(200, """
+			quotebridge_v6_line_hs_510300_01_last1800({"name":"沪深300ETF华泰柏瑞","today":"20260905","data":
+			"20260831,4.60,4.70,4.50,4.65,1,1.00,0.0;20260901,4.683,4.705,4.666,4.684,846798310,3962899800.000,3.682;20260905,4.637,4.672,4.599,4.616,841465540,3905673000.000,3.600"})
 			"""));
+		ThsMarketDataAdapter adapter = adapter(transport);
 
-		var result = adapter(transport, "server-secret", 0).fetchPrices(
-			FUND, mapping(FUND, "000001.OF"), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 2));
+		var result = adapter.fetchPrices(ETF, mapping(ETF, "510300"), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 4));
 
 		assertEquals(SourceOutcome.SUCCESS, result.outcome());
+		assertEquals(1, result.prices().size());
+		assertEquals(LocalDate.of(2026, 9, 1), result.prices().getFirst().businessDate());
+		assertEquals(0, new BigDecimal("4.684").compareTo(result.prices().getFirst().price()));
+	}
+
+	@Test
+	void mapsFundNavResponseToUnitNav() {
+		FakeTransport transport = new FakeTransport(new ThsTransportResponse(200, """
+			var dwjz_000001=[["20260901","1.2700"],["20260902","1.2790"],["20260904","1.2390"]]
+			"""));
+		ThsMarketDataAdapter adapter = adapter(transport);
+
+		var result = adapter.fetchPrices(FUND, mapping(FUND, "000001"), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 4));
+
+		assertEquals(SourceOutcome.SUCCESS, result.outcome());
+		assertEquals(3, result.prices().size());
 		assertEquals("UNIT_NAV", result.prices().getFirst().priceType().name());
-		assertEquals(LocalDate.of(2026, 9, 1), result.prices().getFirst().businessDate());
-		assertEquals(0, new BigDecimal("1.2345").compareTo(result.prices().getFirst().price()));
-		assertTrue(transport.bodies.getFirst().contains("\"api_name\":\"fund_nav\""));
+		assertEquals(0, new BigDecimal("1.2700").compareTo(result.prices().getFirst().price()));
+		assertTrue(transport.urls.getFirst().contains("fund.10jqka.com.cn/000001/json/jsondwjz.json"));
 	}
 
 	@Test
-	void mapsEtfResponseToClosePriceAndAcceptsNumericSupplierNodes() {
-		FakeTransport transport = new FakeTransport(new TushareTransportResponse(200, """
-			{"code":0,"data":{"fields":["ts_code","trade_date","close"],"items":[
-			["510300.SH",20260901,4.125]]}}
-			"""));
-
-		var result = adapter(transport, "server-secret", 0).fetchPrices(
-			ETF, mapping(ETF, "510300.SH"), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 1));
-
-		assertEquals(SourceOutcome.SUCCESS, result.outcome());
-		assertEquals("CLOSE", result.prices().getFirst().priceType().name());
-		assertEquals(LocalDate.of(2026, 9, 1), result.prices().getFirst().businessDate());
-		assertEquals(0, new BigDecimal("4.125").compareTo(result.prices().getFirst().price()));
-		assertTrue(transport.bodies.getFirst().contains("\"api_name\":\"fund_daily\""));
-	}
-
-	@Test
-	void retriesTransientFailureButReturnsNoTokenWithoutCallingTransport() {
+	void retriesTransientFailureAndStopsOnInterruptedWait() {
 		FakeTransport retrying = new FakeTransport(
-			new TushareTransportResponse(503, "unavailable"),
-			new TushareTransportResponse(200, """
-				{"code":0,"data":{"fields":["ts_code","trade_date","close"],"items":[["000001.SZ","20260901","10"]]}}
+			new ThsTransportResponse(503, "unavailable"),
+			new ThsTransportResponse(200, """
+				quotebridge_v6_line_hs_000001_01_last1800({"name":"平安银行","data":"20260901,11.68,11.96,11.65,11.92,1,1.00,0.0"})
 				"""));
-		List<Duration> waits = new ArrayList<>();
-		TushareMarketDataAdapter adapter = new TushareMarketDataAdapter(
-			retrying, new ObjectMapper(), "https://example.test", "server-secret", Duration.ofSeconds(1), 1,
-			new TushareRateLimiter(Clock.fixed(NOW, ZoneOffset.UTC), Duration.ZERO, 10), Clock.fixed(NOW, ZoneOffset.UTC), waits::add);
+		List<Duration> waits = new java.util.ArrayList<>();
+		ThsMarketDataAdapter adapter = new ThsMarketDataAdapter(
+			retrying, new ObjectMapper(), Duration.ofSeconds(1), 1,
+			new ThsRateLimiter(Clock.fixed(NOW, ZoneOffset.UTC), Duration.ZERO, 10), usageDate -> true,
+			Clock.fixed(NOW, ZoneOffset.UTC), waits::add);
 
-		var retried = adapter.fetchPrices(STOCK, mapping("000001.SZ"), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 1));
+		var retried = adapter.fetchPrices(STOCK, mapping("000001"), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 1));
 		assertEquals(SourceOutcome.SUCCESS, retried.outcome());
 		assertEquals(2, retried.attempts());
 		assertEquals(List.of(Duration.ofMillis(100)), waits);
-
-		FakeTransport noTokenTransport = new FakeTransport();
-		var noToken = new TushareMarketDataAdapter(
-			noTokenTransport, new ObjectMapper(), "https://example.test", "", Duration.ofSeconds(1), 2,
-			new TushareRateLimiter(Clock.fixed(NOW, ZoneOffset.UTC), Duration.ZERO, 10), Clock.fixed(NOW, ZoneOffset.UTC), waits::add)
-			.fetchPrices(STOCK, mapping("000001.SZ"), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 1));
-		assertEquals(SourceOutcome.NO_TOKEN, noToken.outcome());
-		assertEquals(0, noToken.attempts());
-		assertTrue(noTokenTransport.bodies.isEmpty());
 	}
 
 	@Test
-	void classifiesUnauthorizedAndRateLimitedResponsesWithoutPrices() {
-		FakeTransport transport = new FakeTransport(
-			new TushareTransportResponse(403, "forbidden"),
-			new TushareTransportResponse(429, "rate limited"));
-		TushareMarketDataAdapter adapter = adapter(transport, "server-secret", 0);
+	void returnsNoDataWhenResponseCannotBeParsedAsPrices() {
+		FakeTransport transport = new FakeTransport(new ThsTransportResponse(200, "<html>404</html>"));
+		ThsMarketDataAdapter adapter = adapter(transport);
 
-		var unauthorized = adapter.fetchPrices(STOCK, mapping("000001.SZ"), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 1));
-		var rateLimited = adapter.fetchPrices(STOCK, mapping("000001.SZ"), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 1));
+		var result = adapter.fetchPrices(STOCK, mapping("000001"), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 1));
 
-		assertEquals(SourceOutcome.UNAUTHORIZED, unauthorized.outcome());
-		assertTrue(unauthorized.prices().isEmpty());
-		assertEquals(SourceOutcome.RATE_LIMITED, rateLimited.outcome());
-		assertTrue(rateLimited.prices().isEmpty());
+		assertEquals(SourceOutcome.NO_DATA, result.outcome());
+		assertTrue(result.prices().isEmpty());
 	}
 
 	@Test
-	void interruptedRetryWaitStopsBeforeSendingAnotherSupplierRequest() {
-		FakeTransport transport = new FakeTransport(new TushareTransportResponse(503, "unavailable"));
-		TushareMarketDataAdapter adapter = new TushareMarketDataAdapter(
-			transport, new ObjectMapper(), "https://example.test", "server-secret", Duration.ofSeconds(1), 2,
-			new TushareRateLimiter(Clock.fixed(NOW, ZoneOffset.UTC), Duration.ZERO, 10), Clock.fixed(NOW, ZoneOffset.UTC), ignored -> {
-				Thread.currentThread().interrupt();
+	void quotaExhaustedReturnsRateLimitedWithoutCallingTransport() {
+		FakeTransport transport = new FakeTransport(new ThsTransportResponse(200, ""));
+		ThsMarketDataAdapter adapter = new ThsMarketDataAdapter(
+			transport, new ObjectMapper(), Duration.ofSeconds(1), 0,
+			new ThsRateLimiter(Clock.fixed(NOW, ZoneOffset.UTC), Duration.ZERO, 10), usageDate -> false,
+			Clock.fixed(NOW, ZoneOffset.UTC), ignored -> {
 			});
 
-		try {
-			var result = adapter.fetchPrices(STOCK, mapping("000001.SZ"), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 1));
+		var result = adapter.fetchPrices(STOCK, mapping("000001"), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 1));
 
-			assertEquals(SourceOutcome.TIMEOUT, result.outcome());
-			assertEquals(1, result.attempts());
-			assertEquals(1, transport.bodies.size());
-		} finally {
-			Thread.interrupted();
-		}
+		assertEquals(SourceOutcome.RATE_LIMITED, result.outcome());
+		assertTrue(result.prices().isEmpty());
+		assertTrue(transport.urls.isEmpty());
 	}
 
-	private static TushareMarketDataAdapter adapter(FakeTransport transport, String token, int maxRetries) {
-		return new TushareMarketDataAdapter(
-			transport, new ObjectMapper(), "https://example.test", token, Duration.ofSeconds(1), maxRetries,
-			new TushareRateLimiter(Clock.fixed(NOW, ZoneOffset.UTC), Duration.ZERO, 10), Clock.fixed(NOW, ZoneOffset.UTC), ignored -> {
+	@Test
+	void rejectsNonThsMappingsAndOtherInstrumentTypesWithoutCallingTransport() {
+		FakeTransport transport = new FakeTransport(new ThsTransportResponse(200, "x"));
+		ThsMarketDataAdapter adapter = adapter(transport);
+
+		var wrongSource = adapter.fetchPrices(STOCK, new InstrumentSourceMapping(
+			UUID.randomUUID(), STOCK.id(), PriceSource.MANUAL, "000001", "CN", null, null),
+			LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 1));
+		var otherType = adapter.fetchPrices(instrument(InstrumentType.OTHER, "其他"), mapping("000001"),
+			LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 1));
+
+		assertEquals(SourceOutcome.ERROR, wrongSource.outcome());
+		assertEquals(SourceOutcome.ERROR, otherType.outcome());
+		assertTrue(transport.urls.isEmpty());
+	}
+
+	@Test
+	void remoteSearchIsUnavailableAndReturnsEmpty() {
+		FakeTransport transport = new FakeTransport(new ThsTransportResponse(200, "x"));
+
+		assertTrue(adapter(transport).searchBasics("平安").isEmpty());
+		assertTrue(transport.urls.isEmpty(), "同花顺无公开搜索接口，不得发起任何请求。");
+	}
+
+	private static ThsMarketDataAdapter adapter(FakeTransport transport) {
+		return new ThsMarketDataAdapter(
+			transport, new ObjectMapper(), Duration.ofSeconds(1), 0,
+			new ThsRateLimiter(Clock.fixed(NOW, ZoneOffset.UTC), Duration.ZERO, 10), usageDate -> true,
+			Clock.fixed(NOW, ZoneOffset.UTC), ignored -> {
 			});
 	}
 
@@ -168,29 +168,21 @@ class TushareMarketDataAdapterTests {
 	}
 
 	private static InstrumentSourceMapping mapping(Instrument instrument, String externalCode) {
-		return new InstrumentSourceMapping(UUID.randomUUID(), instrument.id(), PriceSource.TUSHARE, externalCode, "CN", null, null);
+		return new InstrumentSourceMapping(UUID.randomUUID(), instrument.id(), PriceSource.THS, externalCode, "CN", null, null);
 	}
 
-	private static final class FakeTransport implements TushareTransport {
-		private final Deque<Object> responses = new ArrayDeque<>();
-		private final List<String> bodies = new ArrayList<>();
+	private static final class FakeTransport implements ThsTransport {
+		private final java.util.Deque<ThsTransportResponse> responses = new java.util.ArrayDeque<>();
+		private final List<String> urls = new java.util.ArrayList<>();
 
-		private FakeTransport(Object... responses) {
+		private FakeTransport(ThsTransportResponse... responses) {
 			this.responses.addAll(List.of(responses));
 		}
 
 		@Override
-		public TushareTransportResponse post(String endpoint, String body, Duration timeout)
-			throws IOException, InterruptedException {
-			bodies.add(body);
-			Object response = responses.removeFirst();
-			if (response instanceof IOException exception) {
-				throw exception;
-			}
-			if (response instanceof InterruptedException exception) {
-				throw exception;
-			}
-			return (TushareTransportResponse) response;
+		public ThsTransportResponse get(String url, Duration timeout) {
+			urls.add(url);
+			return responses.removeFirst();
 		}
 	}
 }

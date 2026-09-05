@@ -71,7 +71,7 @@ class InvestmentReturnCalendarRevisionPostgresIntegrationTests extends PostgresI
 		UUID userId = insertUser();
 		AccountCreationResult account = createInvestmentAccount(userId);
 		MarketDataApplicationService.InstrumentView instrument = marketData.createInstrument(
-			userId, "STOCK", "B3 收益修订测试", "CN", "CNY", "return-calendar-revision");
+			userId, "STOCK", "B3 收益修订测试", "CN", "CNY", null, "return-calendar-revision");
 		MarketDataApplicationService.PriceView firstPrice = marketData.createManualPrice(
 			userId, instrument.id(), "CLOSE", PRICE_DATE, new BigDecimal("10.00"), "CNY", "首次价格", "return-price-01");
 		investments.createTrade(new InvestmentTradeCommand(
@@ -138,7 +138,7 @@ class InvestmentReturnCalendarRevisionPostgresIntegrationTests extends PostgresI
 	void manualPriceTypeMustMatchInstrumentValuationSemantics() {
 		UUID userId = insertUser();
 		MarketDataApplicationService.InstrumentView stock = marketData.createInstrument(
-			userId, "STOCK", "B3 价格类型测试", "CN", "CNY", "price-type-validation");
+			userId, "STOCK", "B3 价格类型测试", "CN", "CNY", null, "price-type-validation");
 
 		assertThrows(MarketDataValidationException.class, () -> marketData.createManualPrice(
 			userId, stock.id(), "UNIT_NAV", PRICE_DATE, new BigDecimal("10.00"), "CNY", "错误类型", "price-type-01"));
@@ -149,7 +149,7 @@ class InvestmentReturnCalendarRevisionPostgresIntegrationTests extends PostgresI
 		UUID userId = insertUser();
 		AccountCreationResult account = createInvestmentAccount(userId);
 		MarketDataApplicationService.InstrumentView instrument = marketData.createInstrument(
-			userId, "STOCK", "B3 历史计入测试", "CN", "CNY", "historical-inclusion");
+			userId, "STOCK", "B3 历史计入测试", "CN", "CNY", null, "historical-inclusion");
 		marketData.createManualPrice(userId, instrument.id(), "CLOSE", PRICE_DATE, new BigDecimal("10.00"),
 			"CNY", "历史计入估值", "historical-inclusion-price");
 		investments.createTrade(new InvestmentTradeCommand(
@@ -201,7 +201,7 @@ class InvestmentReturnCalendarRevisionPostgresIntegrationTests extends PostgresI
 		UUID userId = insertUser();
 		AccountCreationResult account = createInvestmentAccount(userId);
 		MarketDataApplicationService.InstrumentView instrument = marketData.createInstrument(
-			userId, "STOCK", "B3 投影重建测试", "CN", "CNY", "projection-rebuild-inst");
+			userId, "STOCK", "B3 投影重建测试", "CN", "CNY", null, "projection-rebuild-inst");
 		marketData.createManualPrice(
 			userId, instrument.id(), "CLOSE", PRICE_DATE, new BigDecimal("10.00"), "CNY", "重建价格", "projection-price-01");
 		investments.createTrade(new InvestmentTradeCommand(
@@ -271,9 +271,9 @@ class InvestmentReturnCalendarRevisionPostgresIntegrationTests extends PostgresI
 			Timestamp.from(ACCOUNT_OPENED_AT), Timestamp.from(ACCOUNT_OPENED_AT), membershipId);
 
 		MarketDataApplicationService.InstrumentView stockA = marketData.createInstrument(
-			userId, "STOCK", "标的A有价格", "CN", "CNY", "inst-status-a");
+			userId, "STOCK", "标的A有价格", "CN", "CNY", null, "inst-status-a");
 		MarketDataApplicationService.InstrumentView stockB = marketData.createInstrument(
-			userId, "STOCK", "标的B无价格", "CN", "CNY", "inst-status-b");
+			userId, "STOCK", "标的B无价格", "CN", "CNY", null, "inst-status-b");
 
 		// 2026-08-12：stockA 发生日内买入并全额卖出（日初日末持仓为 0，但有交易事件）
 		investments.createTrade(new InvestmentTradeCommand(
@@ -330,7 +330,7 @@ class InvestmentReturnCalendarRevisionPostgresIntegrationTests extends PostgresI
 		UUID userId = insertUser();
 		AccountCreationResult account = createInvestmentAccount(userId);
 		MarketDataApplicationService.InstrumentView instrument = marketData.createInstrument(
-			userId, "STOCK", "B3 并发日历测试", "CN", "CNY", "concurrent-cal-inst");
+			userId, "STOCK", "B3 并发日历测试", "CN", "CNY", null, "concurrent-cal-inst");
 		marketData.createManualPrice(
 			userId, instrument.id(), "CLOSE", PRICE_DATE, new BigDecimal("10.00"), "CNY", "并发价格", "concurrent-price-01");
 		investments.createTrade(new InvestmentTradeCommand(

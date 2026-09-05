@@ -73,7 +73,7 @@ class InvestmentGoldenSamplePostgresIntegrationTests extends PostgresIntegration
 		AccountCreationResult account = createInvestmentAccount(userId, "10000.00");
 		backdateMembership(account.account().id());
 		MarketDataApplicationService.InstrumentView instrument = marketData.createInstrument(
-			userId, "STOCK", "B3 测试股票", "CN", "CNY", "investment-golden-sample");
+			userId, "STOCK", "B3 测试股票", "CN", "CNY", null, "investment-golden-sample");
 		marketData.createManualPrice(userId, instrument.id(), "CLOSE", AS_OF.atZone(ZoneId.of("Asia/Shanghai")).toLocalDate(),
 			new BigDecimal("15.00"), "CNY", "金标准估值", "investment-price-01");
 
@@ -165,7 +165,7 @@ class InvestmentGoldenSamplePostgresIntegrationTests extends PostgresIntegration
 		UUID userId = insertUser();
 		AccountCreationResult account = createInvestmentAccount(userId, "1000.00");
 		MarketDataApplicationService.InstrumentView instrument = marketData.createInstrument(
-			userId, "ETF", "B3 负持仓测试", "CN", "CNY", "investment-oversell-sample");
+			userId, "ETF", "B3 负持仓测试", "CN", "CNY", null, "investment-oversell-sample");
 		investments.createTrade(command(
 			userId, account.account().id(), instrument.id(), InvestmentSide.BUY, "10", "10", null, "0.00", "0.00", BUY_AT));
 

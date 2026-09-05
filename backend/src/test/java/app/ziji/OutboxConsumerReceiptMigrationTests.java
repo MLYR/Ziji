@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-/** V014/V015/V017/V018 验收：每消费者 outbox 回执、内置 SYNC/EMAIL 订阅与历史升级基线。 */
+/** V014/V015/V017/V018/V019 验收：每消费者 outbox 回执、内置 SYNC/EMAIL 订阅、历史升级基线与同步运行/配额表。 */
 @Testcontainers
 class OutboxConsumerReceiptMigrationTests {
 
@@ -36,13 +36,17 @@ class OutboxConsumerReceiptMigrationTests {
 	private static final org.testcontainers.postgresql.PostgreSQLContainer V015_UPGRADE_POSTGRES = newContainer(
 		"ziji_outbox_receipt_v015_upgrade");
 
+	@Container
+	private static final org.testcontainers.postgresql.PostgreSQLContainer V019_UPGRADE_POSTGRES = newContainer(
+		"ziji_outbox_receipt_v019_upgrade");
+
 	@Test
 	void emptyDatabaseCreatesIndependentReceiptFactsAndConstraints() throws Exception {
 		migrate(EMPTY_POSTGRES, null);
 		migrate(EMPTY_POSTGRES, null);
 		try (Connection connection = connection(EMPTY_POSTGRES)) {
 			Instant syncSubscriptionStart = syncSubscriptionStart(connection, "TransactionPosted");
-			assertEquals(18, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			assertEquals(20, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
 			assertEquals(1, count(connection, """
 				SELECT COUNT(*) FROM outbox_consumer_subscriptions
 				WHERE consumer_name = 'SYNC' AND aggregate_type = 'Transaction'
@@ -183,7 +187,7 @@ class OutboxConsumerReceiptMigrationTests {
 		migrate(V015_UPGRADE_POSTGRES, null);
 
 		try (Connection connection = connection(V015_UPGRADE_POSTGRES)) {
-			assertEquals(18, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			assertEquals(20, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
 			assertEquals(-920552827, checksum(connection, "015"));
 			Instant subscriptionStart = syncSubscriptionStart(connection, "TransactionPosted");
 			assertFalse(Instant.EPOCH.equals(subscriptionStart));
@@ -205,7 +209,7 @@ class OutboxConsumerReceiptMigrationTests {
 		migrate(UPGRADE_POSTGRES, null);
 
 		try (Connection connection = connection(UPGRADE_POSTGRES)) {
-			assertEquals(18, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			assertEquals(20, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
 			assertEquals(previousChecksums, checksumsThroughV013(connection));
 			assertFalse(Instant.EPOCH.equals(syncSubscriptionStart(connection, "TransactionPosted")));
 			assertEmailSubscriptionInitialized(connection);
@@ -213,6 +217,53 @@ class OutboxConsumerReceiptMigrationTests {
 				SELECT COUNT(*) FROM pg_constraint
 				WHERE conrelid = 'outbox_consumer_receipts'::regclass
 				  AND conname = 'ck_outbox_consumer_receipts_lifecycle'
+				"""));
+		}
+	}
+
+	@Test
+	void v019AndV020AddMarketDataSyncQuotaAndThsSourceTables() throws Exception {
+		migrate(V019_UPGRADE_POSTGRES, "18");
+		migrate(V019_UPGRADE_POSTGRES, null);
+
+		try (Connection connection = connection(V019_UPGRADE_POSTGRES)) {
+			assertEquals(20, count(connection, "SELECT COUNT(*) FROM flyway_schema_history"));
+			// 两张新表及其注释、状态约束和索引必须存在。
+			assertEquals(1, count(connection, """
+				SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'market_data_sync_runs'
+				"""));
+			assertEquals(1, count(connection, """
+				SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'market_data_daily_quotas'
+				"""));
+			assertEquals(1, count(connection, """
+				SELECT COUNT(*) FROM pg_constraint
+				WHERE conrelid = 'market_data_sync_runs'::regclass AND conname = 'market_data_sync_runs_status_check'
+				"""));
+			assertEquals(1, count(connection, """
+				SELECT COUNT(*) FROM pg_constraint
+				WHERE conrelid = 'market_data_daily_quotas'::regclass AND conname = 'market_data_daily_quotas_used_calls_check'
+				"""));
+			assertEquals(1, count(connection, """
+				SELECT COUNT(*) FROM pg_indexes
+				WHERE tablename = 'market_data_sync_runs' AND indexname = 'idx_sync_runs_started'
+				"""));
+			assertEquals(2, count(connection, """
+				SELECT COUNT(*) FROM pg_description d
+				JOIN pg_class c ON c.oid = d.objoid
+				WHERE c.relname IN ('market_data_sync_runs', 'market_data_daily_quotas') AND d.objsubid = 0
+				"""));
+			// V020：行情数据源枚举切换为 THS 并保留历史 TUSHARE 值。
+			assertEquals(1, count(connection, """
+				SELECT COUNT(*) FROM pg_constraint
+				WHERE conrelid = 'instrument_source_mappings'::regclass
+				  AND conname = 'instrument_source_mappings_source_check'
+				  AND pg_get_constraintdef(oid) LIKE '%THS%'
+				"""));
+			assertEquals(1, count(connection, """
+				SELECT COUNT(*) FROM pg_constraint
+				WHERE conrelid = 'price_snapshots'::regclass
+				  AND conname = 'price_snapshots_source_check'
+				  AND pg_get_constraintdef(oid) LIKE '%THS%'
 				"""));
 		}
 	}

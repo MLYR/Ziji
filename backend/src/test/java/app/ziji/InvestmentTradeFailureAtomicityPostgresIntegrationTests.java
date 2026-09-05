@@ -64,7 +64,7 @@ class InvestmentTradeFailureAtomicityPostgresIntegrationTests extends PostgresIn
 		ownerId = insertUser();
 		investmentAccountId = createInvestmentAccount(ownerId, "10000.00").account().id();
 		instrumentId = marketData.createInstrument(
-			ownerId, "STOCK", "B3 原子性测试股票", "CN", "CNY", "investment-atomicity-" + UUID.randomUUID()).id();
+			ownerId, "STOCK", "B3 原子性测试股票", "CN", "CNY", null, "investment-atomicity-" + UUID.randomUUID()).id();
 		marketData.createManualPrice(ownerId, instrumentId, "CLOSE", AS_OF.atZone(ZONE).toLocalDate(),
 			new BigDecimal("15.00"), "CNY", "亏损场景估值", "investment-atomicity-price");
 	}

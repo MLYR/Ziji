@@ -78,7 +78,7 @@ class InvestmentPermissionMatrixPostgresIntegrationTests extends PostgresIntegra
 		AccountCreationResult account = createInvestmentAccount(ownerId, "10000.00");
 		investmentAccountId = account.account().id();
 		instrumentId = marketData.createInstrument(
-			ownerId, "STOCK", "B3 权限矩阵股票", "CN", "CNY", "investment-permission-" + UUID.randomUUID()).id();
+			ownerId, "STOCK", "B3 权限矩阵股票", "CN", "CNY", null, "investment-permission-" + UUID.randomUUID()).id();
 		// 开户流程把 membership 生效时间写成运行时当前时间，而收益日历与概览按历史时点过滤可见账户。
 		// 不回拨生效时间，固定的历史 AS_OF 会让所有主体都查不到账户，权限差异会被掩盖成「都看不见」。
 		backdateMembership(investmentAccountId);

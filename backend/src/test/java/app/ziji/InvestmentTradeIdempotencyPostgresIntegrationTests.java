@@ -75,7 +75,7 @@ class InvestmentTradeIdempotencyPostgresIntegrationTests extends PostgresIntegra
 		ownerId = insertUser();
 		investmentAccountId = createInvestmentAccount(ownerId, "10000.00").account().id();
 		instrumentId = marketData.createInstrument(
-			ownerId, "STOCK", "B3 幂等测试股票", "CN", "CNY", "investment-idempotency-" + UUID.randomUUID()).id();
+			ownerId, "STOCK", "B3 幂等测试股票", "CN", "CNY", null, "investment-idempotency-" + UUID.randomUUID()).id();
 		marketData.createManualPrice(ownerId, instrumentId, "CLOSE", AS_OF.atZone(ZONE).toLocalDate(),
 			new BigDecimal("15.00"), "CNY", "估值", "investment-idempotency-price");
 	}
