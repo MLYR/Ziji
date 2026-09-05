@@ -299,7 +299,7 @@ export function InvestmentScreen({ api, accountsApi, onOpenAccount, onOpenAccoun
 
       <View className="gap-3 rounded-xl bg-surface-light p-4 dark:bg-surface-dark" testID="investment-product-search">
         <Text className="text-xl font-bold text-ink-light dark:text-ink-dark" accessibilityRole="header">搜索金融产品</Text>
-        <Text className="text-sm leading-5 text-muted-light dark:text-muted-dark">支持股票、基金、ETF 和手工证券；自动行情来自服务端 Tushare，页面不直接访问供应商。</Text>
+        <Text className="text-sm leading-5 text-muted-light dark:text-muted-dark">支持股票、基金、ETF 和手工证券；自动行情来自服务端同花顺公开数据，页面不直接访问供应商。</Text>
         <TextInput
           accessibilityLabel="搜索金融产品"
           value={searchQuery}
@@ -544,7 +544,7 @@ function MarketQualityCard({ status }: { status: MarketDataStatusEnvelope['data'
       {status ? (
         <>
           <Text className="text-sm text-ink-light dark:text-ink-dark">状态：{MARKET_STATUS_LABELS[status.status]} · 新鲜度：{FRESHNESS_LABELS[status.freshness]}</Text>
-          <Text className="text-sm text-ink-light dark:text-ink-dark">来源：Tushare Pro（盘后行情 / 最新公布净值）</Text>
+          <Text className="text-sm text-ink-light dark:text-ink-dark">来源：同花顺（盘后行情 / 最新公布净值）</Text>
           <Text className="text-xs text-muted-light dark:text-muted-dark">最近成功同步：{status.lastSuccessfulSyncAt ?? '暂无成功同步'}</Text>
           {status.status !== 'AVAILABLE' || status.freshness !== 'FRESH' ? (
             <Text accessibilityRole="alert" className="text-sm text-amber-700 dark:text-amber-300">行情可能不可用或已过期；页面不会将缺失价格当作 0。</Text>

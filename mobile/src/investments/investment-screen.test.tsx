@@ -35,7 +35,7 @@ const overview: InvestmentOverviewEnvelope = {
 
 const marketStatus: MarketDataStatusEnvelope = {
   data: {
-    source: 'TUSHARE',
+    source: 'THS',
     status: 'DEGRADED',
     lastSuccessfulSyncAt: '2026-09-03T06:00:00Z',
     freshness: 'STALE',
@@ -51,7 +51,7 @@ const instrument = {
   currency: 'CNY',
   status: 'ACTIVE' as const,
   version: 1,
-  sourceMappings: [{ source: 'TUSHARE' as const, externalCode: '510300.SZ', sourceMarket: 'SZ' }],
+  sourceMappings: [{ source: 'THS' as const, externalCode: '510300', sourceMarket: 'SH' }],
 };
 
 const portfolioCalendar = {
@@ -144,7 +144,7 @@ describe('Mobile 投资主页面', () => {
     expect(view.getByText('35000.00 CNY')).toBeTruthy();
     expect(view.getByText('有 2 个标的缺少有效价格，未估值字段保持为空，请打开持仓详情处理。')).toBeTruthy();
     expect(view.getByText('状态：降级 · 新鲜度：已过期')).toBeTruthy();
-    expect(view.getByText('来源：Tushare Pro（盘后行情 / 最新公布净值）')).toBeTruthy();
+    expect(view.getByText('来源：同花顺（盘后行情 / 最新公布净值）')).toBeTruthy();
     expect(view.getByText('华泰证券 · CNY')).toBeTruthy();
     // “部分估值”同时出现在日历状态与汇总语义中，按日期定位避免测试依赖重复文本。
     expect(view.getByTestId('investment-return-day-2026-08-04').props.accessibilityLabel).toContain('部分估值');
