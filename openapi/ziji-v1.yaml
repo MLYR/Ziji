@@ -1027,7 +1027,7 @@ paths:
 
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
-  # Investments and market data. Tushare is the V1 external source; manual records remain supported.
+  # Investments and market data. 同花顺公开接口是 V1 外部行情来源；手工产品与价格兜底始终可用。
   /instruments/search:
     get:
       tags: [Investments]
@@ -2336,6 +2336,11 @@ components:
         name: { type: string, minLength: 1, maxLength: 200 }
         market: { type: string, minLength: 1, maxLength: 40, default: MANUAL }
         currency: { $ref: '#/components/schemas/Currency' }
+        sourceCode:
+          type: string
+          minLength: 1
+          maxLength: 20
+          description: 可选同花顺 6 位产品代码；提供后创建 THS 映射并参与盘后增量同步，不提供则保持纯手工产品。
     CreatePriceRequest:
       type: object
       additionalProperties: false
@@ -2846,7 +2851,7 @@ components:
             additionalProperties: false
             required: [source, externalCode]
             properties:
-              source: { type: string, enum: [TUSHARE, MANUAL] }
+              source: { type: string, enum: [THS, MANUAL] }
               externalCode: { type: string }
               sourceMarket: { type: [string, 'null'] }
     PriceSnapshot:
@@ -2860,7 +2865,7 @@ components:
         price: { $ref: '#/components/schemas/Rate' }
         currency: { $ref: '#/components/schemas/Currency' }
         businessDate: { type: string, format: date }
-        source: { type: string, enum: [TUSHARE, MANUAL] }
+        source: { type: string, enum: [THS, MANUAL] }
         revision: { type: integer, minimum: 1 }
         sourceUpdatedAt: { type: [string, 'null'], format: date-time }
         fetchedAt: { type: string, format: date-time }
@@ -3565,7 +3570,7 @@ components:
           additionalProperties: false
           required: [source, status, lastSuccessfulSyncAt, freshness]
           properties:
-            source: { type: string, const: TUSHARE }
+            source: { type: string, const: THS }
             status: { type: string, enum: [AVAILABLE, DEGRADED, UNAVAILABLE] }
             lastSuccessfulSyncAt: { type: [string, 'null'], format: date-time }
             freshness: { type: string, enum: [FRESH, STALE, UNAVAILABLE] }
@@ -3804,7 +3809,7 @@ components:
     InstrumentListOk: { description: 金融产品搜索结果, content: { application/json: { schema: { $ref: '#/components/schemas/InstrumentListEnvelope' } } } }
     PriceCreated: { description: 新价格修订已创建, content: { application/json: { schema: { $ref: '#/components/schemas/PriceEnvelope' } } } }
     PriceListOk: { description: 当前价格修订列表, content: { application/json: { schema: { $ref: '#/components/schemas/PriceListEnvelope' } } } }
-    MarketDataStatusOk: { description: Tushare 行情同步状态, content: { application/json: { schema: { $ref: '#/components/schemas/MarketDataStatusEnvelope' } } } }
+    MarketDataStatusOk: { description: 同花顺行情同步状态, content: { application/json: { schema: { $ref: '#/components/schemas/MarketDataStatusEnvelope' } } } }
     InvestmentTradeCreated: { description: 投资交易和同一事务内的账务分录已创建, content: { application/json: { schema: { $ref: '#/components/schemas/InvestmentTradeEnvelope' } } } }
     InvestmentTradeListOk: { description: 投资交易列表, content: { application/json: { schema: { $ref: '#/components/schemas/InvestmentTradeListEnvelope' } } } }
     PositionListOk: { description: 持仓列表；未估值字段显式为 null, content: { application/json: { schema: { $ref: '#/components/schemas/PositionListEnvelope' } } } }

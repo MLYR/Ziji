@@ -2031,6 +2031,8 @@ export interface components {
             /** @default MANUAL */
             market: string;
             currency: components["schemas"]["Currency"];
+            /** @description 可选同花顺 6 位产品代码；提供后创建 THS 映射并参与盘后增量同步，不提供则保持纯手工产品。 */
+            sourceCode?: string;
         };
         CreatePriceRequest: {
             /** @enum {string} */
@@ -2548,7 +2550,7 @@ export interface components {
             version: number;
             sourceMappings: {
                 /** @enum {string} */
-                source: "TUSHARE" | "MANUAL";
+                source: "THS" | "MANUAL";
                 externalCode: string;
                 sourceMarket?: string | null;
             }[];
@@ -2565,7 +2567,7 @@ export interface components {
             /** Format: date */
             businessDate: string;
             /** @enum {string} */
-            source: "TUSHARE" | "MANUAL";
+            source: "THS" | "MANUAL";
             revision: number;
             /** Format: date-time */
             sourceUpdatedAt?: string | null;
@@ -3165,7 +3167,7 @@ export interface components {
         MarketDataStatusEnvelope: {
             data: {
                 /** @constant */
-                source: "TUSHARE";
+                source: "THS";
                 /** @enum {string} */
                 status: "AVAILABLE" | "DEGRADED" | "UNAVAILABLE";
                 /** Format: date-time */
@@ -3835,7 +3837,7 @@ export interface components {
                 "application/json": components["schemas"]["PriceListEnvelope"];
             };
         };
-        /** @description Tushare 行情同步状态 */
+        /** @description 同花顺行情同步状态 */
         MarketDataStatusOk: {
             headers: {
                 [name: string]: unknown;
