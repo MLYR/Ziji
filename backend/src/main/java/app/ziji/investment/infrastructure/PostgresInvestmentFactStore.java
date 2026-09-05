@@ -77,6 +77,19 @@ public class PostgresInvestmentFactStore implements InvestmentFactReadPort {
 	}
 
 	@Override
+	public void lockAccountForTrade(UUID accountId) {
+		if (accountId == null) {
+			throw new IllegalStateException("投资账户锁参数无效。");
+		}
+		try {
+			// 与账务模块相同的行锁语义；在卖出校验前取得，防止并发超卖。
+			jdbc.query("SELECT id FROM accounts WHERE id = ? FOR UPDATE", result -> null, accountId);
+		} catch (RuntimeException exception) {
+			throw new IllegalStateException("投资账户行锁失败。", exception);
+		}
+	}
+
+	@Override
 	public Optional<InstrumentSnapshot> findInstrument(UUID instrumentId) {
 		if (instrumentId == null) {
 			return Optional.empty();

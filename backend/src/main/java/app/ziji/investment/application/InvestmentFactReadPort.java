@@ -18,6 +18,9 @@ public interface InvestmentFactReadPort {
 
 	Optional<InstrumentSnapshot> findInstrument(UUID instrumentId);
 
+	/** 对投资账户行加排他锁直到当前事务结束；并发卖出串行化，防止超卖。 */
+	void lockAccountForTrade(UUID accountId);
+
 	record InstrumentSnapshot(
 		UUID id,
 		InstrumentType type,

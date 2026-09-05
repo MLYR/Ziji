@@ -100,11 +100,16 @@ public class InvestmentApplicationService implements InvestmentDashboardPort {
 		if (command == null) {
 			throw new InvestmentRequestValidationException("投资成交命令不能为空。");
 		}
+		// 卖出校验与账务写入必须在同一事务内完成；账户行锁保证并发卖出串行化，防止超卖。
+		return transactions.required(() -> createTradeLocked(command));
+	}
+
+	private InvestmentTradeResult createTradeLocked(InvestmentTradeCommand command) {
 		AccountPostingReference account = requireWritableInvestmentAccount(command.userId(), command.investmentAccountId());
 		InvestmentFactReadPort.InstrumentSnapshot instrument = facts.findInstrument(command.instrumentId())
 			.orElseThrow(() -> new InvestmentNotVisibleException());
 		if (!"ACTIVE".equals(instrument.status())) {
-				throw new InvestmentBusinessRuleException("停用或退市产品不能新增投资成交。");
+			throw new InvestmentBusinessRuleException("停用或退市产品不能新增投资成交。");
 		}
 		if (!account.currency().equals(command.currency()) || !instrument.currency().equals(command.currency())) {
 			throw new InvestmentBusinessRuleException("投资账户、产品和成交币种必须一致。");
@@ -113,6 +118,8 @@ public class InvestmentApplicationService implements InvestmentDashboardPort {
 		BigDecimal grossAmount = grossAmount(command, currency);
 		BigDecimal sellCostBasis = BigDecimal.ZERO;
 		if (command.side() == InvestmentSide.SELL) {
+			// 先取得与账务模块同语义的账户行锁，再重建持仓并校验数量。
+			facts.lockAccountForTrade(command.investmentAccountId());
 			Position current = positionBefore(command.investmentAccountId(), command.instrumentId(), command.tradeAt());
 			try {
 				sellCostBasis = round(current.sell(command.quantity()).releasedCost(), currency);
@@ -120,14 +127,16 @@ public class InvestmentApplicationService implements InvestmentDashboardPort {
 				throw new InvestmentBusinessRuleException("卖出数量超过当前持仓。");
 			}
 		}
+		// 客户端未提供成交 ID 时由服务端生成；结果和幂等响应必须引用同一稳定 ID。
+		UUID tradeId = command.tradeId() == null ? UUID.randomUUID() : command.tradeId();
 		InvestmentLedgerCommand ledgerCommand = new InvestmentLedgerCommand(
-			command.userId(), command.tradeId(), command.investmentAccountId(), command.instrumentId(),
+			command.userId(), tradeId, command.investmentAccountId(), command.instrumentId(),
 			InvestmentLedgerCommand.Side.valueOf(command.side().name()), command.quantity(), command.unitPrice(),
 			grossAmount, command.feeAmount(), command.taxAmount(), sellCostBasis, currency,
 			command.tradeAt(), command.tradeAt().atZone(ZoneId.of(command.timezone())).toLocalDate(), command.timezone(), command.note());
 		var ledgerResult = ledger.postInvestmentTrade(ledgerCommand);
 		return new InvestmentTradeResult(
-			command.tradeId(), ledgerResult.transactionId(), command.investmentAccountId(), command.instrumentId(), command.side(),
+			tradeId, ledgerResult.transactionId(), command.investmentAccountId(), command.instrumentId(), command.side(),
 			command.quantity(), command.unitPrice(), command.currency(), grossAmount, command.feeAmount(), command.taxAmount(), command.tradeAt());
 	}
 
