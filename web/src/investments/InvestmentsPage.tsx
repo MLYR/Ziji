@@ -15,7 +15,7 @@ import {
   SearchIcon,
   TriangleAlertIcon,
 } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -66,8 +66,9 @@ const INSTRUMENT_TYPES: { value: CreateInstrumentBody['instrumentType']; label: 
   { value: 'OTHER', label: '其他证券' },
 ]
 const PRICE_TYPES: { value: CreatePriceBody['priceType']; label: string }[] = [
-  { value: 'MANUAL', label: '手工价格' },
+  { value: 'CLOSE', label: '手工收盘价' },
   { value: 'UNIT_NAV', label: '手工单位净值' },
+  { value: 'MANUAL', label: '手工价格' },
 ]
 const TRADE_SIDES: { value: TradeSide; label: string }[] = [
   { value: 'BUY', label: '买入' },
@@ -100,7 +101,7 @@ const WARNING_LABELS: Record<DataQualityWarning['code'], string> = {
 }
 
 const PRICE_SOURCE_LABELS: Record<PriceSnapshot['source'], string> = {
-  TUSHARE: 'Tushare Pro（盘后）',
+  THS: '同花顺（盘后）',
   MANUAL: '手工价格',
 }
 
@@ -187,7 +188,7 @@ function displayTimestamp(value: string | null | undefined): string {
 }
 
 function instrumentCode(instrument: Instrument | undefined): string | null {
-  return instrument?.sourceMappings.find((mapping) => mapping.source === 'TUSHARE')?.externalCode
+  return instrument?.sourceMappings.find((mapping) => mapping.source === 'THS')?.externalCode
     ?? instrument?.sourceMappings.find((mapping) => mapping.source === 'MANUAL')?.externalCode
     ?? null
 }
@@ -330,6 +331,18 @@ function ContributionList({ contributions, currency }: { contributions: Investme
   )
 }
 
+/**
+ * 表单载荷变化时重新生成幂等键：同一载荷在重渲染间保持稳定，
+ * 载荷一旦变化立即换键，避免同键异参触发 409。
+ */
+function usePayloadKey(payload: string): string {
+  const ref = useRef<{ payload: string; key: string } | null>(null)
+  if (ref.current === null || ref.current.payload !== payload) {
+    ref.current = { payload, key: globalThis.crypto.randomUUID() }
+  }
+  return ref.current.key
+}
+
 export function InvestmentsPage() {
   const { user } = useWebAuth()
   const queryClient = useQueryClient()
@@ -342,6 +355,7 @@ export function InvestmentsPage() {
   const [instrumentType, setInstrumentType] = useState<CreateInstrumentBody['instrumentType']>('STOCK')
   const [instrumentName, setInstrumentName] = useState('')
   const [instrumentMarket, setInstrumentMarket] = useState('MANUAL')
+  const [instrumentSourceCode, setInstrumentSourceCode] = useState('')
   const [instrumentCurrency, setInstrumentCurrency] = useState<Currency>(user?.baseCurrency ?? 'CNY')
   const [manualPriceInstrumentId, setManualPriceInstrumentId] = useState<string | null>(null)
   const [manualPriceType, setManualPriceType] = useState<CreatePriceBody['priceType']>('MANUAL')
@@ -467,10 +481,10 @@ export function InvestmentsPage() {
     staleTime: 30_000,
   })
 
-  const createInstrumentPayload = JSON.stringify({ instrumentType, instrumentName, instrumentMarket, instrumentCurrency })
-  const createInstrumentKey = useMemo(() => globalThis.crypto.randomUUID(), [createInstrumentPayload])
+  const createInstrumentPayload = JSON.stringify({ instrumentType, instrumentName, instrumentMarket, instrumentCurrency, instrumentSourceCode })
+  const createInstrumentKey = usePayloadKey(createInstrumentPayload)
   const manualPricePayload = JSON.stringify({ manualPriceInstrumentId, manualPriceType, manualPriceDate, manualPriceValue, manualPriceReason, manualPriceCurrency })
-  const manualPriceKey = useMemo(() => globalThis.crypto.randomUUID(), [manualPricePayload])
+  const manualPriceKey = usePayloadKey(manualPricePayload)
   const tradePayload = JSON.stringify({
     tradeSide,
     tradeAccountId,
@@ -483,7 +497,7 @@ export function InvestmentsPage() {
     tradeTaxAmount,
     tradeAt,
   })
-  const tradeKey = useMemo(() => globalThis.crypto.randomUUID(), [tradePayload])
+  const tradeKey = usePayloadKey(tradePayload)
 
   const createInstrumentMutation = useMutation({
     mutationFn: () => createInstrument(createInstrumentKey, {
@@ -491,6 +505,7 @@ export function InvestmentsPage() {
       name: instrumentName.trim(),
       market: instrumentMarket.trim() || 'MANUAL',
       currency: instrumentCurrency,
+      sourceCode: instrumentSourceCode.trim() || undefined,
     }),
     onSuccess: (response) => {
       setSelectedInstrument(response.data)
@@ -498,6 +513,7 @@ export function InvestmentsPage() {
       setCalendarInstrumentId((current) => current || response.data.id)
       setInstrumentCreatedId(response.data.id)
       setInstrumentName('')
+      setInstrumentSourceCode('')
       setInstrumentFormError(null)
       void queryClient.invalidateQueries({ queryKey: ['investments'] })
     },
@@ -694,7 +710,7 @@ export function InvestmentsPage() {
         <Alert>
           <InfoIcon />
           <AlertTitle className="flex flex-wrap items-center gap-2">
-            行情来源：{marketStatusQuery.data.data.source === 'TUSHARE' ? 'Tushare Pro' : marketStatusQuery.data.data.source}
+            行情来源：{marketStatusQuery.data.data.source === 'THS' ? '同花顺（盘后）' : marketStatusQuery.data.data.source}
             <Badge variant={marketStatusQuery.data.data.status === 'AVAILABLE' ? 'secondary' : marketStatusQuery.data.data.status === 'DEGRADED' ? 'outline' : 'destructive'}>{marketStatusQuery.data.data.status}</Badge>
             <Badge variant={marketStatusQuery.data.data.freshness === 'FRESH' ? 'secondary' : marketStatusQuery.data.data.freshness === 'STALE' ? 'outline' : 'destructive'}>{PRICE_FRESHNESS_LABELS[marketStatusQuery.data.data.freshness]}</Badge>
           </AlertTitle>
@@ -784,6 +800,11 @@ export function InvestmentsPage() {
                   <div className="flex flex-col gap-2">
                     <label htmlFor="instrument-market">市场或来源标记</label>
                     <Input id="instrument-market" value={instrumentMarket} onChange={(event) => setInstrumentMarket(event.target.value)} placeholder="MANUAL" />
+                  </div>
+                  <div className="flex flex-col gap-2 md:col-span-2">
+                    <label htmlFor="instrument-code">同花顺代码（可选）</label>
+                    <Input id="instrument-code" value={instrumentSourceCode} onChange={(event) => setInstrumentSourceCode(event.target.value)} placeholder="6 位代码，如 000001；留空保持纯手工产品" />
+                    <p className="text-xs text-muted-foreground">填写后由服务端按该代码拉取盘后日线或最新公布净值；不填写则手工维护价格。</p>
                   </div>
                   {instrumentFormError ? <p className="text-sm text-destructive md:col-span-2" role="alert">{instrumentFormError}</p> : null}
                   {instrumentCreatedId ? <p className="text-sm text-muted-foreground md:col-span-2" role="status">产品已创建：{instrumentCreatedId}</p> : null}
