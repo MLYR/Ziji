@@ -8,6 +8,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
@@ -15,6 +16,8 @@ import java.util.UUID;
 
 import app.ziji.audit.application.AuditLogWritePort;
 import app.ziji.marketdata.application.internal.MarketDataCommandStore;
+import app.ziji.marketdata.application.internal.MarketDataSourcePort;
+import app.ziji.marketdata.application.internal.RemoteInstrument;
 import app.ziji.marketdata.domain.Instrument;
 import app.ziji.marketdata.domain.InstrumentSourceMapping;
 import app.ziji.marketdata.domain.InstrumentStatus;
@@ -30,39 +33,109 @@ public class MarketDataApplicationService {
 	private final MarketDataCommandStore store;
 	private final TransactionRunner transactions;
 	private final AuditLogWritePort auditLogs;
+	private final MarketDataSourcePort source;
+	private final boolean remoteSearchEnabled;
 	private final Clock clock;
 
 	public MarketDataApplicationService(
 		MarketDataCommandStore store,
 		TransactionRunner transactions,
 		AuditLogWritePort auditLogs,
+		MarketDataSourcePort source,
+		boolean remoteSearchEnabled,
 		Clock clock) {
 		this.store = Objects.requireNonNull(store, "市场数据存储不能为空。");
 		this.transactions = Objects.requireNonNull(transactions, "市场数据事务入口不能为空。");
 		this.auditLogs = Objects.requireNonNull(auditLogs, "市场数据审计入口不能为空。");
+		this.source = source;
+		this.remoteSearchEnabled = remoteSearchEnabled;
 		this.clock = Objects.requireNonNull(clock, "市场数据时钟不能为空。");
 	}
 
-	public List<InstrumentView> search(String query, int limit) {
+	public List<InstrumentView> search(UUID userId, String query, int limit, String requestId) {
 		String normalized = requiredText(query, 100, "搜索关键词");
-		return store.search(normalized, boundedLimit(limit)).stream().map(this::instrumentView).toList();
+		List<InstrumentView> local = store.search(normalized, boundedLimit(limit)).stream()
+			.map(this::instrumentView).toList();
+		// 本地缓存未命中且已开启远程搜索时，服务端按限流策略触发供应商基础信息查询并缓存命中产品；同花顺无搜索接口时返回空。
+		if (!local.isEmpty() || !remoteSearchEnabled || source == null) {
+			return local;
+		}
+		return searchRemote(userId, normalized, boundedLimit(limit), requestId);
+	}
+
+	private List<InstrumentView> searchRemote(UUID userId, String query, int limit, String requestId) {
+		List<RemoteInstrument> candidates;
+		try {
+			candidates = source.searchBasics(query);
+		} catch (RuntimeException exception) {
+			// 远程搜索失败降级为空结果，由客户端提示手工创建，不阻断搜索本身。
+			return List.of();
+		}
+		List<InstrumentView> result = new ArrayList<>();
+		java.util.Set<String> seen = new java.util.HashSet<>();
+		for (RemoteInstrument candidate : candidates) {
+			if (result.size() >= limit) {
+				break;
+			}
+			if (!seen.add(candidate.externalCode())) {
+				continue;
+			}
+			result.add(findOrCreateRemoteInstrument(userId, candidate, requestId));
+		}
+		return List.copyOf(result);
+	}
+
+	/** 远程候选按外部代码复用既有产品，否则原子创建产品与 THS 映射；并发冲突回退为读取既有产品。 */
+	private InstrumentView findOrCreateRemoteInstrument(UUID userId, RemoteInstrument candidate, String requestId) {
+		var existing = store.findByExternalCode(PriceSource.THS, candidate.externalCode());
+		if (existing.isPresent()) {
+			return instrumentView(existing.get());
+		}
+		InstrumentType type = enumValue(candidate.instrumentType(), InstrumentType.class, "产品类型");
+		String name = candidate.name().trim();
+		if (name.length() > 200 || candidate.externalCode().length() > 80) {
+			throw new MarketDataValidationException("远程产品信息无效。");
+		}
+		Instant now = clock.instant();
+		Instrument instrument = new Instrument(
+			UUID.randomUUID(), type, name, candidate.sourceMarket() == null || candidate.sourceMarket().isBlank()
+				? "THS" : candidate.sourceMarket(), "CNY", InstrumentStatus.ACTIVE, now, now, 1);
+		try {
+			return transactions.required(() -> {
+				Instrument created = store.insertInstrumentWithMapping(
+					instrument, PriceSource.THS, candidate.externalCode(), candidate.sourceMarket());
+				appendAudit(userId, requestId, "INSTRUMENT_CREATED", created.id(), null,
+					java.util.Map.of("instrumentType", created.instrumentType().name(), "source", "THS"));
+				return instrumentView(created);
+			});
+		} catch (MarketDataConflictException exception) {
+			// 并发创建时唯一约束生效；回退读取已落库产品。
+			return store.findByExternalCode(PriceSource.THS, candidate.externalCode())
+				.map(this::instrumentView)
+				.orElseThrow(MarketDataNotFoundException::new);
+		}
 	}
 
 	public InstrumentView createInstrument(
-		UUID userId, String instrumentType, String name, String market, String currency, String requestId) {
+		UUID userId, String instrumentType, String name, String market, String currency, String sourceCode, String requestId) {
 		requireUser(userId);
 		InstrumentType type = enumValue(instrumentType, InstrumentType.class, "产品类型");
 		String normalizedName = requiredText(name, 200, "产品名称");
 		String normalizedMarket = market == null || market.isBlank() ? "MANUAL" : requiredText(market, 40, "市场");
 		String normalizedCurrency = requiredCurrency(currency);
+		// 可选同花顺代码：提供后创建 THS 映射，盘后同步按该代码拉取；不提供则保持纯手工产品。
+		String normalizedCode = normalizeSourceCode(sourceCode);
 		Instant now = clock.instant();
 		Instrument instrument = new Instrument(
 			UUID.randomUUID(), type, normalizedName, normalizedMarket, normalizedCurrency,
 			InstrumentStatus.ACTIVE, now, now, 1);
 		Instrument created = transactions.required(() -> {
-			Instrument result = store.insertInstrument(instrument);
+			Instrument result = normalizedCode == null
+				? store.insertInstrument(instrument)
+				: store.insertInstrumentWithMapping(instrument, PriceSource.THS, normalizedCode, null);
 			appendAudit(userId, requestId, "INSTRUMENT_CREATED", result.id(), null,
-				java.util.Map.of("instrumentType", result.instrumentType().name(), "currency", result.currency()));
+				java.util.Map.of("instrumentType", result.instrumentType().name(), "currency", result.currency(),
+					"source", normalizedCode == null ? "MANUAL" : "THS"));
 			return result;
 		});
 		return instrumentView(created);
@@ -132,7 +205,7 @@ public class MarketDataApplicationService {
 
 	public MarketDataStatusView status() {
 		MarketDataCommandStore.MarketDataStatus status = store.status(clock.instant());
-		return new MarketDataStatusView("TUSHARE", status.status(), status.lastSuccessfulSyncAt(), status.freshness());
+		return new MarketDataStatusView("THS", status.status(), status.lastSuccessfulSyncAt(), status.freshness());
 	}
 
 	private PriceView saveManualPrice(
@@ -194,6 +267,18 @@ public class MarketDataApplicationService {
 			throw new MarketDataValidationException(field + "无效。");
 		}
 		return value;
+	}
+
+	/** 同花顺产品代码：6 位数字，允许带交易所后缀；空白视为不提供映射。 */
+	private static String normalizeSourceCode(String value) {
+		if (value == null || value.isBlank()) {
+			return null;
+		}
+		String normalized = value.trim();
+		if (!normalized.matches("[0-9]{1,10}(\\.[A-Za-z]{2})?") || normalized.length() > 20) {
+			throw new MarketDataValidationException("产品代码无效。");
+		}
+		return normalized;
 	}
 
 	private static String requiredCurrency(String value) {

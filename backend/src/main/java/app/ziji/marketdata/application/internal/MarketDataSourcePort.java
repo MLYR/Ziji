@@ -13,4 +13,7 @@ public interface MarketDataSourcePort {
 		InstrumentSourceMapping mapping,
 		LocalDate from,
 		LocalDate to);
+
+	/** 远程产品基础信息搜索；无匹配、无 token 或供应商失败时返回空列表，不抛供应商异常。 */
+	java.util.List<RemoteInstrument> searchBasics(String query);
 }

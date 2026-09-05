@@ -4,8 +4,8 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDate;
 
-/** 进程内请求闸门；数据库/供应商配额仍需由部署侧共同约束。 */
-public final class TushareRateLimiter {
+/** 进程内请求闸门；数据库每日配额仍需由部署侧共同约束。 */
+public final class ThsRateLimiter {
 
 	private final Clock clock;
 	private final Duration minimumInterval;
@@ -14,10 +14,10 @@ public final class TushareRateLimiter {
 	private int count;
 	private java.time.Instant lastRequestAt;
 
-	public TushareRateLimiter(Clock clock, Duration minimumInterval, int dailyLimit) {
-		this.clock = java.util.Objects.requireNonNull(clock, "Tushare 限流时钟不能为空。");
+	public ThsRateLimiter(Clock clock, Duration minimumInterval, int dailyLimit) {
+		this.clock = java.util.Objects.requireNonNull(clock, "同花顺限流时钟不能为空。");
 		if (minimumInterval == null || minimumInterval.isNegative() || dailyLimit < 1) {
-			throw new IllegalArgumentException("Tushare 限流参数无效。");
+			throw new IllegalArgumentException("同花顺限流参数无效。");
 		}
 		this.minimumInterval = minimumInterval;
 		this.dailyLimit = dailyLimit;

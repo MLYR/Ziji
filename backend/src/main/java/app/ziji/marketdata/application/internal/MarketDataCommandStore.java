@@ -22,6 +22,13 @@ public interface MarketDataCommandStore extends MarketDataReadStore {
 
 	Instrument insertInstrument(Instrument instrument);
 
+	/** 按外部代码查找 THS 映射对应的产品；无映射时返回 empty。 */
+	java.util.Optional<Instrument> findByExternalCode(app.ziji.marketdata.domain.PriceSource source, String externalCode);
+
+	/** 同一事务创建产品及其来源映射；外部代码冲突时抛出 MarketDataConflictException。 */
+	Instrument insertInstrumentWithMapping(
+		Instrument instrument, app.ziji.marketdata.domain.PriceSource source, String externalCode, String sourceMarket);
+
 	List<PriceSnapshot> listCurrentPrices(UUID instrumentId, LocalDate from, LocalDate to, int limit);
 
 	Optional<PriceSnapshot> findPriceById(UUID priceId);

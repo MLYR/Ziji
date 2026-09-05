@@ -7,14 +7,17 @@ import app.ziji.audit.application.AuditLogWritePort;
 import app.ziji.marketdata.application.MarketDataApplicationService;
 import app.ziji.marketdata.application.MarketDataReadPort;
 import app.ziji.marketdata.application.MarketDataReadService;
+import app.ziji.marketdata.application.MarketDataSyncService;
 import app.ziji.marketdata.application.internal.MarketDataCommandStore;
+import app.ziji.marketdata.application.internal.MarketDataQuotaPort;
+import app.ziji.marketdata.application.internal.MarketDataSyncStore;
 import app.ziji.shared.application.TransactionRunner;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.ObjectMapper;
 
-/** 装配市场数据读写用例和外部 Tushare 边界；token 只进入服务端适配器内存。 */
+/** 装配市场数据读写、同步用例和同花顺外部边界；同花顺公开端点无凭据。 */
 @Configuration(proxyBeanMethods = false)
 class MarketDataInfrastructureConfiguration {
 
@@ -28,31 +31,48 @@ class MarketDataInfrastructureConfiguration {
 		MarketDataCommandStore store,
 		TransactionRunner transactions,
 		AuditLogWritePort auditLogs,
+		ThsMarketDataAdapter adapter,
 		Clock clock) {
-		return new MarketDataApplicationService(store, transactions, auditLogs, clock);
+		return new MarketDataApplicationService(store, transactions, auditLogs, adapter, false, clock);
 	}
 
 	@Bean
-	TushareTransport tushareTransport() {
-		return new JavaHttpTushareTransport();
+	MarketDataSyncService marketDataSyncService(
+		MarketDataCommandStore store,
+		MarketDataSyncStore syncStore,
+		ThsMarketDataAdapter adapter,
+		TransactionRunner transactions,
+		Clock clock) {
+		return new MarketDataSyncService(store, syncStore, adapter, transactions, clock);
 	}
 
 	@Bean
-	TushareRateLimiter tushareRateLimiter(Clock clock) {
-		return new TushareRateLimiter(clock, Duration.ofMillis(200), 2_000);
+	ThsTransport thsTransport() {
+		return new JavaHttpThsTransport();
 	}
 
 	@Bean
-	TushareMarketDataAdapter tushareMarketDataAdapter(
-		TushareTransport transport,
+	ThsRateLimiter thsRateLimiter(Clock clock) {
+		return new ThsRateLimiter(clock, Duration.ofMillis(500), 2_000);
+	}
+
+	@Bean
+	MarketDataQuotaPort marketDataQuotaPort(
+		MarketDataSyncStore syncStore,
+		@Value("${ziji.ths.daily-quota:2000}") int dailyQuota) {
+		return new PostgresMarketDataQuotaGate(syncStore, dailyQuota);
+	}
+
+	@Bean
+	ThsMarketDataAdapter thsMarketDataAdapter(
+		ThsTransport transport,
 		ObjectMapper objectMapper,
-		TushareRateLimiter limiter,
+		ThsRateLimiter limiter,
+		MarketDataQuotaPort quota,
 		Clock clock,
-		@Value("${ziji.tushare.endpoint:https://api.tushare.pro}") String endpoint,
-		@Value("${ziji.tushare.token:}") String token,
-		@Value("${ziji.tushare.timeout-ms:3000}") long timeoutMs,
-		@Value("${ziji.tushare.max-retries:2}") int maxRetries) {
-		return new TushareMarketDataAdapter(
-			transport, objectMapper, endpoint, token, Duration.ofMillis(timeoutMs), maxRetries, limiter, clock);
+		@Value("${ziji.ths.timeout-ms:3000}") long timeoutMs,
+		@Value("${ziji.ths.max-retries:2}") int maxRetries) {
+		return new ThsMarketDataAdapter(
+			transport, objectMapper, Duration.ofMillis(timeoutMs), maxRetries, limiter, quota, clock);
 	}
 }

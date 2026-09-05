@@ -40,7 +40,7 @@ public class MarketDataController {
 
 	private static final int API_MAJOR_VERSION = 1;
 	private static final java.util.Set<String> INSTRUMENT_FIELDS = java.util.Set.of(
-		"instrumentType", "name", "market", "currency");
+		"instrumentType", "name", "market", "currency", "sourceCode");
 	private static final java.util.Set<String> PRICE_FIELDS = java.util.Set.of(
 		"priceType", "businessDate", "price", "currency", "reason");
 	private static final java.util.Set<String> CORRECTION_FIELDS = java.util.Set.of(
@@ -66,9 +66,10 @@ public class MarketDataController {
 		@RequestParam(name = "cursor", required = false) String cursor,
 		Principal principal,
 		HttpServletResponse response) {
-		currentUserIdResolver.resolve(principal);
+		UUID userId = currentUserIdResolver.resolve(principal);
 		int limit = parseLimit(rawLimit);
-		List<MarketDataApplicationService.InstrumentView> data = marketData.search(query, limit);
+		List<MarketDataApplicationService.InstrumentView> data = marketData.search(
+			userId, query, limit, requestId(response));
 		return ResponseEntity.ok(new InstrumentListEnvelope(data, new PageMeta(requestId(response), null, false)));
 	}
 
@@ -85,7 +86,8 @@ public class MarketDataController {
 			userId, API_MAJOR_VERSION, "createInstrument", key,
 			requestHash("/api/v1/instruments", command.hashPayload(), null), () -> {
 				MarketDataApplicationService.InstrumentView created = marketData.createInstrument(
-					userId, command.instrumentType(), command.name(), command.market(), command.currency(), requestId(response));
+					userId, command.instrumentType(), command.name(), command.market(), command.currency(),
+					command.sourceCode(), requestId(response));
 				return IdempotencyWorkResult.completed(created, IdempotencyResponse.succeededResource(
 					201, "INSTRUMENT", created.id(), new IdempotencyResponse.ResourceReference(
 						"/api/v1/instruments/" + created.id(), quote(created.version()), (long) created.version())));
@@ -209,7 +211,8 @@ public class MarketDataController {
 
 	private InstrumentCommand parseInstrument(JsonNode body) {
 		rejectUnknown(body, INSTRUMENT_FIELDS);
-		return new InstrumentCommand(text(body, "instrumentType"), text(body, "name"), nullableText(body, "market"), text(body, "currency"));
+		return new InstrumentCommand(text(body, "instrumentType"), text(body, "name"), nullableText(body, "market"),
+			text(body, "currency"), nullableText(body, "sourceCode"));
 	}
 
 	private PriceCommand parsePrice(JsonNode body) {
@@ -322,13 +325,14 @@ public class MarketDataController {
 		return "\"" + version + "\"";
 	}
 
-	private record InstrumentCommand(String instrumentType, String name, String market, String currency) {
+	private record InstrumentCommand(String instrumentType, String name, String market, String currency, String sourceCode) {
 		Map<String, Object> hashPayload() {
 			Map<String, Object> map = new LinkedHashMap<>();
 			map.put("instrumentType", instrumentType);
 			map.put("name", name);
 			map.put("market", market);
 			map.put("currency", currency);
+			map.put("sourceCode", sourceCode);
 			return map;
 		}
 	}

@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import app.ziji.marketdata.application.MarketDataConflictException;
 import app.ziji.marketdata.application.MarketDataPersistenceException;
 import app.ziji.marketdata.application.internal.MarketDataCommandStore;
 import app.ziji.marketdata.domain.Instrument;
@@ -59,6 +60,55 @@ public class PostgresMarketDataStore implements MarketDataCommandStore {
 				ORDER BY i.name, i.id
 				LIMIT ?
 				""", (result, ignored) -> instrument(result), pattern, pattern, pattern, limit);
+		} catch (RuntimeException exception) {
+			throw persistence(exception);
+		}
+	}
+
+	@Override
+	public Optional<Instrument> findByExternalCode(PriceSource source, String externalCode) {
+		if (source == null || externalCode == null || externalCode.isBlank()) {
+			return Optional.empty();
+		}
+		try {
+			return jdbc.query("""
+				SELECT i.id, i.instrument_type, i.name, i.market, i.currency, i.status, i.created_at, i.updated_at, i.version
+				FROM instruments i
+				JOIN instrument_source_mappings m ON m.instrument_id = i.id
+				WHERE m.source = ? AND m.external_code = ?
+				""", result -> result.next() ? Optional.of(instrument(result)) : Optional.empty(),
+				source.name(), externalCode);
+		} catch (RuntimeException exception) {
+			throw persistence(exception);
+		}
+	}
+
+	@Override
+	public Instrument insertInstrumentWithMapping(
+		Instrument instrument, PriceSource source, String externalCode, String sourceMarket) {
+		if (instrument == null || source == null || externalCode == null || externalCode.isBlank()) {
+			throw new MarketDataPersistenceException(new IllegalArgumentException("产品映射写入参数无效。"));
+		}
+		try {
+			int inserted = jdbc.update("""
+				INSERT INTO instruments (id, instrument_type, name, market, currency, status, created_at, updated_at, version)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				""", instrument.id(), instrument.instrumentType().name(), instrument.name(), instrument.market(),
+				instrument.currency(), instrument.status().name(), timestamp(instrument.createdAt()),
+				timestamp(instrument.updatedAt()), instrument.version());
+			if (inserted != 1) {
+				throw new IllegalStateException("产品写入未生效。");
+			}
+			int mappingInserted = jdbc.update("""
+				INSERT INTO instrument_source_mappings (id, instrument_id, source, external_code, source_market)
+				VALUES (?, ?, ?, ?, ?)
+				""", UUID.randomUUID(), instrument.id(), source.name(), externalCode, sourceMarket);
+			if (mappingInserted != 1) {
+				throw new IllegalStateException("产品来源映射写入未生效。");
+			}
+			return instrument;
+		} catch (org.springframework.dao.DuplicateKeyException exception) {
+			throw new MarketDataConflictException("产品来源映射已存在。", exception);
 		} catch (RuntimeException exception) {
 			throw persistence(exception);
 		}
@@ -222,7 +272,7 @@ public class PostgresMarketDataStore implements MarketDataCommandStore {
 	public MarketDataStatus status(Instant now) {
 		try {
 			Timestamp latest = jdbc.queryForObject(
-				"SELECT MAX(fetched_at) FROM price_snapshots WHERE source = 'TUSHARE'",
+				"SELECT MAX(fetched_at) FROM price_snapshots WHERE source = 'THS'",
 				Timestamp.class);
 			if (latest == null) {
 				return new MarketDataStatus("UNAVAILABLE", null, "UNAVAILABLE");

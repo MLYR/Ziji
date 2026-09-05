@@ -58,7 +58,7 @@ public final class MarketDataReadService implements MarketDataReadPort {
 			if (manual.isPresent()) {
 				return manual;
 			}
-			Optional<MarketPrice> external = latest(instrumentId, PriceSource.TUSHARE, priceType, asOf);
+			Optional<MarketPrice> external = latest(instrumentId, PriceSource.THS, priceType, asOf);
 			if (external.isPresent()) {
 				return external;
 			}
@@ -76,7 +76,7 @@ public final class MarketDataReadService implements MarketDataReadPort {
 		}
 		app.ziji.marketdata.domain.PriceType domainType = app.ziji.marketdata.domain.PriceType.valueOf(priceType.name());
 		return latest(instrumentId, PriceSource.MANUAL, domainType, asOf)
-			.or(() -> latest(instrumentId, PriceSource.TUSHARE, domainType, asOf));
+			.or(() -> latest(instrumentId, PriceSource.THS, domainType, asOf));
 	}
 
 	private Optional<MarketPrice> latest(

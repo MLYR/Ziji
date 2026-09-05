@@ -6,4 +6,8 @@ public final class MarketDataConflictException extends MarketDataApplicationExce
 	public MarketDataConflictException(String message) {
 		super(message);
 	}
+
+	public MarketDataConflictException(String message, Throwable cause) {
+		super(message, cause);
+	}
 }
