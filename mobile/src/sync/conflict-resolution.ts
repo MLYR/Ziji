@@ -9,6 +9,7 @@ import {
   getSyncConflict,
   type PendingSyncOperation,
 } from '@/storage/local-database';
+import { createClientUuid } from '@/lib/client-id';
 
 type SyncOperation = components['schemas']['SyncOperation'];
 
@@ -24,9 +25,8 @@ export function createRevisionOperation(operation: PendingSyncOperation, reason:
     throw new Error('该冲突操作不能在本机修订。');
   }
 
-  const operationId = globalThis.crypto?.randomUUID?.();
-  const idempotencyNonce = globalThis.crypto?.randomUUID?.();
-  if (!operationId || !idempotencyNonce) throw new Error('设备无法安全生成新的同步操作标识。');
+  const operationId = createClientUuid();
+  const idempotencyNonce = createClientUuid();
 
   // 服务端按新 operation/baseVersion/类型化 payload 计算规范化 Hash；客户端只生成不可复用的新三元组。
   const common = {

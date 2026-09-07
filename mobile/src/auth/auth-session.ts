@@ -1,6 +1,7 @@
 import type { components } from '@ziji/api-types';
 
 import { ApiClientError, type MobileAuthApiClient, type RegisterRequest } from '@/api/api-client';
+import { createClientUuid } from '@/lib/client-id';
 import type { SecureCredentialStore } from '@/storage/secure-credentials';
 
 type Session = components['schemas']['Session'];
@@ -56,11 +57,7 @@ const unauthenticatedState: MobileAuthenticationState = {
 };
 
 function createOpaqueDeviceId(): string {
-  const randomId = globalThis.crypto?.randomUUID?.();
-  if (randomId) return `ziji-${randomId}`;
-
-  // deviceId 不是身份凭据；此降级值只在缺少原生 UUID API 时提供稳定会话替换边界。
-  return `ziji-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `ziji-${createClientUuid()}`;
 }
 
 export function createDeviceIdentityProvider(credentials: SecureCredentialStore, deviceName = 'Ziji Mobile'): DeviceIdentityProvider {
@@ -92,7 +89,7 @@ export class SecureCredentialWriteError extends Error {
 }
 
 export function createRegistrationIdempotencyKey(): string {
-  return `register-${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
+  return `register-${createClientUuid()}`;
 }
 
 export class MobileAuthenticationSession {

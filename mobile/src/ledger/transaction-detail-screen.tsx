@@ -3,6 +3,7 @@ import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import type { Transaction, TransactionEnvelope } from '@/api/api-client';
 import type { PostTransactionRequest } from '@/ledger/quick-record';
+import { createClientUuid } from '@/lib/client-id';
 
 const TYPE_LABELS: Record<string, string> = {
   INCOME: '收入', EXPENSE: '支出', REFUND: '退款', TRANSFER: '转账',
@@ -124,7 +125,7 @@ export function TransactionDetailScreen({
       note: note.trim() === '' ? null : note.trim(),
     } as PostTransactionRequest;
 
-    revisionKeyRef.current ??= globalThis.crypto.randomUUID();
+    revisionKeyRef.current ??= createClientUuid();
     setSubmitting(true);
     setMessage(null);
     try {
@@ -151,7 +152,7 @@ export function TransactionDetailScreen({
       setMessage('作废原因不能为空');
       return;
     }
-    voidKeyRef.current ??= globalThis.crypto.randomUUID();
+    voidKeyRef.current ??= createClientUuid();
     setSubmitting(true);
     setMessage(null);
     try {

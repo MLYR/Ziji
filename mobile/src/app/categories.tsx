@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { CategoryManager } from '@/categories/category-manager';
 import { mobileCategoryApiClient } from '@/auth/default-auth-session';
+import { createClientUuid } from '@/lib/client-id';
 
 /** 分类与标签管理路由。 */
 export default function CategoriesRoute() {
@@ -19,8 +20,8 @@ export default function CategoriesRoute() {
         <CategoryManager
           api={mobileCategoryApiClient}
           ids={{
-            category: (globalThis.crypto as Crypto).randomUUID(),
-            tag: (globalThis.crypto as Crypto).randomUUID(),
+            category: createClientUuid(),
+            tag: createClientUuid(),
           }}
         />
       </ScrollView>

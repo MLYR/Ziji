@@ -13,6 +13,7 @@ import type {
   MobileInvestmentApiClient,
 } from '@/api/api-client';
 import { InvestmentReturnCalendar } from '@/investments/investment-return-calendar';
+import { createClientUuid } from '@/lib/client-id';
 
 const INSTRUMENT_TYPE_LABELS: Record<Instrument['instrumentType'], string> = {
   STOCK: '股票',
@@ -163,7 +164,7 @@ export function InvestmentScreen({ api, accountsApi, onOpenAccount, onOpenAccoun
     }
     setManualSubmitting(true);
     setManualMessage(null);
-    manualIdempotencyKey.current ??= globalThis.crypto.randomUUID();
+    manualIdempotencyKey.current ??= createClientUuid();
     try {
       const envelope = await api.createInstrument(manualIdempotencyKey.current, {
         instrumentType: manualType,
@@ -220,7 +221,7 @@ export function InvestmentScreen({ api, accountsApi, onOpenAccount, onOpenAccoun
 
     setTradeSubmitting(true);
     setTradeMessage(null);
-    tradeIdempotencyKey.current ??= globalThis.crypto.randomUUID();
+    tradeIdempotencyKey.current ??= createClientUuid();
     try {
       await api.createInvestmentTrade(tradeIdempotencyKey.current, body);
       tradeIdempotencyKey.current = null;

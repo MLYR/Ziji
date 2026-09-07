@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { mobileAccountsApiClient } from '@/auth/default-auth-session';
 import type { CreateAccountRequest } from '@/api/api-client';
+import { createClientUuid } from '@/lib/client-id';
 
 const TYPE_MATRIX: Record<'ASSET' | 'INVESTMENT' | 'LIABILITY', { value: AccountTypeValue; label: string }[]> = {
   ASSET: [
@@ -45,7 +46,7 @@ export default function AccountCreateRoute() {
   const [openingAmount, setOpeningAmount] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const idempotencyKeyRef = useRef(globalThis.crypto.randomUUID());
+  const idempotencyKeyRef = useRef(createClientUuid());
 
   const openingBusinessAt = useMemo(() => new Date().toISOString(), []);
 

@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { mobileAuthApiClient, mobileCategoryApiClient, mobileTransactionApiClient } from '@/auth/default-auth-session';
 import type { Category } from '@/api/api-client';
 import { QuickRecordScreen } from '@/ledger/quick-record-screen';
+import { createClientUuid } from '@/lib/client-id';
 
 /** 快速记账路由：币种与时区取自服务端用户资料；成功后可直接打开交易详情。 */
 export default function QuickRecordRoute() {
@@ -51,7 +52,7 @@ export default function QuickRecordRoute() {
             currency={profile.baseCurrency}
             timezone={profile.timezone}
             categories={categories}
-            keyFor={() => globalThis.crypto.randomUUID()}
+            keyFor={createClientUuid}
             onSuccess={(transactionId) => {
               router.push({ pathname: '/transaction-detail', params: { id: transactionId } });
             }}

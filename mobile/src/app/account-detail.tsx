@@ -8,6 +8,7 @@ import type { Category } from '@/api/api-client';
 import type { Account, AccountBalance } from '@/api/api-client';
 import { LiabilityDetailsCard } from '@/accounts/liability-details-card';
 import { LiabilityRepaymentForm } from '@/accounts/liability-repayment-form';
+import { createClientUuid } from '@/lib/client-id';
 
 function accountEtag(version: number): string {
   return `"${version}"`;
@@ -114,7 +115,7 @@ export default function AccountDetailRoute() {
     setSubmitting(true);
     setMessage(null);
     try {
-      if (!archiveKeyRef.current) archiveKeyRef.current = globalThis.crypto.randomUUID();
+      if (!archiveKeyRef.current) archiveKeyRef.current = createClientUuid();
       const envelope = await mobileAccountsApiClient.archiveAccount(
         accountId,
         accountEtag(account.version),
@@ -179,7 +180,7 @@ export default function AccountDetailRoute() {
                 currency={account.currency}
                 getDetails={(id) => mobileAccountsApiClient.getLiabilityDetails(id)}
                 putDetails={(id, precondition, key, body) => mobileAccountsApiClient.putLiabilityDetails(id, precondition, key, body)}
-                keyFor={() => globalThis.crypto.randomUUID()}
+                keyFor={createClientUuid}
               />
             ) : null}
 
@@ -189,7 +190,7 @@ export default function AccountDetailRoute() {
                 currency={account.currency}
                 timezone={profile.timezone}
                 categories={categories}
-                keyFor={() => globalThis.crypto.randomUUID()}
+                keyFor={createClientUuid}
                 createTransaction={(key, body) => mobileTransactionApiClient.createTransaction(key, body)}
                 onSuccess={(transactionId) => {
                   router.push({ pathname: '/transaction-detail', params: { id: transactionId } });
