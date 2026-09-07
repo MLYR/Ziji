@@ -110,4 +110,47 @@ test('投资账户创建、手工产品与价格、买入、持仓和收益日�
   await page.goto('/dashboard')
   await expect(page.getByText('投资资产').first()).toBeVisible()
   await expect(page.getByText('50495.00').first()).toBeVisible()
+
+  // 卖出 30 股 @15，手续费 3：现金 48,995 + 447 = 49,442；持仓 70 股市值 1,050
+  await page.goto('/investments')
+  await page.getByRole('button', { name: '产品与价格' }).click()
+  await expect(page.getByText('产品搜索与手工价格').first()).toBeVisible()
+  await page.locator('#instrument-search').fill('E2E 测试股票')
+  await page.getByRole('button', { name: '搜索产品' }).click()
+  await page.locator('[data-testid="instrument-search-results"]').getByText('E2E 测试股票').first().waitFor()
+  await page.getByRole('button', { name: '用于交易' }).first().click()
+  await page.getByRole('button', { name: '记录投资交易' }).click()
+  await page.locator('#trade-side').selectOption('SELL')
+  await page.locator('#trade-account').selectOption({ label: 'E2E 券商账户 · CNY' })
+  await page.locator('#trade-quantity').fill('30')
+  await page.locator('#trade-unit-price').fill('15')
+  await page.locator('#trade-fee').fill('3')
+  await page.locator('#trade-tax').fill('0')
+  await page.getByRole('button', { name: '保存卖出' }).click()
+  await expect(page.getByText(/投资交易已保存/)).toBeVisible()
+  await expect(page.getByText('1050.00 CNY').first()).toBeVisible()
+  await expect(page.getByText('49442.00 CNY').first()).toBeVisible()
+
+  // 分红 100：现金 49,542；表单保持打开，直接切换交易方向
+  await page.locator('#trade-side').selectOption('DIVIDEND')
+  await page.locator('#trade-dividend').fill('100')
+  await page.locator('#trade-fee').fill('0')
+  await page.getByRole('button', { name: '保存分红' }).click()
+  await expect(page.getByText(/投资交易已保存/)).toBeVisible()
+  await expect(page.getByText('49542.00 CNY').first()).toBeVisible()
+
+  // 单一标的收益日历与日期明细下钻
+  await page.locator('#return-scope').selectOption('INSTRUMENT')
+  const returnInstrument = page.locator('#return-instrument option').filter({ hasText: 'E2E 测试股票' }).first()
+  await expect(returnInstrument).toBeAttached()
+  await page.locator('#return-instrument').selectOption(await returnInstrument.getAttribute('value') ?? '')
+  await expect(page.getByText(/· 单一标的/).first()).toBeVisible()
+  const today = new Date().toISOString().slice(0, 10)
+  await page.locator(`[data-testid="return-day-${today}"]`).click()
+  await expect(page.locator('[data-testid="investment-return-detail"]')).toBeVisible()
+  await expect(page.getByText(/收益明细/).first()).toBeVisible()
+
+  // Dashboard 投资资产 = 券商现金 49,542 + 持仓市值 1,050
+  await page.goto('/dashboard')
+  await expect(page.getByText('50592.00').first()).toBeVisible()
 })
