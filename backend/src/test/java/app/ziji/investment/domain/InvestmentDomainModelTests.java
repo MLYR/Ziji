@@ -60,14 +60,24 @@ class InvestmentDomainModelTests {
 	}
 
 	@Test
-	void sortsSameTimestampTradesByTradeIdBeforeApplyingPosition() {
+	void appliesSameTradeAtTradesInRecordedOrder() {
 		PositionCalculator calculator = new PositionCalculator();
 		UUID sellId = UUID.fromString("00000000-0000-4000-8000-000000000302");
 		UUID buyId = UUID.fromString("00000000-0000-4000-8000-000000000303");
 
-		assertThrows(InvestmentDomainException.class, () -> calculator.rebuild(List.of(
-			trade(sellId.toString(), InvestmentSide.SELL, "1", "10", "10"),
-			trade(buyId.toString(), InvestmentSide.BUY, "1", "10", "10"))));
+		InvestmentTrade buy = new InvestmentTrade(
+			buyId, buyId, UUID.fromString("00000000-0000-4000-8000-000000000304"), INSTRUMENT_ID,
+			InvestmentSide.BUY, new BigDecimal("100"), new BigDecimal("10"), "CNY", new BigDecimal("1000"),
+			BigDecimal.ZERO, BigDecimal.ZERO, FIRST_TRADE_AT, FIRST_TRADE_AT);
+		InvestmentTrade sell = new InvestmentTrade(
+			sellId, sellId, UUID.fromString("00000000-0000-4000-8000-000000000304"), INSTRUMENT_ID,
+			InvestmentSide.SELL, new BigDecimal("30"), new BigDecimal("15"), "CNY", new BigDecimal("450"),
+			BigDecimal.ZERO, BigDecimal.ZERO, FIRST_TRADE_AT, FIRST_TRADE_AT.plusNanos(1));
+
+		Position result = calculator.rebuild(List.of(sell, buy)).get(INSTRUMENT_ID);
+
+		assertEquals(0, new BigDecimal("70").compareTo(result.quantity()));
+		assertEquals(0, new BigDecimal("700").compareTo(result.costBasis()));
 	}
 
 	@Test

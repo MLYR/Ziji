@@ -34,6 +34,9 @@ public final class ThsMarketDataAdapter implements MarketDataSourcePort {
 
 	private static final String KLINE_TEMPLATE = "http://d.10jqka.com.cn/v6/line/hs_%s/01/last1800.js";
 	private static final String FUND_NAV_TEMPLATE = "http://fund.10jqka.com.cn/%s/json/jsondwjz.json";
+	// 限流许可等待上限：本地闸门间隔可能长于重试退避，必须先等许可再重试，否则重试永远被本地拒绝。
+	private static final Duration LIMITER_PERMIT_WAIT_DEADLINE = Duration.ofSeconds(2);
+	private static final Duration LIMITER_PERMIT_WAIT_STEP = Duration.ofMillis(100);
 	private final ThsTransport transport;
 	private final ObjectMapper objectMapper;
 	private final Duration timeout;
@@ -130,7 +133,7 @@ public final class ThsMarketDataAdapter implements MarketDataSourcePort {
 	private CallResult call(String url) {
 		int maximumAttempts = maxRetries + 1;
 		for (int attempt = 1; attempt <= maximumAttempts; attempt++) {
-			if (!limiter.tryAcquire()) {
+			if (!waitForLimiterPermit()) {
 				return new CallResult(SourceOutcome.RATE_LIMITED, attempt - 1);
 			}
 			if (!quota.reserve(LocalDate.now(clock))) {
@@ -183,6 +186,21 @@ public final class ThsMarketDataAdapter implements MarketDataSourcePort {
 			// 响应格式变化不视为可重试故障；返回空由调用方按 NO_DATA 处理。
 			return List.of();
 		}
+	}
+
+	private boolean waitForLimiterPermit() {
+		long deadline = System.nanoTime() + LIMITER_PERMIT_WAIT_DEADLINE.toNanos();
+		while (!limiter.tryAcquire()) {
+			if (System.nanoTime() >= deadline) {
+				return false;
+			}
+			sleeper.sleep(LIMITER_PERMIT_WAIT_STEP);
+			if (Thread.currentThread().isInterrupted()) {
+				Thread.currentThread().interrupt();
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/** K 线响应为 quotebridge_v6_line_*({...}) 包裹的 JSON；data 是分号分隔的行：日期,开,高,低,收,量,额,… */

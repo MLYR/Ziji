@@ -21,14 +21,13 @@ import app.ziji.shared.application.TransactionRunner;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.Assumptions;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import tools.jackson.databind.ObjectMapper;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -70,7 +69,8 @@ class ThsRealSmokePostgresIntegrationTests extends PostgresIntegrationTestSuppor
 
 		ThsMarketDataAdapter adapter = new ThsMarketDataAdapter(
 			new JavaHttpThsTransport(), objectMapper, Duration.ofSeconds(10), 2,
-			new ThsRateLimiter(Clock.systemUTC(), Duration.ofMillis(500), 60),
+			// 真实冒烟按每产品至少 2 秒间隔请求，避免对公开端点形成突发（500ms 间隔实测触发 429）。
+			new ThsRateLimiter(Clock.systemUTC(), Duration.ofSeconds(2), 60),
 			new PostgresMarketDataQuotaGate(syncStore, 60), Clock.systemUTC());
 		MarketDataSyncService service = new MarketDataSyncService(store, syncStore, adapter, transactions, Clock.systemUTC());
 
@@ -86,33 +86,36 @@ class ThsRealSmokePostgresIntegrationTests extends PostgresIntegrationTestSuppor
 			FROM price_snapshots p JOIN instruments i ON i.id = p.instrument_id
 			WHERE p.source = 'THS'
 			""");
+		boolean transientOutcome = TRANSIENT_OUTCOMES.contains(summary.outcome());
 		if (prices.isEmpty()) {
-			if (TRANSIENT_OUTCOMES.contains(summary.outcome())) {
-				// 供应商短时不可用：按测试§7.2 不作为代码失败，输出明确告警。
-				System.err.println("[ThsSmokeWarning] 供应商短时不可用，本轮无价格落库：outcome=" + summary.outcome());
-				return;
-			}
+			// 供应商短时不可用：按测试§7.2 不作为代码失败，abort 为 skipped 且不得计为验收通过。
+			Assumptions.assumeTrue(!transientOutcome,
+				"[ThsSmokeSkip] 供应商短时不可用，本轮无价格落库，不构成 QA-TS-002 验收证据：outcome=" + summary.outcome());
 			fail("全部产品同步失败且非短时故障：outcome=" + summary.outcome());
 		}
 
 		for (Map<String, Object> price : prices) {
 			String instrumentType = String.valueOf(price.get("instrument_type"));
 			String priceType = String.valueOf(price.get("price_type"));
-			if ("FUND".equals(instrumentType)) {
-				assertEquals("UNIT_NAV", priceType, "场外基金必须落库单位净值。");
-			} else {
-				assertEquals("CLOSE", priceType, "股票/ETF 必须落库收盘价。");
-			}
 			BigDecimal value = (BigDecimal) price.get("price");
 			assertTrue(value.signum() > 0, "真实价格必须大于零。");
 			String payloadHash = String.valueOf(price.get("raw_payload_hash"));
 			assertTrue(payloadHash.matches("[0-9a-f]{64}"), "原始载荷 Hash 必须是 64 位十六进制。");
 		}
-		if (summary.failedCount() > 0) {
-			System.err.println("[ThsSmokeWarning] 部分产品同步失败：succeeded=" + summary.succeededCount()
-				+ " failed=" + summary.failedCount() + " outcome=" + summary.outcome());
-		}
-		assertFalse(prices.isEmpty(), "至少一个产品必须成功落库真实行情。");
+		// 三类产品必须各自以正确价格类型落库；部分失败同样不构成验收证据。
+		boolean complete = prices.stream().anyMatch(isType("STOCK", "CLOSE"))
+			&& prices.stream().anyMatch(isType("ETF", "CLOSE"))
+			&& prices.stream().anyMatch(isType("FUND", "UNIT_NAV"));
+		Assumptions.assumeTrue(!transientOutcome || complete,
+			"[ThsSmokeSkip] 短时故障导致三类产品未全部落库，不构成 QA-TS-002 验收证据："
+				+ "succeeded=" + summary.succeededCount() + " failed=" + summary.failedCount()
+				+ " outcome=" + summary.outcome());
+		assertTrue(complete, "股票、ETF 和基金必须各自成功落库真实行情。");
+	}
+
+	private java.util.function.Predicate<Map<String, Object>> isType(String instrumentType, String priceType) {
+		return price -> instrumentType.equals(String.valueOf(price.get("instrument_type")))
+			&& priceType.equals(String.valueOf(price.get("price_type")));
 	}
 
 	private void insertInstrumentWithMapping(String externalCode, String instrumentType) {

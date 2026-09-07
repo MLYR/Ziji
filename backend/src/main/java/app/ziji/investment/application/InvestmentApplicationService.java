@@ -550,7 +550,11 @@ public class InvestmentApplicationService implements InvestmentDashboardPort {
 		BigDecimal nonSellFees = BigDecimal.ZERO;
 		BigDecimal nonSellTaxes = BigDecimal.ZERO;
 		BigDecimal invested = BigDecimal.ZERO;
-		for (InvestmentTrade trade : trades.stream().sorted(Comparator.comparing(InvestmentTrade::tradeAt).thenComparing(InvestmentTrade::id)).toList()) {
+		for (InvestmentTrade trade : trades.stream()
+			.sorted(Comparator.comparing(InvestmentTrade::tradeAt)
+				.thenComparing(InvestmentTrade::recordedAt)
+				.thenComparing(InvestmentTrade::id))
+			.toList()) {
 			Position before = current.getOrDefault(trade.instrumentId(), Position.empty(trade.instrumentId()));
 			PositionCalculator.AppliedTrade applied = positions.apply(before, trade);
 			current.put(trade.instrumentId(), applied.remaining());

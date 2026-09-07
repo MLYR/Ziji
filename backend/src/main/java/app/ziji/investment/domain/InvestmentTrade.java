@@ -20,12 +20,30 @@ public record InvestmentTrade(
 	BigDecimal grossAmount,
 	BigDecimal feeAmount,
 	BigDecimal taxAmount,
-	Instant tradeAt) {
+	Instant tradeAt,
+	Instant recordedAt) {
+
+	public InvestmentTrade(
+		UUID id,
+		UUID transactionId,
+		UUID investmentAccountId,
+		UUID instrumentId,
+		InvestmentSide side,
+		BigDecimal quantity,
+		BigDecimal unitPrice,
+		String currency,
+		BigDecimal grossAmount,
+		BigDecimal feeAmount,
+		BigDecimal taxAmount,
+		Instant tradeAt) {
+		this(id, transactionId, investmentAccountId, instrumentId, side, quantity, unitPrice, currency, grossAmount,
+			feeAmount, taxAmount, tradeAt, tradeAt);
+	}
 
 	public InvestmentTrade {
 		if (id == null || transactionId == null || investmentAccountId == null || instrumentId == null
 			|| side == null || currency == null || currency.length() != 3 || grossAmount == null
-			|| feeAmount == null || taxAmount == null || tradeAt == null) {
+			|| feeAmount == null || taxAmount == null || tradeAt == null || recordedAt == null) {
 			throw new InvestmentDomainException("投资成交事实不完整。");
 		}
 		if (!currency.equals(currency.toUpperCase(java.util.Locale.ROOT))) {

@@ -32,7 +32,8 @@ public class PostgresInvestmentFactStore implements InvestmentFactReadPort {
 		}
 		StringBuilder sql = new StringBuilder("""
 			SELECT tr.id, tr.transaction_id, tr.investment_account_id, tr.instrument_id, tr.side,
-				tr.quantity, tr.unit_price, tr.currency, tr.gross_amount, tr.fee_amount, tr.tax_amount, tr.trade_at
+				tr.quantity, tr.unit_price, tr.currency, tr.gross_amount, tr.fee_amount, tr.tax_amount, tr.trade_at,
+				t.created_at AS transaction_created_at
 			FROM trades tr
 			JOIN transactions t ON t.id = tr.transaction_id
 			WHERE tr.investment_account_id = ? AND t.status = 'POSTED'
@@ -51,7 +52,7 @@ public class PostgresInvestmentFactStore implements InvestmentFactReadPort {
 			sql.append(" AND t.business_date <= ?");
 			arguments.add(java.sql.Date.valueOf(to));
 		}
-		sql.append(" ORDER BY tr.trade_at, tr.id");
+		sql.append(" ORDER BY tr.trade_at, t.created_at, tr.id");
 		try {
 			return jdbc.query(sql.toString(), (result, ignored) -> trade(result), arguments.toArray());
 		} catch (RuntimeException exception) {
@@ -67,7 +68,8 @@ public class PostgresInvestmentFactStore implements InvestmentFactReadPort {
 		try {
 			return jdbc.query("""
 				SELECT tr.id, tr.transaction_id, tr.investment_account_id, tr.instrument_id, tr.side,
-					tr.quantity, tr.unit_price, tr.currency, tr.gross_amount, tr.fee_amount, tr.tax_amount, tr.trade_at
+					tr.quantity, tr.unit_price, tr.currency, tr.gross_amount, tr.fee_amount, tr.tax_amount, tr.trade_at,
+					t.created_at AS transaction_created_at
 				FROM trades tr JOIN transactions t ON t.id = tr.transaction_id
 				WHERE tr.id = ? AND t.status = 'POSTED'
 				""", result -> result.next() ? Optional.of(trade(result)) : Optional.empty(), tradeId);
@@ -114,6 +116,7 @@ public class PostgresInvestmentFactStore implements InvestmentFactReadPort {
 			InvestmentSide.valueOf(result.getString("side")), result.getBigDecimal("quantity"),
 			result.getBigDecimal("unit_price"), CurrencyCode.fromCode(result.getString("currency")).name(),
 			result.getBigDecimal("gross_amount"), result.getBigDecimal("fee_amount"),
-			result.getBigDecimal("tax_amount"), result.getTimestamp("trade_at").toInstant());
+			result.getBigDecimal("tax_amount"), result.getTimestamp("trade_at").toInstant(),
+			result.getTimestamp("transaction_created_at").toInstant());
 	}
 }

@@ -30,7 +30,10 @@ public final class PositionCalculator {
 		}
 		Map<UUID, Position> positions = new LinkedHashMap<>();
 		trades.stream()
-			.sorted(Comparator.comparing(InvestmentTrade::tradeAt).thenComparing(InvestmentTrade::id))
+			// 用户可在同一业务时间连续提交多笔成交；UUID 不是执行顺序，必须使用入账记录时间稳定排序。
+			.sorted(Comparator.comparing(InvestmentTrade::tradeAt)
+				.thenComparing(InvestmentTrade::recordedAt)
+				.thenComparing(InvestmentTrade::id))
 			.forEach(trade -> {
 				Position current = positions.getOrDefault(trade.instrumentId(), Position.empty(trade.instrumentId()));
 				positions.put(trade.instrumentId(), apply(current, trade).remaining());

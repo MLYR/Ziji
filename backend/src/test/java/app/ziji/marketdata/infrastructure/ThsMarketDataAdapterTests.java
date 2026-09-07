@@ -100,6 +100,36 @@ class ThsMarketDataAdapterTests {
 		assertEquals(List.of(Duration.ofMillis(100)), waits);
 	}
 
+	/** BUG-MD-002：限流最小间隔长于重试退避时，先等待本地许可再重试，而不是立即返回 RATE_LIMITED。 */
+	@Test
+	void waitsForRateIntervalBeforeRetryingTransientFailure() {
+		FakeTransport transport = new FakeTransport(
+			new ThsTransportResponse(503, "unavailable"),
+			new ThsTransportResponse(200, """
+				quotebridge_v6_line_hs_000001_01_last1800({"name":"平安银行","data":"20260901,11.68,11.96,11.65,11.92,1,1.00,0.0"})
+				"""));
+		List<Duration> waits = new java.util.ArrayList<>();
+		// 最小间隔 150ms > 退避 100ms：第一次重试必须等待许可窗口，第二次请求才能发出。
+		ThsMarketDataAdapter adapter = new ThsMarketDataAdapter(
+			transport, new ObjectMapper(), Duration.ofSeconds(1), 1,
+			new ThsRateLimiter(Clock.systemUTC(), Duration.ofMillis(150), 10), usageDate -> true,
+			Clock.systemUTC(), delay -> {
+				waits.add(delay);
+				try {
+					Thread.sleep(delay.toMillis());
+				} catch (InterruptedException exception) {
+					Thread.currentThread().interrupt();
+				}
+			});
+
+		var result = adapter.fetchPrices(STOCK, mapping("000001"), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 1));
+
+		assertEquals(SourceOutcome.SUCCESS, result.outcome());
+		assertEquals(2, result.attempts());
+		// 退避一次 + 等待许可一次；两次请求均已发出。
+		assertEquals(2, transport.urls.size());
+		assertEquals(List.of(Duration.ofMillis(100), Duration.ofMillis(100)), waits);
+	}
 	@Test
 	void returnsNoDataWhenResponseCannotBeParsedAsPrices() {
 		FakeTransport transport = new FakeTransport(new ThsTransportResponse(200, "<html>404</html>"));
