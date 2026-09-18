@@ -15,6 +15,7 @@
 - **独立 R3 复核（2026-09-18）：结论不通过**，2 项阻塞 + 7 项重要 + 7 项次要，详见 [`doc/status/R3-B3-独立复核.md`](R3-B3-独立复核.md)；阻塞项已登记 `BUG-B3-002`、`BUG-B3-003`。
 - **待产品/架构决策：** `BUG-B3-002` 的最终定级取决于「V1 是否支持投资成交修正」——代码与 RTM 均无书面决策。若书面登记为 V1 范围外，该条应从「阻塞」降级为「已登记缺口」（复核报告 §六-6）。
 - **仍缺：** 原生 Mobile 投资 E2E——`.maestro/investment.yaml` 已提交但未实跑：iOS 构建被 Xcode 27（Swift 6.4）与 Expo SDK 56 不兼容阻塞（官方要求 Xcode 26.4，见 [expo/expo#46242](https://github.com/expo/expo/issues/46242)），Android `adb devices` 为 0 台。
+- **已排除的绕行（勿重复尝试）：** 加 `SWIFT_VERSION=5` 构建参数**无效**（EXIT=65，同一处报错）——该 Pod 由 `build-xcframework.sh` 走嵌套 SwiftPM `xcodebuild` 独立构建，不继承主工程构建设置。产出物 `ios/build/.../Ziji.app` 是空壳（无可执行文件与 bundle），不可用作验收证据。
 - **详核：** [`doc/B3验收收口核对.md`](../B3验收收口核对.md) · 一页状态见 [`STATUS.md`](STATUS.md)
 
 ## 活动区（`IN_PROGRESS` / `BLOCKED` / `REVIEW` / `VERIFYING` / `READY`）
