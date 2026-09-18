@@ -9,7 +9,8 @@
 - **状态：** `IN_PROGRESS`（P0 / B3 / 父任务 E30-F03）
 - **目标：** 核对并补齐 B3 验收证据、三端流程覆盖和基线冲突；不回写原任务历史 `DONE`，不机械提升 RTM。
 - **已通过证据（2026-09-07）：** Backend B3 定向 55 例（0 失败/错误、1 skip）；真实同花顺三类冒烟 1/1；Web `check`/`build` + 真实 Backend proxy E2E 5/5；Mobile `check` + 20 suites/174 tests。
-- **仍缺：** 原生 Mobile Maestro 投资 E2E（`adb devices` = 0）；独立 R3 复核；`T-GATE-001` 书面授权门禁与基线口径决策。
+- **仍缺：** 原生 Mobile Maestro 投资 E2E（`adb devices` = 0）；独立 R3 复核。
+- **已闭合（2026-09-18）：** `T-GATE-001` 书面授权门禁——用户出具书面风险接受记录，见 `doc/同花顺数据源合规评估.md` §6 与 `doc/测试与验收方案.md` T-GATE-001 行。
 - **详核：** [`doc/B3验收收口核对.md`](../B3验收收口核对.md) · 一页状态见 [`STATUS.md`](STATUS.md)
 
 ## 活动区（`IN_PROGRESS` / `BLOCKED` / `REVIEW` / `VERIFYING` / `READY`）
