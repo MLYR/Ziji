@@ -1,3 +1,10 @@
+# CI 变更感知路由（说明见 doc/status/CI分层说明.md）
+# - 每个拉取请求：先做变更检测，非深路径时只做安全快检
+# - 按路径触发：web / mobile / backend / api（契约）；未命中则输出 not applicable（不适用）
+# - 迁移变更并入 backend + backend_deep（Flyway / doc/数据库设计.md）
+# - security_deep 仅供应链相关路径；端到端 / Maestro / 性能 / 真实供应商冒烟不在本工作流固定执行
+# - workflow-security.yml 单独守护安全门禁契约，勿削弱
+# - 下方 job 的 name 为 Actions 界面固定英文标识，请勿为「翻译」而改名（安全契约可能精确比对）
 name: CI
 
 on:

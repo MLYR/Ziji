@@ -1,6 +1,6 @@
 # 资迹 Ziji
 
-资迹是面向个人与家庭的资产、负债、投资、共享账户和账单导入应用。当前项目版本为 V0.1，产品、领域、数据库、API、测试、UI 和三端工程基座已经建立；当前批次状态和完成度以 `doc/开发进度与任务跟踪.md` 的“当前进度总览”为准。
+资迹是面向个人与家庭的资产、负债、投资、共享账户和账单导入应用。当前项目版本为 V0.1，产品、领域、数据库、API、测试、UI 和三端工程基座已经建立；当前批次状态和完成度以 `doc/status/STATUS.md` 为准；活动任务见 `doc/status/BOARD.md`。
 
 ## 当前可查看内容
 
@@ -8,7 +8,9 @@
 - OpenAPI 3.1 契约：`openapi/ziji-v1.yaml`
 - Flyway 迁移机器基线：`backend/src/main/resources/db/migration/`（当前版本以目录中的迁移文件和任务台账机器基线为准）
 - UI 原型入口：`prototypes/open-design/ziji-v1/index.html`
-- 当前任务与依赖：`doc/开发进度与任务跟踪.md`
+- 当前状态：`doc/status/STATUS.md`
+- 活动看板与未完成任务：`doc/status/BOARD.md`
+- 历史全量台账（勿再更新）：`doc/status/archive/ledger-v1-full.md`
 
 ## 工具链
 
@@ -217,6 +219,6 @@ pnpm --filter mobile test:e2e
 
 ## 关键规则
 
-- 所有工作先关联 `doc/开发进度与任务跟踪.md` 中的叶子任务。
+- 所有须建叶子任务的工作先关联 `doc/status/BOARD.md`，并保持 `doc/status/STATUS.md` 同步。
 - 账务事实、权限、幂等、同步和客户端职责遵守根目录 `AGENTS.md`。
 - shadcn/ui 的初始化、组件引入和修改优先使用已安装的 `shadcn` skill；skill 不可用时按 `web/AGENTS.md` 的 `components.json`、官方文档、项目 pnpm CLI fallback 执行。
