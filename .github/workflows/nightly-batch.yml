@@ -110,8 +110,13 @@ jobs:
           {
             echo "ZIJI_ACCOUNT_CURSOR_KEY_BASE64=$(openssl rand -base64 32)"
             echo "ZIJI_LIQUIDITY_HOLD_CURSOR_KEY_BASE64=$(openssl rand -base64 32)"
+            # 以下 *-key-version 为 int 型必填项：缺失会让 application-local.properties 的
+            # 占位符无法绑定并导致后端启动失败（runs=35359226188 即因此未通过健康检查）。
+            echo "ZIJI_AUTH_HMAC_CURRENT_KEY_VERSION=1"
             echo "ZIJI_AUTH_HMAC_CURRENT_KEY_BASE64=$(openssl rand -base64 32)"
+            echo "ZIJI_AUTH_IDEMPOTENCY_CURRENT_KEY_VERSION=1"
             echo "ZIJI_AUTH_IDEMPOTENCY_CURRENT_KEY_BASE64=$(openssl rand -base64 32)"
+            echo "ZIJI_AUTH_ENVELOPE_KEK_VERSION=1"
             echo "ZIJI_AUTH_ENVELOPE_KEK_BASE64=$(openssl rand -base64 32)"
           } >> "$GITHUB_ENV"
           tmpdir="$(mktemp -d)"
