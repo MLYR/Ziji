@@ -9,8 +9,11 @@
 - **状态：** `IN_PROGRESS`（P0 / B3 / 父任务 E30-F03）
 - **目标：** 核对并补齐 B3 验收证据、三端流程覆盖和基线冲突；不回写原任务历史 `DONE`，不机械提升 RTM。
 - **已通过证据（2026-09-07）：** Backend B3 定向 55 例（0 失败/错误、1 skip）；真实同花顺三类冒烟 1/1；Web `check`/`build` + 真实 Backend proxy E2E 5/5；Mobile `check` + 20 suites/174 tests。
-- **仍缺：** 原生 Mobile Maestro 投资 E2E（`adb devices` = 0）；独立 R3 复核。
+- **仍缺（2026-09-18 更新）：** 原生 Mobile 投资 E2E（`.maestro/investment.yaml` 已提交但未实跑：iOS Xcode 27/Swift 6.4 与 Expo SDK 56 不兼容，Android 0 台设备）。独立 R3 复核已取得，结论不通过（2 阻塞 + 7 重要），阻塞项已登记 `BUG-B3-002`/`BUG-B3-003`，修复后需重新复核。
 - **已闭合（2026-09-18）：** `T-GATE-001` 书面授权门禁——用户出具书面风险接受记录，见 `doc/同花顺数据源合规评估.md` §6 与 `doc/测试与验收方案.md` T-GATE-001 行。
+- **批次门禁首次全绿（2026-09-18，SHA `5f441d3`）：** [run 35369619204](https://github.com/MLYR/Ziji/actions/runs/35369619204) — Backend 全量 4m40s 通过、RTM/BOARD 对账通过、Web 真实 Backend proxy E2E 5/5 通过（B1 两条、B3 投资闭环、两条 Vite 代理边界）。此前三轮分别因 `mvnw` 路径错误、int 型密钥版本号缺失、CSRF 用例时序依赖失败，均已修复。
+- **独立 R3 复核（2026-09-18）：结论不通过**，2 项阻塞 + 7 项重要 + 6 项次要，详见 [`doc/status/R3-B3-独立复核.md`](R3-B3-独立复核.md)；阻塞项已登记 `BUG-B3-002`、`BUG-B3-003`。
+- **仍缺：** 原生 Mobile 投资 E2E——`.maestro/investment.yaml` 已提交但未实跑：iOS 构建被 Xcode 27（Swift 6.4）与 Expo SDK 56 不兼容阻塞（官方要求 Xcode 26.4，见 [expo/expo#46242](https://github.com/expo/expo/issues/46242)），Android `adb devices` 为 0 台。
 - **详核：** [`doc/B3验收收口核对.md`](../B3验收收口核对.md) · 一页状态见 [`STATUS.md`](STATUS.md)
 
 ## 活动区（`IN_PROGRESS` / `BLOCKED` / `REVIEW` / `VERIFYING` / `READY`）
@@ -19,15 +22,17 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | BUG-B3-001 | E30-F03 | 核对并补齐 B3 验收证据、三端流程覆盖和基线冲突 | `IN_PROGRESS` | P0 | B3 | E30 |
 
-## 未完成任务（共 99 项）
+## 未完成任务（共 101 项）
 
 下列按 EPIC 分组；组内活动状态优先，其余为 `BACKLOG`，按优先级与任务 ID 排序。
 
-### E30 — B3 投资、产品与市场数据（1）
+### E30 — B3 投资、产品与市场数据（3）
 
 | 任务 ID | 父任务 | 任务 | 状态 | 优先级 | 批次 |
 | --- | --- | --- | --- | --- | --- |
 | BUG-B3-001 | E30-F03 | 核对并补齐 B3 验收证据、三端流程覆盖和基线冲突 | `IN_PROGRESS` | P0 | B3 |
+| BUG-B3-002 | E30-F03 | 补投资成交的修订/作废路径，使 §4.2-3 事实链在 B3 成立 | `BACKLOG` | P0 | B3 |
+| BUG-B3-003 | E30-F03 | 修正或作废 QA-INV-002 的持仓投影重建证据（position_snapshots 死表） | `BACKLOG` | P0 | B3 |
 
 ### E20 — B2 导入与共享（29）
 
