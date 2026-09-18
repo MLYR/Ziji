@@ -54,3 +54,6 @@ temp/
 /outputs/
 .mimosa/hook-state
 .mimosa/
+
+# AI 工具本地工作区（非项目基线；基线文档以 doc/ 为准）
+.spec-workflow/

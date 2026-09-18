@@ -10,7 +10,7 @@
 
 用户于 2026-08-13 选定 OpenDesign 产出的资迹原型作为 V1 UI 评审基线。项目内副本是后续实现与评审的事实源，外部生成目录不再作为开发依赖。
 
-后续新建或迭代原型必须遵守 `AGENTS.md`§8.2 与 `prototypes/README.md`；可复用提示词以 `prototypes/prompts/` 为唯一项目事实源，外部工具工作区、skill、插件和会话不属于本基线。
+后续新建或迭代原型必须遵守根 `AGENTS.md` 与 `prototypes/AGENTS.md` 的原型规则以及 `prototypes/README.md`；可复用提示词以 `prototypes/prompts/` 为唯一项目事实源，外部工具工作区、skill、插件和会话不属于本基线。
 
 本基线包含：
 
