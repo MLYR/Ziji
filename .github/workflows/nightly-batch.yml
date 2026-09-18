@@ -1,0 +1,161 @@
+# 批次门禁固定产出：RTM/BOARD 机械对账 + Backend 全量测试 + Web 真实 Backend proxy E2E。
+# 背景与三层门禁模型见 doc/status/CI分层说明.md；本工作流把「批次门禁」从靠自觉触发变成固定产出，
+# 不替代 PR 上的变更感知 CI（ci.yml），失败不等价于阻塞合并，失败应登记 BUG-* 进 BOARD.md。
+# Maestro 原生投资 E2E 暂不在本工作流内：当前无可验收应用构建产物，该缺口由 BUG-B3-001 继续跟踪，
+# 不得把 smoke.yaml 的登录页检查当作投资 E2E 通过。
+name: Nightly batch gates
+
+on:
+  schedule:
+    # 每日 21:00 UTC（北京时间 05:00），产出供批次收口核对引用。
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-batch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  rtm-board-reconcile:
+    name: RTM/BOARD reconcile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.22.3
+      # --stale-days 与 --since 为批次收口口径；超期只报不阻塞，由批次收口核对处理。
+      - name: Reconcile RTM against BOARD
+        run: node scripts/check-rtm-status.mjs --stale-days 14 --since 2026-09-07
+
+  backend-full:
+    name: Backend full tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      # Testcontainers 走 Runner 默认 Docker；真实供应商冒烟不启用（ZIJI_THS_SMOKE_ENABLED 不设置），
+      # 对应测试记为 skipped，不得解读为供应商验证通过。
+      - name: Run full backend test suite
+        run: ./mvnw --batch-mode --no-transfer-progress test
+        working-directory: backend
+
+  web-proxy-e2e:
+    name: Web real-backend proxy E2E
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_DB: ziji
+          POSTGRES_USER: ziji
+          POSTGRES_PASSWORD: ziji
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ziji -d ziji"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      # B1 注册流程从 Mailpit API 读取验证码（b1-core-flow.spec.ts），SMTP 1025 / API 8025。
+      mailpit:
+        image: axllent/mailpit:v1.27.8
+        ports: ["1025:1025", "8025:8025"]
+        options: >-
+          --health-cmd "wget -qO- http://localhost:8025/api/v1/messages || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # 与 local profile 变量名一致；密钥为运行中临时生成的工作流密钥，不进仓库、不产出到制品。
+      ZIJI_DB_URL: jdbc:postgresql://localhost:5432/ziji
+      ZIJI_DB_USER: ziji
+      ZIJI_DB_PASSWORD: ziji
+      ZIJI_MAIL_HOST: localhost
+      ZIJI_MAIL_PORT: "1025"
+      ZIJI_THS_SMOKE_ENABLED: "false"
+      ZIJI_FX_PROVIDER_MODE: mock
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 10.4.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.22.3
+          cache: pnpm
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - run: pnpm install --frozen-lockfile
+      # local profile 要求显式密钥：游标/HMAC/KEK 各 32B 独立随机值，RS256 生成一次性密钥对。
+      # 值仅存在于本次 Runner 进程，不落仓库、不上传制品。
+      - name: Generate ephemeral backend secrets
+        run: |
+          set -euo pipefail
+          {
+            echo "ZIJI_ACCOUNT_CURSOR_KEY_BASE64=$(openssl rand -base64 32)"
+            echo "ZIJI_LIQUIDITY_HOLD_CURSOR_KEY_BASE64=$(openssl rand -base64 32)"
+            echo "ZIJI_AUTH_HMAC_CURRENT_KEY_BASE64=$(openssl rand -base64 32)"
+            echo "ZIJI_AUTH_IDEMPOTENCY_CURRENT_KEY_BASE64=$(openssl rand -base64 32)"
+            echo "ZIJI_AUTH_ENVELOPE_KEK_BASE64=$(openssl rand -base64 32)"
+          } >> "$GITHUB_ENV"
+          tmpdir="$(mktemp -d)"
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$tmpdir/key.pem"
+          openssl pkcs8 -topk8 -nocrypt -in "$tmpdir/key.pem" -outform DER -out "$tmpdir/key.der"
+          pkcs8="$(base64 < "$tmpdir/key.der" | tr -d '\n')"
+          openssl pkey -in "$tmpdir/key.pem" -pubout -outform DER -out "$tmpdir/pub.der"
+          der_b64="$(base64 < "$tmpdir/pub.der" | tr -d '\n')"
+          printf 'pkcs8_bytes=%s pub_der_bytes=%s\n' "$(wc -c < "$tmpdir/key.der")" "$(wc -c < "$tmpdir/pub.der")"
+          {
+            echo "ZIJI_AUTH_ACCESS_TOKEN_CURRENT_KID=nightly-rs256-1"
+            echo "ZIJI_AUTH_ACCESS_TOKEN_CURRENT_PRIVATE_KEY_PKCS8_BASE64=$pkcs8"
+            echo "ZIJI_AUTH_ACCESS_TOKEN_CURRENT_PUBLIC_KEY_X509_BASE64=$der_b64"
+          } >> "$GITHUB_ENV"
+          rm -rf "$tmpdir"
+      # 启动真实 Backend（spring-boot:run 前台进程转后台），健康检查通过后才跑 E2E；
+      # 启动失败直接 fail，不允许降级为 Mock 边界结果。邮件经上方 Mailpit service；
+      # MinIO 对象存储在 proxy E2E 路径外，缺席不阻断启动，如未来用例依赖再补 service。
+      - name: Start backend against service PostgreSQL
+        run: |
+          set -euo pipefail
+          (./mvnw --batch-mode --no-transfer-progress -f backend/pom.xml spring-boot:run > backend.log 2>&1 & echo $! > backend.pid)
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8080/actuator/health >/dev/null 2>&1; then
+              echo "backend healthy after ${i} attempts"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "backend did not become healthy" >&2
+          tail -200 backend.log >&2
+          exit 1
+      - name: Install Playwright Chromium
+        run: pnpm --filter web exec playwright install --with-deps chromium
+      - name: Run real-backend proxy E2E
+        run: pnpm --filter web test:proxy
+      - name: Upload E2E report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: web-proxy-e2e-report
+          path: web/playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
+      - name: Stop backend
+        if: always()
+        run: kill "$(cat backend.pid)" 2>/dev/null || true
