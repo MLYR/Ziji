@@ -1,0 +1,95 @@
+# Mobile 投资端到端：注册登录 → 建投资账户 → 建手工产品 → 投资页 → 账户详情。
+#
+# 这是 BUG-B3-001 所缺的原生投资流程证据，与 .maestro/smoke.yaml 不互相替代：
+# smoke.yaml 只查登录页主题开关、不提交认证；本流程走真实后端会话。
+#
+# 前置条件（缺任一则该流程不成立，不得把执行失败解读为“投资功能正常”）：
+#   1. 设备/模拟器已安装 appId=app.ziji.mobile 的应用；
+#   2. 应用构建时 EXPO_PUBLIC_API_BASE_URL 指向可达后端（默认 http://localhost:8080）；
+#   3. 后端可注册新账号；VERIFICATION_CODE 需在运行时由邮件渠道取得后传入。
+#
+# 执行：VERIFICATION_CODE=123456 maestro test .maestro/investment.yaml
+appId: app.ziji.mobile
+env:
+  EMAIL: "ziji-b3-mobile@example.test"
+  PASSWORD: "Mobile-E2E-password-123"
+  NICKNAME: "B3 Mobile E2E"
+  ACCOUNT_NAME: "E2E 券商账户"
+  INSTRUMENT_NAME: "E2E 手工基金"
+---
+- launchApp:
+    clearState: true
+
+# ---------- 1. 注册：先发验证码，再补全验证码与昵称 ----------
+- assertVisible: "资迹 ZIJI"
+- assertVisible: "登录后继续查看资金全貌。"
+- tapOn: "切换到注册"
+- tapOn: "邮箱地址"
+- inputText: ${EMAIL}
+- tapOn: "密码"
+- inputText: ${PASSWORD}
+# 注册第一步按钮文案是「发送验证码」，提交后才会出现验证码与昵称输入框。
+- tapOn: "发送验证码"
+- assertVisible: "邮箱验证码"
+- tapOn: "邮箱验证码"
+- inputText: ${VERIFICATION_CODE}
+- tapOn: "昵称"
+- inputText: ${NICKNAME}
+- tapOn: "完成注册"
+- assertVisible: "已安全登录"
+- assertVisible: "投资"
+
+# ---------- 2. 创建投资账户（券商 + CNY + 期初 50000） ----------
+- tapOn:
+    id: "open-accounts"
+- tapOn: "创建账户"
+- assertVisible:
+    id: "account-create-name"
+- tapOn:
+    id: "account-create-class-INVESTMENT"
+- tapOn:
+    id: "account-create-type-BROKERAGE"
+- tapOn:
+    id: "account-create-name"
+- inputText: ${ACCOUNT_NAME}
+- tapOn:
+    id: "account-create-currency-CNY"
+- tapOn:
+    id: "account-create-opening"
+- inputText: "50000"
+- tapOn:
+    id: "account-create-submit"
+- assertVisible: ${ACCOUNT_NAME}
+
+# ---------- 3. 投资页：概览、账户列表与手工产品表单 ----------
+- tapOn:
+    id: "open-investments"
+- assertVisible:
+    id: "investment-screen"
+- assertVisible: "投资账户与持仓"
+- tapOn:
+    id: "investment-manual-product-toggle"
+- assertVisible:
+    id: "investment-manual-product-form"
+- tapOn:
+    id: "investment-manual-product-name"
+- inputText: ${INSTRUMENT_NAME}
+- tapOn:
+    id: "investment-manual-product-type-FUND"
+- tapOn:
+    id: "investment-manual-product-currency-CNY"
+- tapOn: "保存手工产品"
+- assertVisible: ${INSTRUMENT_NAME}
+
+# ---------- 4. 打开投资账户详情：断言现金、持仓与收益三块都在 ----------
+- tapOn: ${ACCOUNT_NAME}
+- assertVisible:
+    id: "investment-detail-screen"
+- assertVisible:
+    id: "investment-detail-cash"
+- assertVisible:
+    id: "investment-detail-positions"
+- assertVisible:
+    id: "investment-detail-performance"
+# 期初余额 50000 应出现在券商现金余额里（AGENTS §4.2：余额来自分录而非直接改表）。
+- assertVisible: "50000.00"
