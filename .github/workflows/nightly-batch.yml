@@ -131,9 +131,11 @@ jobs:
       # 启动失败直接 fail，不允许降级为 Mock 边界结果。邮件经上方 Mailpit service；
       # MinIO 对象存储在 proxy E2E 路径外，缺席不阻断启动，如未来用例依赖再补 service。
       - name: Start backend against service PostgreSQL
+        working-directory: backend
         run: |
           set -euo pipefail
-          (./mvnw --batch-mode --no-transfer-progress -f backend/pom.xml spring-boot:run > backend.log 2>&1 & echo $! > backend.pid)
+          # mvnw 位于 backend/ 下（与 ci.yml 一致），不可从仓库根目录调用。
+          (./mvnw --batch-mode --no-transfer-progress spring-boot:run > backend.log 2>&1 & echo $! > backend.pid)
           for i in $(seq 1 90); do
             if curl -fsS http://127.0.0.1:8080/actuator/health >/dev/null 2>&1; then
               echo "backend healthy after ${i} attempts"
